@@ -131,11 +131,43 @@ now_iso() {
   date -u +%Y-%m-%dT%H:%M:%SZ
 }
 
+# Resolve a Python that actually runs, echoing its command name.
+#
+# `command -v python3` is not evidence a Python exists. Windows ships Microsoft
+# Store "app execution aliases" for python and python3: they resolve on PATH,
+# but every invocation prints "Python was not found; run without arguments to
+# install from the Microsoft Store" and exits 49. A probe that only resolves the
+# name therefore reports success and then every call fails - which took out the
+# whole run rather than degrading. Probe by executing.
+#
+# Also accepts `python`, because that is frequently the only real interpreter on
+# a Windows machine.
+FM_TEST_PYTHON3_CACHE=
+fm_test_python3() {
+  local candidate
+  if [ -n "$FM_TEST_PYTHON3_CACHE" ]; then
+    [ "$FM_TEST_PYTHON3_CACHE" = "-" ] && return 1
+    printf '%s\n' "$FM_TEST_PYTHON3_CACHE"
+    return 0
+  fi
+  for candidate in python3 python; do
+    if command -v "$candidate" >/dev/null 2>&1 \
+      && "$candidate" -c 'pass' >/dev/null 2>&1; then
+      FM_TEST_PYTHON3_CACHE=$candidate
+      printf '%s\n' "$candidate"
+      return 0
+    fi
+  done
+  FM_TEST_PYTHON3_CACHE=-
+  return 1
+}
+
 now_ms() {
-  if command -v python3 >/dev/null 2>&1; then
-    python3 -c 'import time; print(int(time.time() * 1000))'
+  local py
+  if py=$(fm_test_python3); then
+    "$py" -c 'import time; print(int(time.time() * 1000))'
   else
-    # Second precision only when python3 is unavailable.
+    # Second precision only when no working Python is available.
     echo $(($(date +%s) * 1000))
   fi
 }
@@ -1071,8 +1103,9 @@ aggregate_timing_json() {
   local out=$1
   shift
   [ "$#" -gt 0 ] || die "--aggregate-json requires at least one input timing JSON"
-  command -v python3 >/dev/null 2>&1 || die "--aggregate-json requires python3"
-  python3 - "$out" "$@" <<'PY'
+  local py
+  py=$(fm_test_python3) || die "--aggregate-json requires a working python3"
+  "$py" - "$out" "$@" <<'PY'
 import json, sys
 from pathlib import Path
 
@@ -1506,11 +1539,12 @@ write_json_artifact() {
   local records_file=${10}
   local families_file=${11}
 
-  if ! command -v python3 >/dev/null 2>&1; then
-    die "--json requires python3 to emit a valid timing artifact"
+  local py
+  if ! py=$(fm_test_python3); then
+    die "--json requires a working python3 to emit a valid timing artifact"
   fi
 
-  python3 - "$out" "$started" "$finished" "$run_id" "$total" "$failed" "$skipped" "$duration" "$selection" "$records_file" "$families_file" <<'PY'
+  "$py" - "$out" "$started" "$finished" "$run_id" "$total" "$failed" "$skipped" "$duration" "$selection" "$records_file" "$families_file" <<'PY'
 import json, sys
 
 out, started, finished, run_id, total, failed, skipped, duration, selection, records_file, families_file = sys.argv[1:]
