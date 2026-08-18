@@ -29,11 +29,47 @@ if [ "${1:-}" = "status" ]; then
     echo "lock: unreadable"
     exit 0
   }
-  if fm_harness_pid_alive "$old"; then echo "lock: held by live harness pid $old"; else echo "lock: stale (pid $old dead or not a harness)"; fi
+  if fm_harness_pid_alive "$old"; then
+    echo "lock: held by live harness pid $old"
+  elif fm_session_token_recorded "$STATE" >/dev/null 2>&1; then
+    # A token-path lock always records a dead pid, so reporting it as stale would
+    # be wrong: the token, not the pid, is what holds this home.
+    if fm_session_token_owned_by_self "$STATE"; then
+      echo "lock: held by this session's token"
+    elif fm_session_token_held_by_other "$STATE"; then
+      echo "lock: held by another session's token"
+    else
+      echo "lock: stale (token last refreshed over ${FM_SESSION_TOKEN_STALE_AFTER}s ago)"
+    fi
+  else
+    echo "lock: stale (pid $old dead or not a harness)"
+  fi
   exit 0
 fi
 
-me=$(fm_harness_ancestry_pid) || { echo "error: cannot locate harness process in ancestry" >&2; exit 1; }
+# Ownership evidence, in order. The ancestry walk is unchanged and still first:
+# every platform that can answer it behaves exactly as before, and the token path
+# below is never reached there.
+#
+# Where ancestry cannot answer at all - the Windows runtimes, whose /proc holds
+# only MSYS processes, so a native claude.exe is invisible and the tool
+# subprocess reads ppid 1 - a session token answers the same question directly.
+# The token is the ownership authority on that path; state/.lock still records a
+# plain numeric pid so that every existing reader keeps reading a pid and no
+# caller has to learn a second identity namespace. That pid is this acquiring
+# process, which is deliberately NOT a liveness claim: it is dead moments later,
+# and the existing dead-owner reclaim below is exactly what lets the next session
+# take the lock over without inventing a new staleness policy.
+SESSION_TOKEN_PATH=0
+if me=$(fm_harness_ancestry_pid); then
+  :
+elif fm_session_ancestry_unavailable && fm_session_token_self >/dev/null 2>&1; then
+  SESSION_TOKEN_PATH=1
+  me=$$
+else
+  echo "error: cannot locate harness process in ancestry" >&2
+  exit 1
+fi
 probe=$(mktemp "$STATE/.lock-write.XXXXXX" 2>/dev/null) || {
   echo "error: cannot write session lock; operate read-only until resolved" >&2
   exit 1
@@ -57,12 +93,28 @@ trap 'exit 1' HUP INT TERM
 
 if [ -f "$LOCK" ] && [ ! -L "$LOCK" ]; then
   old=$(cat "$LOCK" 2>/dev/null || true)
-  if [ "$old" = "$me" ]; then
+  if [ "$SESSION_TOKEN_PATH" -eq 1 ]; then
+    # Re-acquisition by the same session is idempotent, and on this path that is
+    # a token match rather than a pid match - the recorded pid belonged to an
+    # earlier tool call of this very session and is long gone.
+    if fm_session_token_owned_by_self "$STATE"; then
+      echo "lock acquired: session token"
+      exit 0
+    fi
+  elif [ "$old" = "$me" ]; then
     echo "lock acquired: harness pid $me"
     exit 0
   fi
   if fm_harness_pid_alive "$old"; then
     echo "error: another live firstmate session holds the lock (pid $old); operate read-only until resolved" >&2
+    exit 1
+  fi
+  # On the token path the recorded pid is always dead, so it can never report a
+  # live peer. A different, recently refreshed token is that evidence instead;
+  # without this check two concurrent Windows sessions would both reclaim the
+  # lock from each other's dead pid and silently co-own the fleet.
+  if [ "$SESSION_TOKEN_PATH" -eq 1 ] && fm_session_token_held_by_other "$STATE"; then
+    echo "error: another firstmate session holds the lock for this home; operate read-only until it exits, or remove $STATE/.lock.session if that session is gone" >&2
     exit 1
   fi
 fi
@@ -90,6 +142,25 @@ if [ -e "$LOCK" ] || [ -L "$LOCK" ]; then
     echo "error: another live firstmate session holds the lock (pid $old); operate read-only until resolved" >&2
     exit 1
   fi
+  # Re-checked under the claim lock: a peer may have published between the
+  # unlocked look above and here.
+  if [ "$SESSION_TOKEN_PATH" -eq 1 ] && fm_session_token_held_by_other "$STATE"; then
+    echo "error: another firstmate session holds the lock for this home; operate read-only until it exits, or remove $STATE/.lock.session if that session is gone" >&2
+    exit 1
+  fi
+fi
+if [ "$SESSION_TOKEN_PATH" -eq 1 ]; then
+  # Publish the ownership authority BEFORE the pid it accompanies, and prove the
+  # write, so a lock file can never name a session whose token was not recorded.
+  if ! fm_session_token_publish "$STATE"; then
+    echo "error: cannot record this session's ownership token; operate read-only until resolved" >&2
+    exit 1
+  fi
+else
+  # An ancestry-owned lock must not inherit a stale token from an earlier
+  # token-path session in the same home, which would otherwise keep answering
+  # "owned" for a session that no longer holds this lock.
+  fm_session_token_clear "$STATE"
 fi
 if ! { printf '%s\n' "$me" > "$LOCK"; } 2>/dev/null; then
   echo "error: cannot write session lock; operate read-only until resolved" >&2
@@ -103,5 +174,13 @@ if [ ! -f "$LOCK" ] || [ -L "$LOCK" ] || [ "$written" != "$me" ]; then
   echo "error: session lock ownership verification failed; operate read-only until resolved" >&2
   exit 1
 fi
+if [ "$SESSION_TOKEN_PATH" -eq 1 ] && ! fm_session_token_owned_by_self "$STATE"; then
+  echo "error: session lock ownership verification failed; operate read-only until resolved" >&2
+  exit 1
+fi
 release_claim_lock
-echo "lock acquired: harness pid $me"
+if [ "$SESSION_TOKEN_PATH" -eq 1 ]; then
+  echo "lock acquired: session token"
+else
+  echo "lock acquired: harness pid $me"
+fi
