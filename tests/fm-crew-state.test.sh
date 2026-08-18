@@ -127,12 +127,29 @@ SH
 }
 
 make_no_timeout_toolbin() {  # <dir> -> echoes toolbin path
-  local dir=$1 tb="$1/notimeoutbin" tool real
+  local dir=$1 tb="$1/notimeoutbin" tool real shell
   mkdir -p "$tb"
+  # Windows: an MSYS or MINGW binary locates its runtime DLL (msys-2.0.dll for
+  # /usr/bin tools, the mingw64 set for /mingw64/bin ones) through PATH, which is
+  # Windows' last-resort DLL search location. Callers use this toolbin with PATH
+  # restricted to the toolbin itself, which drops the real bin directory and
+  # makes those DLLs unreachable, so a symlinked binary dies with "error while
+  # loading shared libraries" before it runs. An exec wrapper keeps the real
+  # binary running from its own directory, where its DLLs sit, so this helper
+  # never has to know which DLLs each tool needs.
+  shell=$(command -v bash) || fail "missing bash for no-timeout path"
   for tool in bash git grep sed head cut tail dirname perl; do
     real=$(command -v "$tool" || true)
     [ -n "$real" ] || fail "missing tool for no-timeout path: $tool"
-    ln -s "$real" "$tb/$tool"
+    case "$(uname -s)" in
+      MINGW*|MSYS*)
+        printf '#!%s\nexec %s "$@"\n' "$shell" "$real" > "$tb/$tool"
+        chmod +x "$tb/$tool"
+        ;;
+      *)
+        ln -s "$real" "$tb/$tool"
+        ;;
+    esac
   done
   printf '%s\n' "$tb"
 }
