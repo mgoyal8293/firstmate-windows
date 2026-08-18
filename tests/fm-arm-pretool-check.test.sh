@@ -239,6 +239,55 @@ test_direct_policy_contract() {
   assert_policy direct-heredoc-watcher $'deny\twatcher-redirection' "$heredoc_watcher"
 }
 
+# --- path identity is compared in POSIX form on every platform ---------------
+#
+# The classifier used the platform `path` module, whose separator is a backslash
+# on win32. Every protected-script and x-mode.env comparison therefore failed on
+# Windows and the identity guard was silently disarmed there (a Windows
+# firstmate could run bin/fm-watch.sh directly, bypassing the arm path). These
+# cases reproduce that on any platform by feeding the classifier the exact
+# Windows-form bytes it sees there, so the regression is caught by the ordinary
+# Linux run.
+
+assert_policy_at() {
+  local id=$1 expected=$2 base=$3 command=$4 output
+  output=$(node "$POLICY" --root "$base" --home "$base" --command "$command") \
+    || fail "$id direct policy invocation failed"
+  case "$output" in
+    "$expected"|"$expected"$'\t'*) : ;;
+    *) fail "$id direct policy expected $expected, got: $output" ;;
+  esac
+  pass "posix path identity $id: $expected"
+}
+
+test_windows_form_path_identity() {
+  local winroot='C:/Users/johns/firstmate' winroot_bs='C:\Users\johns\firstmate'
+
+  # Backslash-separated relative path to a protected script.
+  assert_policy_at win-relative-backslash $'deny\twatcher-direct' "$ROOT" "'bin\\fm-watch.sh'"
+  assert_policy_at win-relative-backslash-arm allow "$ROOT" "'bin\\fm-watch-arm.sh'"
+
+  # Fully Windows-form root and command, both separator styles.
+  assert_policy_at win-absolute-backslash $'deny\twatcher-direct' "$winroot_bs" "'$winroot_bs\\bin\\fm-watch.sh'"
+  assert_policy_at win-absolute-forward $'deny\twatcher-direct' "$winroot" "'$winroot/bin/fm-watch.sh'"
+  assert_policy_at win-absolute-mixed $'deny\twatcher-direct' "$winroot_bs" "'$winroot/bin/fm-watch.sh'"
+
+  # The blessed shapes must still be allowed under a Windows-form home, which
+  # requires xModePathAllowed to accept a drive-letter absolute path.
+  assert_policy_at win-xmode-source allow "$winroot" \
+    "source '$winroot/config/x-mode.env'; bin/fm-watch-checkpoint.sh --seconds 180"
+  assert_policy_at win-xmode-source-backslash allow "$winroot_bs" \
+    "source '$winroot_bs\\config\\x-mode.env'; bin/fm-watch-checkpoint.sh --seconds 180"
+
+  # A foreign x-mode.env under a Windows-form home is still not approved setup.
+  assert_policy_at win-xmode-foreign $'deny\twatcher-bundled' "$winroot" \
+    "source 'D:/other/firstmate/config/x-mode.env'; bin/fm-watch-checkpoint.sh --seconds 180"
+
+  # A relative, non-absolute path must not be treated as the home's x-mode.env.
+  assert_policy_at win-xmode-relative-foreign $'deny\twatcher-bundled' "$winroot" \
+    "source 'other/config/x-mode.env'; bin/fm-watch-checkpoint.sh --seconds 180"
+}
+
 # --- CLI parsing -------------------------------------------------------------
 
 test_command_equals_form() {
@@ -456,6 +505,7 @@ test_shellcheck_clean() {
 
 test_full_acceptance_matrix
 test_direct_policy_contract
+test_windows_form_path_identity
 test_command_equals_form
 test_background_flag_accepted_and_non_gating
 test_unknown_flag_errors

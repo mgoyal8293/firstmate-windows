@@ -216,6 +216,44 @@ test_kimi_launch_then_send_is_verified() {
   pass "fm-spawn: kimi launches, delivers its brief, and registers a guarded turn-end token"
 }
 
+# The GOTMPDIR export is the one environment variable fm-spawn types into a
+# pane, and MSYS converts paths in argv but never in the environment: a native Go
+# exe handed the POSIX /tmp/fm-<id>/gotmp reads it as \tmp\fm-<id>\gotmp off the
+# current drive. fm-spawn therefore translates the EXPORTED value on Windows and
+# quotes it, because the Windows form carries backslashes the pane shell would
+# otherwise eat as escapes. The POSIX literal must stay byte-identical, which the
+# assertion in test_kimi_launch_then_send_is_verified above pins.
+test_spawn_exports_gotmpdir_in_the_windows_form_on_windows() {
+  local id rec out rc task_tmp win_tmp
+  id="kimi-winpath-z1-$$"
+  task_tmp="/tmp/fm-$id"
+  win_tmp='C:\Users\test\AppData\Local\Temp\fm-'"$id"'\gotmp'
+  rm -rf "$task_tmp"
+  rec=$(make_spawn_case winpath "$id")
+  read_spawn_record "$rec"
+  # cygpath is the translator fm-spawn probes for; stub it so the expected
+  # Windows bytes are deterministic rather than host-dependent.
+  cat > "$FAKEBIN_DIR/cygpath" <<SH
+#!/usr/bin/env bash
+set -u
+printf '%s\n' '$win_tmp'
+SH
+  chmod +x "$FAKEBIN_DIR/cygpath"
+  out=$(FM_PLATFORM_UNAME_OVERRIDE=MINGW64_NT-10.0 FM_FAKE_KIMI_SWALLOW_FIRST=yes run_spawn \
+    "$CASE_DIR" "$HOME_DIR" "$PROJ_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$id")
+  rc=$?
+  expect_code 0 "$rc" "spawn on a Windows platform should still succeed: $out"
+  assert_grep "export GOTMPDIR='$win_tmp'" "$CASE_DIR/tmux-calls.log" \
+    "spawn did not export the quoted Windows form of GOTMPDIR on Windows"
+  assert_not_contains "$(cat "$CASE_DIR/tmux-calls.log")" "export GOTMPDIR=$task_tmp/gotmp" \
+    "spawn exported the unconverted POSIX GOTMPDIR on Windows"
+  # tasktmp= stays POSIX: bash made the directory and fm-teardown.sh removes it.
+  assert_grep "tasktmp=$task_tmp" "$HOME_DIR/state/$id.meta" \
+    "the recorded task temp root must stay in POSIX form for teardown"
+  rm -rf "$task_tmp"
+  pass "fm-spawn: GOTMPDIR is exported in the quoted Windows form on Windows, tasktmp= stays POSIX"
+}
+
 test_kimi_hook_install_is_surgical_idempotent_and_removable() {
   local home config original once stripped count
   home="$TMP_ROOT/config-surgery"
@@ -662,6 +700,7 @@ test_kimi_hook_remove_preserves_owned_newline_boundary
 test_kimi_hook_fails_closed_on_missing_malformed_or_partial_config
 test_kimi_hook_install_refuses_without_jq
 test_kimi_launch_then_send_is_verified
+test_spawn_exports_gotmpdir_in_the_windows_form_on_windows
 test_kimi_hook_is_silent_and_requires_registered_workspace_token
 test_kimi_spawn_refuses_unsafe_global_config_before_pane_creation
 test_kimi_teardown_removes_pointer_and_registry_token

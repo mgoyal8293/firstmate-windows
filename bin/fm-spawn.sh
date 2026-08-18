@@ -2297,6 +2297,26 @@ fi
 TASK_TMP="/tmp/fm-$ID"
 mkdir -p "$TASK_TMP/gotmp"
 
+# The EXPORTED form of GOTMPDIR is not always the POSIX one. MSYS converts paths
+# in argv but never in the environment, so a native Go exe handed the POSIX
+# /tmp/fm-<id>/gotmp looks for \tmp\fm-<id>\gotmp off the current drive and Go's
+# build temp lands somewhere teardown will not clean. Translate the exported
+# value to the Windows form on Windows only; TASK_TMP itself stays POSIX because
+# bash created the directory and fm-teardown.sh (via tasktmp= in the task's
+# metadata) is the only reader of it.
+# The exported literal, not just the path: on Windows it must be quoted because
+# the Windows form carries backslashes that the pane shell would otherwise read
+# as escapes. Off Windows the literal stays byte-identical to what it has always
+# been, so no backend's send log changes.
+GOTMPDIR_EXPORT_LINE="export GOTMPDIR=$TASK_TMP/gotmp"
+if fm_platform_is_windows && command -v cygpath >/dev/null 2>&1; then
+  gotmpdir_win=$(cygpath -w "$TASK_TMP/gotmp" 2>/dev/null || true)
+  if [ -n "$gotmpdir_win" ]; then
+    GOTMPDIR_EXPORT_LINE="export GOTMPDIR=$(shell_quote "$gotmpdir_win")"
+  fi
+  unset gotmpdir_win
+fi
+
 # Per-harness turn-end hook where enabled: a file that touches
 # state/<id>.turn-ended when the agent finishes a turn. Worktree-resident hooks
 # and token pointers stay out of git's view so they never block teardown's dirty
@@ -2817,7 +2837,7 @@ spawn_record_traceparent() {
 # Export GOTMPDIR into the crewmate's pane shell so the agent and every child
 # process (go build, go test, ...) inherit it. Sent before the launch command so
 # the env is set when the agent starts; the brief sleep lets the export land.
-spawn_send_text_line "$T" "export GOTMPDIR=$TASK_TMP/gotmp"
+spawn_send_text_line "$T" "$GOTMPDIR_EXPORT_LINE"
 # Send through the exact channel that already ships GOTMPDIR, so every backend
 # and harness - ship, scout, and secondmate - gets it before launch. Skipped
 # entirely when trace context is off.

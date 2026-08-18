@@ -510,6 +510,38 @@ SH
   pass "bootstrap requires git with an install instruction"
 }
 
+# The install hint has to name a package manager the host can actually have.
+# Confirmed live on Windows, where every missing-tool line read "brew install
+# <tool>" - advice a Git Bash host cannot follow. The platform arm is keyed on
+# fm_platform_is_windows, so FM_PLATFORM_UNAME_OVERRIDE drives it from here.
+test_windows_install_hints_name_a_windows_package_manager() {
+  local case_dir fakebin bash_env out expected
+  case_dir="$TMP_ROOT/git-required-windows"
+  mkdir -p "$case_dir/home/config"
+  printf '%s\n' manual > "$case_dir/home/config/backlog-backend"
+  fakebin=$(make_fake_toolchain "$case_dir")
+  bash_env="$case_dir/no-git.bash"
+  cat > "$bash_env" <<'SH'
+command() {
+  if [ "${1:-}" = -v ] && [ "${2:-}" = git ]; then
+    return 1
+  fi
+  builtin command "$@"
+}
+git() {
+  return 127
+}
+SH
+
+  out=$(PATH="$fakebin:$BASE_PATH" BASH_ENV="$bash_env" FM_HOME="$case_dir/home" FM_ROOT_OVERRIDE="$case_dir/home" \
+    FM_PLATFORM_UNAME_OVERRIDE=MINGW64_NT-10.0 \
+    FM_FAKE_TREEHOUSE_LEASE_HELP=1 "$ROOT/bin/fm-bootstrap.sh")
+  expected="MISSING: git (install: winget install Git.Git  # or scoop install git)"
+  [ "$out" = "$expected" ] || fail "missing git on Windows should name winget/scoop, got: $out"
+  assert_not_contains "$out" brew "a Windows install hint must never mention brew"
+  pass "bootstrap: Windows install hints name winget/scoop, not brew"
+}
+
 test_orca_backend_gates_orca_tool_only_when_selected() {
   local case_dir fakebin out missing_orca
   missing_orca="MISSING: orca (install: brew install orca  # or the platform's package manager)"
@@ -1160,6 +1192,7 @@ test_lavish_axi_min_version
 test_tasks_axi_min_version
 test_quota_axi_min_version
 test_git_is_required_with_supported_install_instruction
+test_windows_install_hints_name_a_windows_package_manager
 test_orca_backend_gates_orca_tool_only_when_selected
 test_session_provider_backends_do_not_require_tmux
 test_session_provider_backends_gate_own_cli_not_tmux

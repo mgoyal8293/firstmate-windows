@@ -60,6 +60,24 @@ function basename(value) {
   return value.split("/").filter(Boolean).at(-1) || value;
 }
 
+// Path identity in this classifier is always compared in POSIX form.
+// The platform `path` module uses backslash separators on win32, which makes
+// every protected-script and x-mode.env comparison below fail there and
+// silently disarms the guard. Normalize separators and compare with
+// `path.posix` so the same bytes classify identically on every platform.
+function toPosixPath(value) {
+  return value.replace(/\\/g, "/");
+}
+
+function posixNormalize(value) {
+  return path.posix.normalize(toPosixPath(value));
+}
+
+function posixIsAbsolute(value) {
+  const posix = toPosixPath(value);
+  return path.posix.isAbsolute(posix) || /^[A-Za-z]:\//.test(posix);
+}
+
 function extractBalanced(source, start, open, close) {
   let depth = 1;
   let quote = "";
@@ -602,9 +620,10 @@ const PROTECTED_SCRIPTS = [
 ];
 
 function protectedIdentity(value, root) {
-  const normalized = path.normalize(value);
+  const normalized = posixNormalize(value);
+  const normalizedRoot = posixNormalize(root);
   for (const { relative, kind } of PROTECTED_SCRIPTS) {
-    if (normalized === relative || normalized === path.join(root, relative) || normalized.endsWith(`/${relative}`)) return kind;
+    if (normalized === relative || normalized === path.posix.join(normalizedRoot, relative) || normalized.endsWith(`/${relative}`)) return kind;
   }
   return "";
 }
@@ -856,8 +875,8 @@ function analyzeProgram(command, context, depth = 0) {
 
 function xModePathAllowed(value, home) {
   if (value === "config/x-mode.env" || value === "./config/x-mode.env") return true;
-  if (!path.isAbsolute(value)) return false;
-  return path.normalize(value) === path.join(path.normalize(home), "config/x-mode.env");
+  if (!posixIsAbsolute(value)) return false;
+  return posixNormalize(value) === path.posix.join(posixNormalize(home), "config/x-mode.env");
 }
 
 function ordinaryWordsOnly(tokens) {

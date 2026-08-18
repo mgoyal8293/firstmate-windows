@@ -29,7 +29,7 @@ TOOLS="$TMP_ROOT/tools"
 mkdir -p "$TOOLS"
 ln -sf "$(command -v git)" "$TOOLS/git"
 ln -sf "$(command -v jq)" "$TOOLS/jq"
-BASE_PATH="$TOOLS:/usr/bin:/bin:/usr/sbin:/sbin"
+BASE_PATH="$TOOLS:${FM_TEST_BASE_PATH:-/usr/bin:/bin:/usr/sbin:/sbin}"
 
 # new_case <Darwin|Linux> [with-herdr] [gui]
 # Builds one isolated account fixture and points the module-level CASE_*
