@@ -1645,12 +1645,22 @@ test_discover_supervisor_backend_precedence() {
   out=$(FM_SUPERVISOR_BACKEND='' TMUX_PANE='' HERDR_ENV=1 HERDR_PANE_ID=w1:p1 discover_supervisor_backend)
   [ "$out" = herdr ] || fail "HERDR_ENV=1 with HERDR_PANE_ID present should resolve to herdr: $out"
 
-  if out=$(FM_SUPERVISOR_BACKEND='' TMUX_PANE='' HERDR_ENV='' HERDR_PANE_ID='' discover_supervisor_backend); then
+  # The bare fallback is the home's OWN resolved backend, not a hardcoded tmux:
+  # a home running something else was being told its supervisor pane "is not a
+  # tmux pane" when the real answer is that its own backend has no injection
+  # primitives here. It still returns non-zero, and on a tmux home it still
+  # prints tmux, which is what keeps existing homes unchanged.
+  if out=$(FM_BACKEND=zellij FM_SUPERVISOR_BACKEND='' TMUX_PANE='' HERDR_ENV='' HERDR_PANE_ID='' discover_supervisor_backend); then
     fail "bare fallback (no override, no TMUX_PANE, no HERDR_ENV) should return non-zero"
   fi
-  [ "$out" = tmux ] || fail "bare fallback should still print tmux: $out"
+  [ "$out" = zellij ] || fail "bare fallback should name the home's own backend, got: $out"
 
-  pass "discover_supervisor_backend: override > TMUX_PANE > HERDR_ENV+HERDR_PANE_ID > tmux fallback"
+  if out=$(FM_BACKEND=tmux FM_SUPERVISOR_BACKEND='' TMUX_PANE='' HERDR_ENV='' HERDR_PANE_ID='' discover_supervisor_backend); then
+    fail "bare fallback should return non-zero on a tmux home too"
+  fi
+  [ "$out" = tmux ] || fail "bare fallback on a tmux home should still print tmux: $out"
+
+  pass "discover_supervisor_backend: override > TMUX_PANE > HERDR_ENV+HERDR_PANE_ID > the home's own backend as the bare fallback"
 }
 
 test_discover_supervisor_target_herdr() {

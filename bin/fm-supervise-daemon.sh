@@ -1404,7 +1404,7 @@ fm_super_main() {
     elif [ "${HERDR_ENV:-}" = "1" ] && [ -n "${HERDR_PANE_ID:-}" ]; then
       backend_source="HERDR_ENV"
     else
-      backend_source="FALLBACK($FM_SUPERVISOR_BACKEND_DEFAULT)"
+      backend_source="FALLBACK($(fm_supervisor_default_backend))"
     fi
   fi
   discovered_backend=$(discover_supervisor_backend) || true
