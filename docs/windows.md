@@ -149,19 +149,18 @@ have left a Windows home read-only for four hours after every ordinary quit.
 
 #### The process-identity read
 
-Git for Windows bash 5.2.37(1)-release on MINGW64_NT-10.0-26200, and Linux 6.18 for the unchanged-behaviour half:
+Git for Windows bash 5.2.37(1)-release on MINGW64_NT-10.0-26200:
 
 | Case | Result |
 |---|---|
-| `COLUMNS=10000 LC_ALL=C ps -p $$ -o lstart= -o command=` on MSYS | rejected, exit 1, `ps: unknown option -- o` |
-| `/proc/<pid>/stat` and `/proc/<pid>/cmdline` on the same host | both readable |
-| Before this change, sender identity | unreadable, the function returns 1 |
-| Before this change, one recovery attempt | refused, nothing sent, the record stays at `awaiting_report`, and a live sender reads as dead |
-| After this change, sender identity | `fm-pid-identity.v1 proc-starttime=237978196 cmdline-hex=62617368002e2f7665726966792e7368002d2d64656d6f2d6f6e6c7900` |
-| After this change, one recovery attempt | delivered, the record reaches `recovery_sent`, a live sender reads as alive, and a gone pid reads as dead |
-| An untagged record on that host | defers on a live pid, the record stays at `recovery_sending` across a poll, and concludes dead on a gone pid |
-| Suites on that host | `tests/fm-windows-portability.test.sh` exit 0, `tests/fm-pending-reply.test.sh` exit 0, with the previous-format verification case reporting its guarded skip because that platform's ps cannot produce the old form |
-| Off Windows, the identity is byte-identical across the move | `linux-starttime=9894240 cmdline-hex=736c6565700033303000` from both `bin/fm-wake-lib.sh` and `bin/fm-proc-lib.sh`, and `tests/fm-pending-reply.test.sh` passes at origin/main and on this branch |
+| The previous reader's form, `COLUMNS=10000 LC_ALL=C ps -p <pid> -o lstart= -o command=` | rejected, exit 1 |
+| `/proc/<pid>/stat` and `/proc/<pid>/cmdline` | both readable |
+| Before this change | the sender identity is unreadable, the one recovery attempt is refused with nothing sent, and the record stays at `awaiting_report` |
+| With this change | the identity reads in the form `fm-pid-identity.v1 proc-starttime=<ticks> cmdline-hex=<hex>`, the recovery is delivered, the record reaches `recovery_sent`, a live sender reads as alive, and a pid the process table cannot see reads as dead |
+| An untagged record within the `FM_PENDING_REPLY_UNVERIFIABLE_SENDER_SECS` bound (900s default) | defers, stays at `recovery_sending`, and the stored identity is byte-identical afterwards because a liveness read never rewrites it |
+| An untagged record past that bound | reads as dead, reaches `escalated`, and opens exactly one escalation |
+| `tests/fm-pending-reply.test.sh` on that host | passes, 34 assertions |
+| The `fm_pid_identity` case in `tests/fm-windows-portability.test.sh` on that host | passes |
 
 ### A second wedge in the same layer: symlink target spelling
 

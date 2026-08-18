@@ -43,7 +43,16 @@ FM_PROC_UNAME_S="${FM_PLATFORM_UNAME_OVERRIDE:-$(uname -s 2>/dev/null || echo un
 # later, possibly by another process, so an identity whose bytes moved with the
 # seam would mismatch for a live unchanged process - the false-dead verdict this
 # file exists to prevent.
-FM_PROC_HOST_UNAME_S="$(uname -s 2>/dev/null || echo unknown)"
+# Only the seam being set can make the two differ, and that happens in tests
+# alone, so the second `uname` is forked only there: with the seam unset the line
+# above already holds the real host value. This file has no source guard and
+# bin/fm-wake-lib.sh re-sources it from inside functions on a poll path, so a
+# second unconditional fork here would be paid per record per poll.
+if [ -n "${FM_PLATFORM_UNAME_OVERRIDE:-}" ]; then
+  FM_PROC_HOST_UNAME_S="$(uname -s 2>/dev/null || echo unknown)"
+else
+  FM_PROC_HOST_UNAME_S="$FM_PROC_UNAME_S"
+fi
 
 # True on the Windows POSIX-emulation runtimes: Git for Windows / MSYS2
 # (MINGW32_NT-*, MINGW64_NT-*, MSYS_NT-*) and Cygwin (CYGWIN_NT-*).
