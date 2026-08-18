@@ -67,12 +67,16 @@ write_maintenance_section_with_eol() {
 MAINT_INJECTED=0
 ensure_maintenance_section() {
   MAINT_INJECTED=0
-  if grep -Fqx '## Maintaining this file' "$AGENTS" ||
-    grep -Fqx $'## Maintaining this file\r' "$AGENTS"; then
+  # -U (binary) is load-bearing: MSYS grep reads in text mode and swallows the
+  # CR of a CRLF terminator, so without it the CRLF branches below silently
+  # answer "no CRLF" on Windows and firstmate writes LF into a project's CRLF
+  # AGENTS.md. GNU grep on Linux and macOS accepts -U and it is a no-op there.
+  if grep -UFqx '## Maintaining this file' "$AGENTS" ||
+    grep -UFqx $'## Maintaining this file\r' "$AGENTS"; then
     return 0
   fi
   local eol=$'\n' sep=''
-  if LC_ALL=C grep -q $'\r$' "$AGENTS"; then
+  if LC_ALL=C grep -Uq $'\r$' "$AGENTS"; then
     eol=$'\r\n'
   fi
   if [ -s "$AGENTS" ]; then
