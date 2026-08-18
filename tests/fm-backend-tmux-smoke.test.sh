@@ -190,6 +190,41 @@ fm_backend_tmux_target_exists "$TARGET" \
   || fail "fm_backend_tmux_target_exists must report a live window as present"
 pass "real tmux: the equivalence is not vacuous - a live window reads as present"
 
+# --- list_live / list_task_windows (the no-metadata discovery inventory) -----
+#
+# Again the property is EQUIVALENCE with the raw pipeline that used to run
+# inline in fm-supervise-daemon.sh's window_for_task(): the adapter's target
+# column and the fm_backend_list_task_windows dispatcher must both reproduce
+# `tmux list-windows -a -F '#{session_name}:#{window_name}' | grep ':fm-'`
+# exactly, including its ordering.
+
+tmux new-window -t "$SESSION" -n not-a-task-window \
+  || fail "real tmux: could not create the non-task window the filter must exclude"
+
+raw_list=$(tmux list-windows -a -F '#{session_name}:#{window_name}' 2>/dev/null | grep ':fm-' || true)
+adapter_list=$(fm_backend_tmux_list_live | cut -f1)
+dispatch_list=$(fm_backend_list_task_windows tmux)
+
+[ "$adapter_list" = "$raw_list" ] \
+  || fail "fm_backend_tmux_list_live's targets differ from the raw list-windows pipeline"$'\n'"--- raw ---"$'\n'"$raw_list"$'\n'"--- adapter ---"$'\n'"$adapter_list"
+[ "$dispatch_list" = "$raw_list" ] \
+  || fail "fm_backend_list_task_windows tmux differs from the raw list-windows pipeline"$'\n'"--- raw ---"$'\n'"$raw_list"$'\n'"--- dispatcher ---"$'\n'"$dispatch_list"
+case "$raw_list" in
+  *"$TARGET"*) : ;;
+  *) fail "the inventory equivalence is vacuous: the live task window is not in the raw list"$'\n'"$raw_list" ;;
+esac
+case "$raw_list" in
+  *not-a-task-window*) fail "the fm- filter let a non-task window through"$'\n'"$raw_list" ;;
+esac
+pass "real tmux: fm_backend_tmux_list_live and the fm_backend_list_task_windows dispatcher reproduce the raw list-windows|grep ':fm-' pipeline exactly, including its non-task-window exclusion"
+
+adapter_labels=$(fm_backend_tmux_list_live | cut -f2)
+[ "$adapter_labels" = "$WINDOW" ] \
+  || fail "fm_backend_tmux_list_live's label column should be the bare window name, got '$adapter_labels'"
+pass "real tmux: fm_backend_tmux_list_live prints the shared '<target>\\t<label>' shape every other adapter's list_live prints"
+
+tmux kill-window -t "$SESSION:not-a-task-window" 2>/dev/null || true
+
 # --- kill and recovery-grade missing-window classification ------------------
 
 fm_backend_tmux_kill "$TARGET"

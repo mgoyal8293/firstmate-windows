@@ -916,6 +916,32 @@ fm_backend_target_exists() {  # <backend> <target> [expected-label]
   esac
 }
 
+# fm_backend_list_task_windows: every LIVE endpoint on <backend> whose label
+# looks like a firstmate task window (fm-<id>), one target per line. The
+# no-metadata discovery fallback: a caller that has a task id but no recorded
+# `window=` (a torn or never-written meta) can still find the endpoint by
+# asking the backend what it is actually running.
+#
+# Each adapter already owns this inventory as its own list_live, printing
+# "<target>\t<label>"; this dispatcher projects that to the target column,
+# which is what a discovery caller needs. herdr and zellij scope their
+# inventory to a session, so <session> is passed through for them and each
+# adapter's own default is used when the caller has none. A backend with no
+# inventory lists nothing rather than failing, because "no endpoint found" is
+# exactly the answer a discovery fallback wants for an unsupported backend.
+fm_backend_list_task_windows() {  # <backend> [session] -> one target per line
+  local backend=$1 session=${2:-}
+  fm_backend_source "$backend" || return 0
+  case "$backend" in
+    tmux) fm_backend_tmux_list_live ;;
+    herdr) fm_backend_herdr_list_live "${session:-$(fm_backend_herdr_session)}" ;;
+    zellij) fm_backend_zellij_list_live "${session:-$(fm_backend_zellij_session)}" ;;
+    cmux) fm_backend_cmux_list_live ;;
+    conpty) fm_backend_conpty_list_live ;;
+    *) return 0 ;;
+  esac | cut -f1
+}
+
 # fm_backend_agent_state: the single recovery-grade agent/endpoint state
 # contract. It is deliberately richer than fm_backend_target_exists's cheap
 # pane-presence read and prints exactly one of:

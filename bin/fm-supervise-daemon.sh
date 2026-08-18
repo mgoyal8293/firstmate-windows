@@ -1077,8 +1077,16 @@ housekeeping() {  # <state>
 }
 
 # Find a recorded or live window target whose task id matches the marker key.
+#
+# The metadata loop answers in the normal case. The second loop is the
+# no-metadata fallback, and it used to run a bare `tmux list-windows` pipeline
+# inside this backend-agnostic function - so on any home not running tmux it
+# asked the wrong session provider (or, where tmux is not installed at all,
+# nothing). It now asks the home's OWN backend through
+# fm_backend_list_task_windows (bin/fm-backend.sh), whose tmux arm runs the
+# byte-identical pipeline: on a tmux home the candidate list is unchanged.
 window_for_task() {  # <task-key> [state]
-  local key=$1 state=${2:-$(_state_root)} meta task w t
+  local key=$1 state=${2:-$(_state_root)} meta task w t backend
   for meta in "$state"/*.meta; do
     [ -e "$meta" ] || continue
     task=$(basename "$meta"); task=${task%.meta}
@@ -1086,10 +1094,15 @@ window_for_task() {  # <task-key> [state]
     w=$(fm_backend_target_of_meta "$meta")
     [ -n "$w" ] && { printf '%s' "$w"; return 0; }
   done
-  for w in $(tmux list-windows -a -F '#{session_name}:#{window_name}' 2>/dev/null | grep ':fm-' || true); do
+  # 2>/dev/null: fm_backend_name's herdr/cmux auto-detect NOTICE is spawn-time
+  # advice, not a diagnostic this read-only lookup should log every cycle.
+  backend=$(fm_backend_name 2>/dev/null) || backend=tmux
+  [ -n "$backend" ] || backend=tmux
+  while IFS= read -r w; do
+    [ -n "$w" ] || continue
     t=$(window_to_task "$w" "$state")
     [ "$(_stale_key "$t")" = "$key" ] && { printf '%s' "$w"; return 0; }
-  done
+  done < <(fm_backend_list_task_windows "$backend" 2>/dev/null)
   return 1
 }
 

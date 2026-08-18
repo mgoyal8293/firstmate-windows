@@ -25,6 +25,26 @@
 # shellcheck source=bin/fm-cursor-lib.sh
 . "$FM_BACKEND_LIB_DIR/fm-cursor-lib.sh"
 
+# fm_backend_tmux_list_live: recovery/orphan discovery - every live window
+# whose name looks like a firstmate task window (fm-<id>), from tmux's own
+# server-wide inventory. One "<session>:<window_name>\t<window_name>" line per
+# match, the shape every other adapter's list_live already prints
+# (bin/backends/herdr.sh, zellij.sh, cmux.sh, conpty.sh). Read-only; a tmux
+# server that is not running simply lists nothing.
+#
+# This is the exact `tmux list-windows -a -F '#{session_name}:#{window_name}' |
+# grep ':fm-'` pipeline that used to run inline in fm-supervise-daemon.sh's
+# backend-agnostic window_for_task(); the grep stays on the composed
+# session:window line so the match set is unchanged.
+fm_backend_tmux_list_live() {
+  local line
+  while IFS= read -r line; do
+    case "$line" in
+      *:fm-*) printf '%s\t%s\n' "$line" "${line##*:}" ;;
+    esac
+  done < <(tmux list-windows -a -F '#{session_name}:#{window_name}' 2>/dev/null || true)
+}
+
 # fm_backend_tmux_resolve_bare_selector: the live-window-listing fallback for a
 # selector that is neither an explicit target nor a task selector routed
 # through meta - an ad hoc window name with no recorded task. Mirrors the
