@@ -20,6 +20,11 @@
 #      to learn a second identity namespace, and no Windows pid is ever stored.
 #   4. A different, recently refreshed token refuses rather than silently
 #      co-owning the home.
+#   5. A session that ENDS releases its own claim immediately, so the ordinary
+#      restart is not held off by the freshness window that exists only as the
+#      crash backstop. This is the case measured as broken on Windows before
+#      bin/fm-claude-sessionend-release.sh existed: a second session was refused
+#      a minute after the first had exited.
 set -u
 
 # shellcheck source=tests/lib.sh
@@ -65,6 +70,36 @@ new_home() {
   printf '%s\n' "$h"
 }
 
+
+# A fixture that satisfies fm_primary_scope_matches: a plain (non-worktree)
+# checkout with AGENTS.md, bin/, and a state dir - the same shape
+# tests/fm-claude-stop-autoarm.test.sh builds, because the release hook applies
+# the identical scope gate.
+new_primary_home() {
+  local h lib
+  h=$(fm_test_tmproot fm-session-token-primary) || fail "could not create a fixture home"
+  mkdir -p "$h/state" "$h/bin"
+  git init -q "$h"
+  git -C "$h" commit -q --allow-empty -m init
+  : > "$h/AGENTS.md"
+  for lib in fm-claude-sessionend-release.sh fm-primary-scope-lib.sh fm-session-lock-lib.sh \
+    fm-cursor-lib.sh fm-proc-lib.sh fm-hook-host-lib.sh fm-wake-lib.sh fm-lock.sh; do
+    cp "$ROOT/bin/$lib" "$h/bin/$lib"
+  done
+  chmod +x "$h/bin/fm-claude-sessionend-release.sh" "$h/bin/fm-lock.sh"
+  printf '%s\n' "$h"
+}
+
+# Run the SessionEnd release hook against fixture home $1 as session $2.
+run_release() {  # <home> <token>
+  local home=$1 token=$2
+  printf '%s\n' '{"session_id":"sess-release","reason":"clear"}' \
+    | env -u CLAUDE_CODE_SESSION_ID \
+      FM_ROOT_OVERRIDE="$home" FM_HOME="$home" FM_STATE_OVERRIDE="$home/state" \
+      FM_PLATFORM_UNAME_OVERRIDE="$WIN" \
+      ${token:+CLAUDE_CODE_SESSION_ID="$token"} \
+      bash "$home/bin/fm-claude-sessionend-release.sh"
+}
 
 # --- 1. inert off Windows ----------------------------------------------------
 
@@ -226,6 +261,57 @@ test_malformed_token_records_are_refused() {
 }
 
 
+# --- 5. release on session end ----------------------------------------------
+
+# The measured Windows gap this closes. Ownership is the token, and the recorded
+# pid on this path is always dead, so nothing about an EXITED session looks
+# different from a live one until its token goes stale. Before the release hook
+# a restart was refused for the whole freshness window - four hours of a
+# read-only home after every ordinary quit.
+test_release_lets_the_next_session_acquire_immediately() {
+  local home out
+  home=$(new_primary_home)
+  out=$(run_lock "$home" "$WIN" 1111aaaa-0000-1111-2222-333333333333)
+  assert_contains "$out" "lock acquired: session token" "release: the first session must acquire"
+  run_release "$home" 1111aaaa-0000-1111-2222-333333333333
+  assert_absent "$home/state/.lock.session" "release: an ending session must drop its own token"
+  assert_present "$home/state/.lock" \
+    "release: state/.lock must be left alone so the unchanged dead-owner reclaim still applies"
+  # No ageing anywhere: this is the ordinary restart, seconds later.
+  out=$(run_lock "$home" "$WIN" 2222bbbb-0000-1111-2222-333333333333)
+  assert_contains "$out" "lock acquired: session token" \
+    "release: the next session must acquire at once, not wait out the freshness window"
+  pass "session end: releasing the token lets the very next session acquire without waiting"
+}
+
+test_release_never_evicts_another_session() {
+  local home
+  home=$(new_primary_home)
+  run_lock "$home" "$WIN" 3333cccc-0000-1111-2222-333333333333 >/dev/null
+  # Some other session ends. It must not be able to hand this home to anyone.
+  run_release "$home" 4444dddd-0000-1111-2222-333333333333
+  [ "$(cat "$home/state/.lock.session" 2>/dev/null)" = 3333cccc-0000-1111-2222-333333333333 ] \
+    || fail "release: SECURITY - a foreign session's end must never clear the holder's token"
+  # A session with no token of its own must be equally powerless.
+  run_release "$home" ""
+  [ "$(cat "$home/state/.lock.session" 2>/dev/null)" = 3333cccc-0000-1111-2222-333333333333 ] \
+    || fail "release: SECURITY - a tokenless end must never clear the holder's token"
+  pass "session end: the release clears only a token this session owns"
+}
+
+# Off the token path there is no token to release, and the release must not
+# invent one or disturb an ancestry-owned lock.
+test_release_is_inert_on_an_ancestry_owned_home() {
+  local home
+  home=$(new_primary_home)
+  printf '%s\n' 4242 > "$home/state/.lock"
+  run_release "$home" 5555eeee-0000-1111-2222-333333333333
+  [ "$(cat "$home/state/.lock")" = 4242 ] \
+    || fail "release: an ancestry-owned lock must be left exactly as it was"
+  assert_absent "$home/state/.lock.session" "release: no token may be created by the release"
+  pass "session end: inert on a home that records no token"
+}
+
 test_token_is_ignored_where_ancestry_actually_works
 test_ancestry_unavailable_requires_both_platform_and_empty_walk
 test_token_acquires_and_records_a_plain_pid
@@ -234,3 +320,6 @@ test_a_later_session_reclaims_an_exited_one
 test_a_live_peer_token_refuses_rather_than_co_owning
 test_ownership_predicate_matches_only_the_recorded_token
 test_malformed_token_records_are_refused
+test_release_lets_the_next_session_acquire_immediately
+test_release_never_evicts_another_session
+test_release_is_inert_on_an_ancestry_owned_home
