@@ -17,7 +17,7 @@ Each is fixed at exactly one owner:
 | Failure | Owner | Substitute |
 |---|---|---|
 | `ln -s` silently makes a recursive COPY, so every fleet lock spins forever | `bin/fm-proc-lib.sh` | exports `MSYS=winsymlinks:nativestrict` on source; `bin/fm-bootstrap.sh` then PROVES a symlink can be made |
-| MSYS `ps` rejects `-o`, so the session lock can never be acquired and firstmate is permanently read-only | `bin/fm-proc-lib.sh` | `fm_proc_field` reads the `/proc/<pid>/{ppid,pgid,sid,exename,cmdline}` files, with `ps -o` as the non-`/proc` fallback |
+| MSYS `ps` rejects `-o`, so every process-table read fails on call one | `bin/fm-proc-lib.sh` | `fm_proc_field` reads the `/proc/<pid>/{ppid,pgid,sid,exename,cmdline}` files, with `ps -o` as the non-`/proc` fallback. Fixes harness detection, teardown, the watcher and the process-event runner; does **not** by itself fix the session lock - see "Open" below |
 | `lsof` is absent, so teardown reaps nothing - and Windows then physically refuses to delete the worktree the unreaped agent sits in | `bin/fm-teardown.sh`, `bin/fm-lock-lib.sh` | a bounded `/proc/*/cwd` (and `/proc/*/fd`) scan, which also sees the native Windows children MSYS spawned |
 | `chmod` is a no-op on `noacl` mounts, so no PR can be merged and no watcher check can be armed | `bin/fm-pr-lib.sh` | the exact-mode assertion is capability-gated; see the security note below |
 
@@ -60,6 +60,48 @@ landing that silently would surface only when someone next needed Windows to
 work.
 `.github/workflows/upstream-sync.yml` runs it daily and fails the scheduled run
 when upstream is not cleanly takeable.
+
+## Open: the session lock still cannot be acquired
+
+The `/proc` substitution fixed every process-table read that stays inside the
+MSYS process tree - `bin/fm-harness.sh` now answers `claude` instead of
+`unknown`, and teardown, the watcher and the process-event runner all read their
+fields correctly. The session lock is the one caller it does NOT fix, for a
+second reason the port inventory did not know about.
+
+**MSYS's `/proc` contains only MSYS processes.** Claude Code on Windows is a
+native `claude.exe`, so it never appears there, and the Bash tool subprocess it
+spawns reports `ppid = 1`. The ancestry walk therefore terminates on hop one with
+no harness found, and `bin/fm-lock.sh acquire` still refuses - which keeps a
+Windows session read-only under `AGENTS.md` section 3.
+
+Measured inside a genuine Windows Claude Code session (2.1.200, `claude -p` with
+a SessionStart hook), the chain is recoverable, just not from `/proc`:
+
+```
+MSYS pid=89  winpid=12140  msys_ppid=1        CLAUDECODE=1
+12140 bash.exe   ppid=10412   .../bash.exe .../probe.sh
+10412 bash.exe   ppid=41800   .../bash.exe -c "bash \"$CLAUDE_PROJECT_DIR/probe.sh\""
+41800 bash.exe   ppid=34040   .../bash.exe -c "bash \"$CLAUDE_PROJECT_DIR/probe.sh\""
+34040 claude.exe ppid=29440   ...\@anthropic-ai\claude-code\bin\claude.exe -p ...
+29440 sh.exe     ppid=14864   .../sh.exe /c/.../npm/claude -p ...
+```
+
+`ps -W` lists native processes but reports `PPID 0` for them, so it cannot walk
+the chain. `Get-CimInstance Win32_Process` can, and identifies `claude.exe` by
+both its name and its install path - but one CIM call costs **566 ms**, and the
+Stop hook runs it every turn.
+
+This is a design decision, not a missing line of code, and it is the inventory's
+own P0 item 3 ("harness ancestry under Windows Claude Code - needs discussion").
+The hard part is not reading the chain, it is what the lock then STORES: every
+other caller (`fm_harness_pid_alive`, `fm_session_lock_owned_by_self`, `kill -0`)
+treats the recorded value as an MSYS pid, and a Windows pid is a different
+namespace. Recording one without a namespace tag would let a lock-ownership test
+match the wrong process. Options worth weighing: a tagged Windows identity across
+the session-lock owner; a single whole-table CIM read cached per hook run; or
+leaning on `CLAUDECODE` for detection while finding another way to answer "is
+this the session that owns the lock?".
 
 ## Not yet ported
 
