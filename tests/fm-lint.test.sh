@@ -492,6 +492,56 @@ test_installer_rejects_wrong_checksum() {
   pass "ShellCheck installer rejects a wrong checksum"
 }
 
+# The installer digests its download under $RUNNER_TEMP, and on a Windows runner
+# that is a Windows-form path (D:\a\_temp). GNU coreutils escapes its checksum
+# LINE whenever the FILENAME holds a backslash: the line is prefixed with a
+# literal `\`, the first field reads `\<hex>`, and a byte-perfect download is then
+# rejected as "checksum mismatch ... got \8a4e35...". That is what took the
+# Windows lint gate down at its first step.
+#
+# Reproduced on ANY host, because the trigger is the filename rather than the
+# platform: point RUNNER_TEMP at a directory whose name really holds a backslash
+# and let the REAL hasher run. The invariant is that identical bytes digest
+# identically no matter how the work directory is spelled - asserted by comparing
+# the two runs against each other rather than against a hardcoded digest, so the
+# case cannot rot when a pin is bumped.
+test_installer_digest_is_unaffected_by_a_backslash_in_its_work_directory() {
+  local tmp fakebin destination plain_out win_out plain_digest win_digest winlike
+  tmp=$(fm_test_tmproot fm-shellcheck-backslash)
+  fakebin=$(fm_fakebin "$tmp")
+  destination="$tmp/bin"
+  # Deliberately no hasher stub: the real sha256sum/shasum escaping is under test.
+  fm_install_stub_uname "$fakebin"
+  fm_install_stub_curl "$fakebin"
+  fm_install_stub_tar_shellcheck "$fakebin"
+  fm_install_stub_sleep "$fakebin"
+
+  # The stub download is not the pinned archive, so both runs must refuse to
+  # install. The digest each one REPORTS is the observable under test.
+  mkdir -p "$tmp/plain"
+  plain_out=$(RUNNER_TEMP="$tmp/plain" FM_TEST_UNAME_S=Linux FM_TEST_UNAME_M=x86_64 \
+    PATH="$fakebin:$PATH" "$INSTALLER" "$destination" 2>&1) \
+    && fail "installer installed an archive that does not match its pin"$'\n'"$plain_out"
+  winlike="$tmp/win\\temp"
+  mkdir -p "$winlike"
+  win_out=$(RUNNER_TEMP="$winlike" FM_TEST_UNAME_S=Linux FM_TEST_UNAME_M=x86_64 \
+    PATH="$fakebin:$PATH" "$INSTALLER" "$destination" 2>&1) \
+    && fail "installer installed an archive that does not match its pin"$'\n'"$win_out"
+
+  plain_digest=${plain_out##*got }
+  plain_digest=${plain_digest%%)*}
+  win_digest=${win_out##*got }
+  win_digest=${win_digest%%)*}
+  [ -n "$win_digest" ] || fail "installer did not report the digest it computed"$'\n'"$win_out"
+  [ "$win_digest" = "$plain_digest" ] \
+    || fail "a backslash in the work directory changed the computed digest: '$win_digest' vs '$plain_digest'"
+  case "$win_digest" in
+    *[!0-9a-f]*) fail "reported digest is not bare hex: '$win_digest'" ;;
+  esac
+  [ ! -e "$destination/shellcheck" ] || fail "installer installed ShellCheck after a checksum mismatch"
+  pass "ShellCheck installer digests its download by content, not by a path a backslash can escape"
+}
+
 test_installer_falls_back_to_shasum() {
   local tmp fakebin destination out hasher_log tool
   tmp=$(fm_test_tmproot fm-shellcheck-shasum)
@@ -900,6 +950,7 @@ test_pins_an_explicit_version
 test_installer_retries_transient_download_failure
 test_installer_selects_platform_archive_url_and_checksum
 test_installer_rejects_wrong_checksum
+test_installer_digest_is_unaffected_by_a_backslash_in_its_work_directory
 test_installer_falls_back_to_shasum
 test_installer_prefers_sha256sum_over_shasum
 test_installer_rejects_unsupported_platform

@@ -970,6 +970,98 @@ EOF
   pass ".opencode primary plugin: guard path is anchored to worktree, not directory"
 }
 
+# A blocked turn's prompt carries the guard's whole stderr dump, so the payload
+# the plugin writes to the operational-input encoder is unbounded - routinely far
+# larger than a pipe buffer. When the encoder exits before draining it (it
+# refuses an input it cannot encode, or the machine simply deschedules the plugin
+# between spawn and write), the rest of that write fails with EPIPE, and EPIPE
+# arrives as an 'error' event on the STDIN stream rather than on the child. Nothing
+# handled it, and an unhandled 'error' event does not fail one prompt - it kills
+# the agent process mid-turn, exactly when supervision is already off.
+#
+# Deterministic here because the payload exceeds the pipe buffer: the encoder is
+# guaranteed to be gone with bytes still unwritten. The positive half runs the
+# same oversized payload through an encoder that DOES drain it, so this proves the
+# write failure is survivable rather than that large prompts are simply dropped.
+test_opencode_plugin_survives_an_encoder_that_never_drains_the_prompt() {
+  local plugin repo out status
+  plugin="$ROOT/.opencode/plugins/fm-primary-turnend-guard.js"
+  [ -f "$plugin" ] || fail "tracked OpenCode primary plugin is missing"
+  repo="$TMP_ROOT/opencode-encoder-epipe"
+  mkdir -p "$repo/bin"
+  # A verbose supervision dump: >64KiB of guard stderr, which becomes >64KiB of
+  # prompt content, which is more than one pipe write can hold.
+  cat > "$repo/bin/fm-turnend-guard.sh" <<'SH'
+#!/usr/bin/env bash
+cat >/dev/null
+printf 'watcher: FAILED - supervision dump follows\n' >&2
+i=0
+while [ "$i" -lt 2000 ]; do
+  printf 'dump line %s: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n' "$i" >&2
+  i=$((i + 1))
+done
+exit 2
+SH
+  # The encoder the plugin resolves out of the worktree. REFUSE_ENCODER makes it
+  # exit without reading stdin, which is what strands the write.
+  cat > "$repo/bin/fm-operational-input.sh" <<'SH'
+#!/usr/bin/env bash
+if [ -n "${REFUSE_ENCODER:-}" ]; then
+  printf 'fm-operational-input.sh: refusing this input\n' >&2
+  exit 3
+fi
+cat >/dev/null
+printf '⁣FIRSTMATE_OP: v1 %s: encoded\n' "$2"
+SH
+  chmod +x "$repo/bin/fm-turnend-guard.sh" "$repo/bin/fm-operational-input.sh"
+
+  out=$(NODE_NO_WARNINGS=1 PLUGIN="$plugin" WORKTREE="$repo" node 2>&1 <<'EOF'
+import { pathToFileURL } from "node:url";
+
+const load = async () => {
+  // A fresh module instance per case: the plugin keeps per-process idle state.
+  const mod = await import(`${pathToFileURL(process.env.PLUGIN).href}?case=${Math.random()}`);
+  let promptBody = "";
+  const client = { session: { promptAsync: async (request) => { promptBody = request.body.parts[0].text; } } };
+  const hooks = await mod.FmPrimaryTurnendGuard({
+    client,
+    directory: process.env.WORKTREE,
+    worktree: process.env.WORKTREE,
+  });
+  return { hooks, prompt: () => promptBody };
+};
+
+// 1. The encoder refuses without draining: the oversized write is stranded.
+process.env.REFUSE_ENCODER = "1";
+const refused = await load();
+await refused.hooks.event({ event: { type: "session.idle", properties: { sessionID: "session-refused" } } });
+if (refused.prompt()) {
+  console.error(`a refused encoding must deliver no prompt: ${refused.prompt().slice(0, 120)}`);
+  process.exit(1);
+}
+
+// 2. Same oversized payload, an encoder that drains it: the prompt is delivered.
+delete process.env.REFUSE_ENCODER;
+const encoded = await load();
+await encoded.hooks.event({ event: { type: "session.idle", properties: { sessionID: "session-encoded" } } });
+if (!encoded.prompt().includes("FIRSTMATE_OP: v1 turn-end-guard:")) {
+  console.error(`an oversized prompt must still be delivered when the encoder drains it: ${encoded.prompt().slice(0, 120)}`);
+  process.exit(1);
+}
+
+// Reaching here at all is the contract: a stranded stdin write must not take the
+// process down. Give any deferred stream error a turn of the loop to surface.
+await new Promise((resolve) => setTimeout(resolve, 50));
+console.log("survived");
+EOF
+)
+  status=$?
+  expect_code 0 "$status" "OpenCode plugin must survive an encoder that leaves its prompt write stranded"
+  assert_contains "$out" "survived" "plugin process did not survive the stranded write"$'\n'"$out"
+  assert_not_contains "$out" "EPIPE" "a stranded stdin write raised an unhandled EPIPE"
+  pass ".opencode primary plugin: a stranded prompt write never crashes the agent process"
+}
+
 test_pi_extension_injects_once_per_logical_agent_run() {
   local repo home ext log out status
   repo="$TMP_ROOT/pi-logical-run-root"
@@ -1648,6 +1740,7 @@ test_tracked_claude_entries_inert_under_grok
 test_codex_hook_uses_process_pwd_when_payload_cwd_is_outside_root
 test_codex_hook_ignores_nested_git_root_guard
 test_opencode_plugin_anchors_guard_to_worktree
+test_opencode_plugin_survives_an_encoder_that_never_drains_the_prompt
 test_pi_extension_injects_once_per_logical_agent_run
 test_pi_extension_retries_after_followup_delivery_failure
 test_hook_claude_mode_reblocks_stop_hook_active_when_unhealthy

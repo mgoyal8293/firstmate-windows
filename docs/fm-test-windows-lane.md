@@ -423,3 +423,84 @@ so this too is one fix rather than a platform arm.
 
 The general lesson for the rest of this port: on Windows, `command -v` is not
 evidence a tool works.
+
+## Three differences a local Git Bash could not show
+
+Every measurement above was taken on a developer Windows machine, and all three
+of the following passed there and failed on the GitHub runner. None is about a
+test being wrong on Windows in general: each is one environment fact that the
+local shell happened not to have.
+
+### `%TEMP%` on the runner is a short (8.3) path, and `/proc` does not use it
+
+Git for Windows mounts `/tmp` with `usertemp`, i.e. at whatever `%TEMP%` names.
+GitHub's runners spell that with a short component, and MSYS renders
+`/proc/<pid>/cwd` in its own canonical spelling of the process's Windows cwd -
+which then comes back through the `cygdrive` mount instead:
+
+```
+mount:      C:/Users/<user>/AppData/Local/Temp/FMCI-L~1 on /tmp (usertemp)
+fixture:    /tmp/fm-cwd.wdwSxf/wt/sub
+/proc says: /c/Users/<user>/AppData/Local/Temp/fmci-longname-probe/fm-cwd.wdwSxf/wt/sub
+```
+
+`fm_proc_pids_with_cwd_under` compared those two strings raw, so it reported
+**nobody** under a directory a live process was sitting in - which its own
+contract says teardown reads as a proven-empty scan. Reproduced off-runner by
+launching a fresh Git Bash with `TEMP` set to a short-name directory; a shell
+whose `%TEMP%` needs no short name never sees it.
+
+Fixed in `fm_proc_cwd_prefixes`: `cygpath -m -l` resolves the caller's directory
+through the mount table *and* expands short components, and `cygpath -u` converts
+that back into the spelling `/proc` reports. Resolved once per scan, not per pid,
+so the scan still costs a fixed two forks. The caller's own spelling is still
+tried first and still wins, and with no `cygpath` the strict compare remains the
+only verdict - this can widen a match, never invent one.
+
+### `LANG` is unset on the runner, so `printf '\u2580'` is not a glyph
+
+Bash converts `\uXXXX` through the ambient locale's charset. With no `LANG` and
+no `LC_*`, that charset cannot represent U+2580, and bash emits the six
+characters of the escape instead:
+
+```
+$ printf '\u2580\u2580' | od -An -tx1     # runner, LANG unset
+ 5c 75 32 35 38 30 5c 75 32 35 38 30
+$ LC_ALL=C.UTF-8 printf '\u2580\u2580' | od -An -tx1
+ e2 96 80 e2 96 80
+```
+
+`tests/fm-composer-lib.test.sh` built its herdr half-block rule rows that way, so
+on the runner it asked `fm_composer_row_has_edge` about a row that was not a rule
+row at all. The lib's patterns are literal bytes and were never the problem.
+Fixed by writing the fixture's glyphs as literal UTF-8, which is locale-independent
+in both directions - and which is also what makes that file's `LC_ALL=C` half mean
+something.
+
+### `RUNNER_TEMP` holds backslashes, and GNU coreutils escapes for that
+
+```
+fm-install-shellcheck.sh: checksum mismatch for shellcheck-v0.11.0.zip
+  (expected 8a4e35ab...e740e, got \8a4e35ab...e740e)
+```
+
+The digest was right; the *line* was escaped. GNU coreutils prefixes its checksum
+line with a literal `\` whenever the filename holds a backslash or newline, and
+the installers digest by filename under `$RUNNER_TEMP`, which is `D:\a\_temp` on
+a Windows runner. So the pinned Windows download was rejected for how its path was
+spelled, and the lint lane died at its first step.
+
+Both installers now digest through **stdin**, which removes the filename from the
+output entirely. That is correct on every platform rather than a Windows arm, and
+`tests/fm-lint.test.sh` and `tests/fm-lint-workflows.test.sh` pin it on any host by
+pointing `RUNNER_TEMP` at a directory whose name really does hold a backslash.
+
+### The restricted-PATH DLL pattern, fixed in place once
+
+`tests/fm-windows-portability.test.sh` also builds a deliberately restricted PATH -
+one directory, holding `readlink` and no `cygpath` - and reached it through a
+symlink, which is the `$TOOLS` symlink pattern named under "Scripts excluded, and
+why" above: `PATH=$dir readlink` exits 127 there, because an MSYS binary finds
+`msys-2.0.dll` through PATH. It is fixed with the same exec wrapper
+`make_no_timeout_toolbin` uses in `tests/fm-crew-state.test.sh`, which is the
+worked example for the excluded scripts that still carry this pattern.

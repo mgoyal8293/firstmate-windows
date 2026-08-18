@@ -415,6 +415,47 @@ test_installer_rejects_wrong_checksum() {
   pass "actionlint installer rejects a wrong checksum"
 }
 
+# The same escaping trap tests/fm-lint.test.sh pins for the ShellCheck installer,
+# on the installer the Windows lint lane runs one step later: GNU coreutils
+# escapes its checksum line when the FILENAME holds a backslash, and this
+# installer's work directory is $RUNNER_TEMP, which is D:\a\_temp on a Windows
+# runner. Reproduced on any host by spelling RUNNER_TEMP with a backslash and
+# letting the REAL hasher run; identical bytes must digest identically either way.
+test_installer_digest_is_unaffected_by_a_backslash_in_its_work_directory() {
+  local tmp fakebin destination plain_out win_out plain_digest win_digest winlike
+  tmp=$(fm_test_tmproot fm-actionlint-backslash)
+  fakebin=$(fm_fakebin "$tmp")
+  destination="$tmp/bin"
+  # Deliberately no hasher stub: the real sha256sum/shasum escaping is under test.
+  fm_install_stub_uname "$fakebin"
+  fm_install_stub_curl "$fakebin"
+  fm_install_stub_tar_actionlint "$fakebin"
+  fm_install_stub_sleep "$fakebin"
+
+  mkdir -p "$tmp/plain"
+  plain_out=$(RUNNER_TEMP="$tmp/plain" FM_TEST_UNAME_S=Linux FM_TEST_UNAME_M=x86_64 \
+    PATH="$fakebin:$PATH" "$INSTALLER" "$destination" 2>&1) \
+    && fail "installer installed an archive that does not match its pin"$'\n'"$plain_out"
+  winlike="$tmp/win\\temp"
+  mkdir -p "$winlike"
+  win_out=$(RUNNER_TEMP="$winlike" FM_TEST_UNAME_S=Linux FM_TEST_UNAME_M=x86_64 \
+    PATH="$fakebin:$PATH" "$INSTALLER" "$destination" 2>&1) \
+    && fail "installer installed an archive that does not match its pin"$'\n'"$win_out"
+
+  plain_digest=${plain_out##*got }
+  plain_digest=${plain_digest%%)*}
+  win_digest=${win_out##*got }
+  win_digest=${win_digest%%)*}
+  [ -n "$win_digest" ] || fail "installer did not report the digest it computed"$'\n'"$win_out"
+  [ "$win_digest" = "$plain_digest" ] \
+    || fail "a backslash in the work directory changed the computed digest: '$win_digest' vs '$plain_digest'"
+  case "$win_digest" in
+    *[!0-9a-f]*) fail "reported digest is not bare hex: '$win_digest'" ;;
+  esac
+  [ ! -e "$destination/actionlint" ] || fail "installer installed actionlint after a checksum mismatch"
+  pass "actionlint installer digests its download by content, not by a path a backslash can escape"
+}
+
 test_installer_falls_back_to_shasum() {
   local tmp fakebin destination out hasher_log tool
   tmp=$(fm_test_tmproot fm-actionlint-shasum)
@@ -560,6 +601,7 @@ test_rejects_wrong_actionlint_version
 test_installer_retries_transient_download_failure
 test_installer_selects_platform_archive_url_and_checksum
 test_installer_rejects_wrong_checksum
+test_installer_digest_is_unaffected_by_a_backslash_in_its_work_directory
 test_installer_falls_back_to_shasum
 test_installer_prefers_sha256sum_over_shasum
 test_installer_rejects_unsupported_platform

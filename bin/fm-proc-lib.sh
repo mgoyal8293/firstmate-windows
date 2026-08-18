@@ -274,16 +274,55 @@ fm_proc_scan_available() {
   fm_proc_cwd "$$" >/dev/null 2>&1
 }
 
+# Print every POSIX spelling of directory $1 that a /proc cwd link may use, one
+# per line, most authoritative first. The spelling the caller passed is always
+# printed and always wins; anything after it can only WIDEN a match.
+#
+# A second spelling exists on the Windows runtimes because /proc/<pid>/cwd is the
+# MSYS mount table's rendering of the process's WINDOWS cwd, which need not be the
+# spelling the caller holds. Git for Windows mounts /tmp with `usertemp`, i.e. at
+# whatever %TEMP% names, so when %TEMP% carries a short (8.3) component - which is
+# how GitHub's Windows runners spell it - a directory created as /tmp/x reads back
+# from /proc as /c/Users/<user>/AppData/Local/Temp/x and the raw compare below
+# never matches. Measured on Git-for-Windows MINGW64: the scan then reports NOBODY
+# under a directory a live process is sitting in, and teardown reads that as
+# "no leak" and deletes the worktree out from under it - the exact failure the
+# uncertainty contract exists to prevent.
+#
+# `cygpath -m -l` is the resolver for the same reason bin/fm-wake-lib.sh gives at
+# fm_lock_same_path - it owns the mount table, and `-l` additionally expands short
+# components - and converting the result back with `cygpath -u` yields the very
+# spelling /proc reports. Its presence is the capability probe, so a runtime
+# without cygpath keeps the caller's spelling as its only verdict.
+#
+# Resolved ONCE per scan rather than per pid, so the scan keeps costing a fixed
+# two forks instead of two per entry in the process table.
+fm_proc_cwd_prefixes() {  # <dir>
+  local dir=$1 win aliased
+  [ -n "$dir" ] || return 1
+  printf '%s\n' "$dir"
+  command -v cygpath >/dev/null 2>&1 || return 0
+  win=$(cygpath -m -l -- "$dir" 2>/dev/null) || return 0
+  [ -n "$win" ] || return 0
+  aliased=$(cygpath -u -- "$win" 2>/dev/null) || return 0
+  [ -n "$aliased" ] && [ "$aliased" != "$dir" ] && printf '%s\n' "$aliased"
+  return 0
+}
+
 # Print every pid whose CWD is exactly $1 or below it, one per line.
 # The direct replacement for teardown's bounded `lsof -a -d cwd -Fpn` scan, with
 # the same "bounded by process count, never a recursive file-tree walk" cost.
 # Returns non-zero when no scan could be performed at all, so an uncertain
 # result is never mistaken for a proven-empty one.
 fm_proc_pids_with_cwd_under() {  # <root-dir>
-  local dir=$1 root entry pid cwd scanned=0
+  local dir=$1 root entry pid cwd prefix scanned=0
+  local -a prefixes=()
   [ -n "$dir" ] || return 1
   root=$(fm_proc_root)
   [ -d "$root" ] || return 1
+  while IFS= read -r prefix; do
+    [ -n "$prefix" ] && prefixes+=("$prefix")
+  done < <(fm_proc_cwd_prefixes "$dir")
   for entry in "$root"/[0-9]*; do
     [ -d "$entry" ] || continue
     pid=${entry##*/}
@@ -292,9 +331,11 @@ fm_proc_pids_with_cwd_under() {  # <root-dir>
     esac
     scanned=1
     cwd=$(fm_proc_cwd "$pid") || continue
-    case "$cwd" in
-      "$dir"|"$dir"/*) printf '%s\n' "$pid" ;;
-    esac
+    for prefix in ${prefixes[@]+"${prefixes[@]}"}; do
+      case "$cwd" in
+        "$prefix"|"$prefix"/*) printf '%s\n' "$pid"; break ;;
+      esac
+    done
   done
   [ "$scanned" -eq 1 ]
 }
@@ -303,10 +344,14 @@ fm_proc_pids_with_cwd_under() {  # <root-dir>
 # Same uncertainty contract as above: non-zero means "could not scan", never
 # "provably nobody".
 fm_proc_pids_holding_path() {  # <path>
-  local path=$1 root entry pid cwd fd target scanned=0
+  local path=$1 root entry pid cwd fd target prefix held scanned=0
+  local -a prefixes=()
   [ -n "$path" ] || return 1
   root=$(fm_proc_root)
   [ -d "$root" ] || return 1
+  while IFS= read -r prefix; do
+    [ -n "$prefix" ] && prefixes+=("$prefix")
+  done < <(fm_proc_cwd_prefixes "$path")
   for entry in "$root"/[0-9]*; do
     [ -d "$entry" ] || continue
     pid=${entry##*/}
@@ -315,10 +360,18 @@ fm_proc_pids_holding_path() {  # <path>
     esac
     scanned=1
     cwd=$(fm_proc_cwd "$pid" 2>/dev/null || true)
-    case "$cwd" in
-      '') ;;
-      "$path"|"$path"/*) printf '%s\n' "$pid"; continue ;;
-    esac
+    held=
+    if [ -n "$cwd" ]; then
+      for prefix in ${prefixes[@]+"${prefixes[@]}"}; do
+        case "$cwd" in
+          "$prefix"|"$prefix"/*) held=1; break ;;
+        esac
+      done
+    fi
+    if [ -n "$held" ]; then
+      printf '%s\n' "$pid"
+      continue
+    fi
     [ -d "$entry/fd" ] || continue
     for fd in "$entry"/fd/*; do
       [ -L "$fd" ] || continue

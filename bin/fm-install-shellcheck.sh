@@ -78,10 +78,17 @@ while ! curl -fsSL "$URL" -o "$TMP/$ARCHIVE"; do
   download_attempt=$((download_attempt + 1))
 done
 
+# Digest the archive through STDIN, never by filename. GNU coreutils escapes its
+# output line when the FILENAME holds a backslash or newline: the line is prefixed
+# with a literal `\` and the digest field then reads `\<hex>`, which can never
+# equal a pin. The archive lives under $RUNNER_TEMP, and on a Windows runner that
+# is a Windows-form path (D:\a\_temp), so the check rejected a byte-perfect
+# download. Reading stdin removes the filename from the output entirely, so no
+# path spelling can corrupt the digest on any platform.
 if command -v sha256sum >/dev/null 2>&1; then
-  ACTUAL_SHA256=$(sha256sum "$TMP/$ARCHIVE" | awk '{print $1}')
+  ACTUAL_SHA256=$(sha256sum < "$TMP/$ARCHIVE" | awk '{print $1}')
 elif command -v shasum >/dev/null 2>&1; then
-  ACTUAL_SHA256=$(shasum -a 256 "$TMP/$ARCHIVE" | awk '{print $1}')
+  ACTUAL_SHA256=$(shasum -a 256 < "$TMP/$ARCHIVE" | awk '{print $1}')
 else
   die "need sha256sum or shasum to verify the ShellCheck archive"
 fi
