@@ -169,6 +169,75 @@ spellings unchanged (measured). The strict string compare stays first and stays
 authoritative; where no `cygpath` exists the strict compare remains the only
 verdict, so this can widen a match and never silently accept an unresolvable one.
 
+## Run end to end on Windows
+
+Everything above this section was proven one component at a time.
+This section records the first run of firstmate as a whole system on Windows: one session taking the lock, spawning a crewmate, supervising it until it woke firstmate, landing its commit, releasing the task, and restarting into the same home.
+
+The run used a scratch home rather than the captain's own, so a bad step could not damage real fleet state.
+A fresh clone of this repo served as both code root and home, with `config/backend` set to `conpty` and a purpose-made git project under its `projects/`.
+The project was purpose-made deliberately: the crewmate's change had to be a genuine commit in a genuine repository with no path to a real remote.
+
+Claude Code 2.1.220 on MINGW64_NT-10.0-26200, Git for Windows 2.50.1, node v22.18.0, treehouse 2.1.1.
+
+| Step | Result |
+|---|---|
+| Session start takes the lock | `bin/fm-session-start.sh` ran from the `SessionStart` hook and printed `lock acquired: session token`. `state/.lock` held a plain MSYS pid and `state/.lock.session` held the session UUID. Bootstrap's mutating sweeps ran (`.pr-check-migration-scan-v1`, `.inactive-outcome-reconcile`, a created `.wake-queue`), and the deferred network stage recorded `locked=1`, so the session was genuinely not read-only |
+| Spawn a crewmate on ConPTY | `state/<id>.meta` recorded `backend=conpty` and its `conpty_session`. The crewmate's shell entered the pooled worktree `~/.treehouse/<pool>/1/<project>`, distinct from the project checkout, and the spawn's isolation assertion passed. `GOTMPDIR` was exported into the pane as intended |
+| Agent liveness and busy state | `fm_backend_conpty_agent_state` returned `alive` with `why: harness process claude.exe` and `identityValidated: true`, reading the real native process list (`claude.exe`, `sh.exe`, `bash.exe`, `treehouse.exe`). `bin/fm-crew-state.sh` reported `state: working - source: pane - harness busy (claude-hook)` while it worked, and `state: done - source: status-log` afterwards |
+| Supervise for real | The Stop-hook auto-arm armed the watcher, creating `state/.watch.lock` as a real native symlink to its `.owner.<suffix>` file. The worker's activity produced four durable `signal:` wake records naming its status and turn-ended files. The session was rewoken, drained them, and acknowledged them with the generation-bound `--ack-through 4 --recovery-generation <gen>`, taking the queue to zero. One steer was delivered through `bin/fm-send.sh` |
+| The change lands on the branch | Commit `e255fd7` on `fm/winfm-e2e-typo`, a one-line comment fix, `git diff main..HEAD` exactly one changed line, clean tree, `bash -n` still parsing |
+| Teardown refuses unlanded work | With the commit on the branch but not yet on local `main`, `bin/fm-teardown.sh` refused: `REFUSED: local-only worktree <path> has work not yet merged into main and not on any remote`, listed `e255fd7` as the commit at risk, and named the merge, push, and explicit-discard routes out. The task metadata, status log, and live session were all still present afterwards |
+| Approved landing | `bin/fm-merge-local.sh` fast-forwarded the project's `main` to `e255fd7` |
+| The polite exit is not available | `bin/fm-control.sh <id> exit` refused: `task <id> runs on the conpty backend, which has no recovery-grade agent-state classifier, so 'exit' cannot prove the agent actually stopped; refusing rather than reporting an unproven transition as done`. So a Windows crewmate cannot be stopped through the control plane at all, and [`conpty-backend.md`](conpty-backend.md) "Active limits" owns why |
+| Clean teardown | After landing, teardown released everything: the task's `state/<id>.*` records were retired, the ConPTY session reported `absent`, and the pooled worktree returned to the pool at a detached HEAD with `fm/winfm-e2e-typo` no longer checked out. Its reaper did the stopping, reporting `reaping leaked worktree process(es)` and then `force-killing leaked worktree process(es)`, and needing a second pass for one survivor |
+| Restart into the same home | Sixteen seconds after the previous session exited, with its stale MSYS pid still sitting in `state/.lock` and `state/.lock.session` already cleared by `SessionEnd`, a fresh session reclaimed the home: `bin/fm-lock.sh status` reported `lock: held by this session's token`, and `state/.lock.session` equalled that session's own `CLAUDE_CODE_SESSION_ID`. No four-hour freshness window was waited out |
+
+All six steps completed on the real machine.
+A Windows firstmate can therefore take its own home, put a real crewmate on real work, supervise it through a real wake, land the commit, and release the task, which is the whole loop rather than a set of passing parts.
+One real gap came out of it: there is no way to stop a crewmate politely, because the control plane refuses on this backend and teardown's reaper is what actually ends the agent.
+That is a reduction against tmux, not a blocker for the loop.
+The run needed no code change of its own: what it produced is this record and that one newly documented limit.
+
+### What the run turned up
+
+None of these needed a code change, but a Windows operator meets them in this order.
+
+- **The ConPTY daemon needs one dependency install per checkout.**
+  `npm install --omit=dev` in `bin/backends/conpty` took 36 seconds and used prebuilt binaries, so no MSVC toolchain was involved.
+  `node bin/backends/conpty/fmpty.js doctor` names each unloadable module with the exact remedy and exits 1 until they load.
+- **Crewmate harness detection needs no Windows configuration.**
+  `bin/fm-harness.sh` resolves `claude` inside a real session from the `CLAUDECODE=1` marker, which is checked before the ancestry walk that Windows cannot complete.
+  Run outside a session it correctly answers `unknown`, and the spawn then refuses by name rather than guessing.
+  So `config/crew-harness` is not a Windows prerequisite.
+- **`bin/fm-send.sh` refuses the first steer until the home is named.**
+  That is its documented fail-closed contract rather than a fault, but it is the first thing a steer hits, and the second call with the home named delivered.
+- **Claude Code's folder-trust dialog appears on first launch in a fresh pooled worktree**, and firstmate answered it before the worker read its brief.
+  This is not Windows-specific; it is the ordinary first-launch gate for an unseen directory.
+- **A project with no `origin` cannot be spawned against.**
+  `freshen_spawn_worktree_base` in `bin/fm-spawn.sh` fetches `origin` unconditionally and refuses to launch from a possibly stale base.
+  That is correct behaviour, and it is not Windows-specific, but a scratch Windows home hits it immediately because the obvious scratch project has no remote.
+- **A merged task branch is left behind in the project.**
+  After the local merge and teardown, `fm/<id>` still existed in the demo project.
+  It is harmless because it is fully merged, but nothing prunes it, so one accumulates per task.
+- **`fm-remote-job-reap-orphans` cannot scan this account's processes** and says so during teardown.
+  No remote work was involved, and the remote-job scripts are already out of scope below, so the line is benign here rather than a missed reap.
+- **A scripted headless session does not end while a task is live.**
+  `claude -p` buffers its transcript until exit, and the Stop-hook arm keeps the session open while `state/*.meta` still names in-flight work, so a one-shot headless firstmate keeps re-arming instead of returning.
+  Interactive sessions are the normal shape and are unaffected; this only shapes how a Windows run can be scripted.
+
+### What this run does not prove
+
+- **Only the `claude` harness was exercised.**
+  The crewmate and the firstmate session were both Claude Code.
+  No other harness adapter was launched on Windows.
+- **Only `local-only` delivery was exercised.**
+  The change landed through `bin/fm-merge-local.sh` as a local fast-forward.
+  Neither the no-mistakes pipeline nor a real PR merge ran on Windows in this run, so `bin/fm-pr-merge.sh` and the watcher's merge poll remain proven only at component level.
+- **One task, one worker.**
+  No concurrent crewmates, no secondmate, and no away-mode daemon took part.
+- Everything already listed under "Not yet ported" below stayed out of scope and is unchanged by this run.
+
 ## Not yet ported
 
 - Relay's artifact writes (`x_mode_write_if_changed` in `bin/fm-bootstrap.sh`) still assert exact modes directly. Relay is off unless the home opts in.
