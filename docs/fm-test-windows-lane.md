@@ -134,6 +134,11 @@ here, not 8 or 16. Beyond 4 the floor binds and extra runners buy nothing.
 | `windows-4of4` | 14 | 927s (15.4 min) |
 | imbalance | | 3s |
 
+**`windows-4of4` was then run end to end on Git Bash to check that sum against
+reality: rc=0, 14/14 scripts, 0 failures, 2 gate skips, wall 932s (15.5 min)**
+against 927s predicted - 0.5% out, which is what makes the other three shards'
+predicted figures trustworthy.
+
 `timeout-minutes: 40` is a hang tripwire with roughly 3x margin over a healthy
 15.5-minute shard, not the expected end of the lane. GitHub's Windows runners are
 slower than the machine these numbers came from.
@@ -306,3 +311,47 @@ Each of these was still passing assertions when the bound cut it, so none is
 known-broken. `fm-decision-hold-lifecycle` started in this group and turned out
 to be pure fork cost once given 860s, so the others deserve the same treatment
 before anyone calls them failures.
+
+## Two things that stopped the runner itself on Windows
+
+Neither is about a test. Both stopped `bin/fm-test-run.sh` before any test ran,
+and both were present at HEAD with no Windows lane involved.
+
+### `--check-coverage` exited 1 on a locale mismatch
+
+```
+comm: file 2 is not in sorted order
+comm: input is not in sorted order
+```
+
+Every `comm` input in `run_coverage_guard` is produced by `LC_ALL=C sort`, but
+`comm` validates its inputs' order using the **ambient** locale. Git Bash
+defaults to `en_US.UTF-8`, whose collation differs from C, so `comm` rejected
+correctly-sorted input and the guard failed for the locale's reasons rather than
+the inventory's. This is also why `tests/fm-test-run.test.sh` failed on Windows.
+
+Fixed by matching the comparison locale to the sort locale. That is correct on
+every platform - sort with `LC_ALL=C`, compare with `LC_ALL=C` - so it is one fix
+rather than a platform arm.
+
+### A capability probe that lied about Python
+
+```
+$ bin/fm-test-run.sh --lane windows-4of4 --json shard4.json
+Python was not found; run without arguments to install from the Microsoft Store...
+rc=49
+```
+
+Windows ships Microsoft Store "app execution aliases" for `python` and `python3`.
+They **resolve on PATH**, so `command -v python3` succeeds, but every invocation
+prints that install prompt and exits 49. The probe reported a working interpreter
+and then every call failed, so the run died rather than degrading - and `now_ms`
+would have injected the prompt text into the run's own output.
+
+`fm_test_python3` probes by actually executing `-c 'pass'`, caches the answer, and
+also accepts `python`, often the only real interpreter on a Windows machine.
+Executing the interpreter is the only probe that answers the question being asked,
+so this too is one fix rather than a platform arm.
+
+The general lesson for the rest of this port: on Windows, `command -v` is not
+evidence a tool works.
