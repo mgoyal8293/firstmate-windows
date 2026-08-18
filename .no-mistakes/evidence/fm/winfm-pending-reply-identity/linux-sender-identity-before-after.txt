@@ -1,0 +1,72 @@
+================ BEFORE THIS CHANGE (base 1baa477) - Linux ================
+host           : Linux 6.18.33.2-microsoft-standard-WSL2
+bash           : 5.2.21(1)-release
+
+--- the reader the pending-reply library used before this change ---
+$ COLUMNS=10000 LC_ALL=C ps -p 383815 -o lstart= -o command=
+exit=0 output=[Tue Aug 18 19:34:38 2026 bash /mnt/c/Users/johns/AppData/Local/Temp/fmwin-evidence/driver.sh /mnt/c/Users/johns/AppData/Local/Temp/fmwin-evidence/base BEFORE THIS CHANGE (base 1baa477) - Linux]
+/proc/383815/stat  : readable
+/proc/383815/cmdline: readable
+
+--- a secondmate misses its report: the parent sends one recovery ---
+send_recovery   : sent
+recovery repost : 1 message(s) delivered
+phase           : recovery_sent
+stored identity : [Tue Aug 18 19:34:38 2026 bash /mnt/c/Users/johns/AppData/Local/Temp/fmwin-evidence/driver.sh /mnt/c/Users/johns/AppData/Local/Temp/fmwin-evidence/base BEFORE THIS CHANGE (base 1baa477) - Linux]
+stored pid      : 383815
+
+--- the read back: is this live sender alive? ---
+live sender (383815) reads: ALIVE
+phase after tick: recovery_sending  (recovery_sending = not falsely recovered)
+gone pid reads  : DEAD
+
+--- a record already on disk in the previous (untagged) format ---
+stored identity : [Mon Aug 18 09:00:00 2026 /usr/bin/bash /c/fm/bin/fm-send.sh hibit]
+now=4000, attempt recorded at 4000, bound=900s
+within bound    : DEAD
+identity after  : [Mon Aug 18 09:00:00 2026 /usr/bin/bash /c/fm/bin/fm-send.sh hibit]  (a liveness read must not rewrite it)
+past bound (now=5000, age 1000s) : DEAD
+
+--- a genuine previous-format record, where this host can still produce one ---
+stored identity : [Tue Aug 18 19:34:38 2026 bash /mnt/c/Users/johns/AppData/Local/Temp/fmwin-evidence/driver.sh /mnt/c/Users/johns/AppData/Local/Temp/fmwin-evidence/base BEFORE THIS CHANGE (base 1baa477) - Linux]
+same live sender: ALIVE   (past the 900s bound, so this is a real match, not a defer)
+identity after  : [Tue Aug 18 19:34:38 2026 bash /mnt/c/Users/johns/AppData/Local/Temp/fmwin-evidence/driver.sh /mnt/c/Users/johns/AppData/Local/Temp/fmwin-evidence/base BEFORE THIS CHANGE (base 1baa477) - Linux]
+a different one : DEAD
+
+
+
+================ WITH THIS CHANGE (c62c021) - Linux ================
+host           : Linux 6.18.33.2-microsoft-standard-WSL2
+bash           : 5.2.21(1)-release
+
+--- the reader the pending-reply library used before this change ---
+$ COLUMNS=10000 LC_ALL=C ps -p 384269 -o lstart= -o command=
+exit=0 output=[Tue Aug 18 19:34:42 2026 bash /mnt/c/Users/johns/AppData/Local/Temp/fmwin-evidence/driver.sh /mnt/c/Users/johns/AppData/Local/Temp/fmwin-evidence/head WITH THIS CHANGE (c62c021) - Linux]
+/proc/384269/stat  : readable
+/proc/384269/cmdline: readable
+
+--- a secondmate misses its report: the parent sends one recovery ---
+send_recovery   : sent
+recovery repost : 1 message(s) delivered
+phase           : recovery_sent
+stored identity : [fm-pid-identity.v1 linux-starttime=12266846 cmdline-hex=62617368002f6d6e742f632f55736572732f6a6f686e732f417070446174612f4c6f63616c2f54656d702f666d77696e2d65766964656e63652f6472697665722e7368002f6d6e742f632f55736572732f6a6f686e732f417070446174612f4c6f63616c2f54656d702f666d77696e2d65766964656e63652f6865616400574954482054484953204348414e474520286336326330323129202d204c696e757800]
+stored pid      : 384269
+
+--- the read back: is this live sender alive? ---
+live sender (384269) reads: ALIVE
+phase after tick: recovery_sending  (recovery_sending = not falsely recovered)
+gone pid reads  : DEAD
+
+--- a record already on disk in the previous (untagged) format ---
+stored identity : [Mon Aug 18 09:00:00 2026 /usr/bin/bash /c/fm/bin/fm-send.sh hibit]
+now=4000, attempt recorded at 4000, bound=900s
+within bound    : DEAD
+identity after  : [Mon Aug 18 09:00:00 2026 /usr/bin/bash /c/fm/bin/fm-send.sh hibit]  (a liveness read must not rewrite it)
+past bound (now=5000, age 1000s) : DEAD
+
+--- a genuine previous-format record, where this host can still produce one ---
+stored identity : [Tue Aug 18 19:34:42 2026 bash /mnt/c/Users/johns/AppData/Local/Temp/fmwin-evidence/driver.sh /mnt/c/Users/johns/AppData/Local/Temp/fmwin-evidence/head WITH THIS CHANGE (c62c021) - Linux]
+same live sender: ALIVE   (past the 900s bound, so this is a real match, not a defer)
+identity after  : [Tue Aug 18 19:34:42 2026 bash /mnt/c/Users/johns/AppData/Local/Temp/fmwin-evidence/driver.sh /mnt/c/Users/johns/AppData/Local/Temp/fmwin-evidence/head WITH THIS CHANGE (c62c021) - Linux]
+a different one : DEAD
+

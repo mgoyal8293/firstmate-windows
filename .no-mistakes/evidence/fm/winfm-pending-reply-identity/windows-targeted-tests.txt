@@ -1,0 +1,17 @@
+Git for Windows bash 5.2.37(1)-release on MINGW64_NT-10.0-26200
+Tree: git archive of c62c021 unpacked to C:/Users/johns/AppData/Local/Temp/fmwin-test-317541
+Cases selected by sourcing each test file with its trailing invocation list stripped;
+no test body was modified.
+
+### tests/fm-pending-reply.test.sh - the three cases docs/windows.md now claims
+ok - sender liveness works where ps rejects -o, so the one recovery is sent and reconciled
+ok - previous-format verification skipped: this platform's ps cannot produce that form
+ok - an unverifiable previous-format record defers on a live pid and concludes on a gone one
+ok - an unverifiable previous-format record defers only within its bound, then escalates once
+EXIT=0
+### tests/fm-windows-portability.test.sh - the fm_pid_identity case
+(the full file still aborts earlier at the pre-existing points-to-owner case,
+ filed as winfm-portability-points-to-owner and out of scope here)
+
+ok - fm_pid_identity: bin/fm-proc-lib.sh answers from /proc where ps rejects -o, and detects pid reuse
+EXIT=0

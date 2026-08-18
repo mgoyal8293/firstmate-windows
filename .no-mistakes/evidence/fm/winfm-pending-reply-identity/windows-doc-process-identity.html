@@ -1,0 +1,27 @@
+<!doctype html><meta charset="utf-8">
+<title>docs/windows.md - The process-identity read (rendered at c62c021)</title>
+<style>
+body{font:15px/1.55 -apple-system,Segoe UI,Helvetica,Arial,sans-serif;max-width:1100px;margin:2rem auto;padding:0 1rem;color:#1f2328}
+h4{border-bottom:1px solid #d1d9e0;padding-bottom:.3em}
+table{border-collapse:collapse;width:100%;margin:1rem 0}
+th,td{border:1px solid #d1d9e0;padding:.45rem .7rem;text-align:left;vertical-align:top}
+th{background:#f6f8fa}
+tr:nth-child(even) td{background:#f6f8fa}
+code{background:#eff1f3;padding:.15em .35em;border-radius:5px;font-size:85%}
+.note{color:#59636e;font-size:13px}
+mark{background:#fff8c5}
+</style>
+<p class="note">Rendered from <code>docs/windows.md</code> at commit c62c021 - the maintainer-verification section this change adds, with the row this round narrowed highlighted.</p>
+<h4>The process-identity read</h4>
+<p>Git for Windows bash 5.2.37(1)-release on MINGW64_NT-10.0-26200:</p>
+<table>
+<tr><th>Case</th><th>Result</th></tr>
+<tr><td>The previous reader&#x27;s form, <code>COLUMNS=10000 LC_ALL=C ps -p &lt;pid&gt; -o lstart= -o command=</code></td><td>rejected, exit 1</td></tr>
+<tr><td><code>/proc/&lt;pid&gt;/stat</code> and <code>/proc/&lt;pid&gt;/cmdline</code></td><td>both readable</td></tr>
+<tr><td>Before this change</td><td>the sender identity is unreadable, the one recovery attempt is refused with nothing sent, and the record stays at <code>awaiting_report</code></td></tr>
+<tr><td>With this change</td><td>the identity reads in the form <code>fm-pid-identity.v1 proc-starttime=&lt;ticks&gt; cmdline-hex=&lt;hex&gt;</code>, the recovery is delivered, the record reaches <code>recovery_sent</code>, a live sender reads as alive, and a pid the process table cannot see reads as dead</td></tr>
+<tr><td>An untagged record within the <code>FM_PENDING_REPLY_UNVERIFIABLE_SENDER_SECS</code> bound (900s default)</td><td>defers, stays at <code>recovery_sending</code>, and the stored identity is byte-identical afterwards because a liveness read never rewrites it</td></tr>
+<tr><td>An untagged record past that bound</td><td>reads as dead, reaches <code>escalated</code>, and opens exactly one escalation</td></tr>
+<tr><td><mark>The sender-identity, previous-format migration and bounded-defer cases</mark> of <code>tests/fm-pending-reply.test.sh</code> on that host</td><td>pass</td></tr>
+<tr><td>The <code>fm_pid_identity</code> case in <code>tests/fm-windows-portability.test.sh</code> on that host</td><td>passes</td></tr>
+</table>

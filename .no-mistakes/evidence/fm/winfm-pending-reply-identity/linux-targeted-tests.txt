@@ -1,0 +1,50 @@
+Linux (WSL2 Ubuntu-24.04, bash 5.2.21) - worktree at c62c021
+
+### tests/fm-pending-reply.test.sh
+ok - normal correlated reply resolves once (idempotent)
+ok - completed turn with no report triggers exactly one recovery
+ok - recovery attempts reconcile without reinjection
+ok - recovery reply resolves the original expectation
+ok - second missed turn escalates once and remains durable
+ok - escalations and replies wake; the home's own escalation close stays quiet
+ok - failed escalation publication remains retryable and publishes once
+ok - legacy escalation closes under the shared default key
+ok - legacy escalation cannot close an unrelated default-key decision
+ok - foreign correlated blocker cannot impersonate a pending-reply escalation
+ok - concurrent resolution closes one keyed escalation exactly once
+ok - concurrent escalation yields to a late correlated reply
+ok - transport success cannot masquerade as reply success
+ok - undelivered records remain immutable across scan paths
+ok - delivery confirmation fallback reconciles durably
+ok - unrelated events and stale correlation ids cannot resolve
+ok - restart preserves expectation and exact parent destination
+ok - wrong-home reports are detected but do not silently acknowledge
+ok - direct unmarked captain input creates no expectation
+ok - fm-send marked secondmate path creates pending and embeds corr
+ok - status-pointed document resolves the expectation
+ok - optional helper report resolves without being required for correctness
+ok - backend busy/idle observation covers Pi/Claude paths without conversation scrape
+ok - tmux and zellij unknown states use bounded capture fallback
+ok - pending replies scope Kimi capture fallback by recorded harness
+ok - tick skips terminal records and reuses target observations
+ok - correlations are reused only for matching open task records
+ok - tick end-to-end: miss -> one recovery -> escalate -> durable
+ok - failed transport discards undelivered expectation only
+ok - sender liveness works where ps rejects -o, so the one recovery is sent and reconciled
+ok - a record in the previous identity format is verified against that format without being rewritten
+ok - an unverifiable previous-format record defers on a live pid and concludes on a gone one
+ok - an unverifiable previous-format record defers only within its bound, then escalates once
+ok - all pending-reply tests passed
+
+### tests/fm-windows-portability.test.sh
+ok - fm_proc_field: reads comm/args/ppid/pgid/sid from the MSYS /proc layout
+ok - fm_proc_field: falls back to ps -o where the /proc scalar files are absent
+ok - fm_proc_field: refuses an empty or non-numeric pid
+ok - fm_proc_field: refuses a field it has no /proc equivalent for
+ok - fm_platform_symlink_probe: proves symlink creation and leaves no residue
+ok - fm_platform_enable_native_symlinks: sets nativestrict on Windows, inert elsewhere, never overrides an explicit choice
+ok - fm_proc_pids_with_cwd_under: finds live processes rooted under a directory and forgets dead ones
+ok - fm_proc_pids_with_cwd_under: an unusable /proc returns failure, not an empty result
+ok - fm_lock_same_path: widens a mount-aliased spelling through cygpath and stays strict everywhere else
+ok - fm_lock_points_to_owner: the strict readlink compare remains the primary, unresolved verdict
+ok - fm_pid_identity: bin/fm-proc-lib.sh answers from /proc where ps rejects -o, and detects pid reuse
