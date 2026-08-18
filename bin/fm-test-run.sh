@@ -149,7 +149,7 @@ family_for_basename() {
     fm-transition-lib.test.sh|\
     fm-test-run.test.sh|fm-test-isolation-proof.test.sh|\
     fm-upstream-sync.test.sh|fm-windows-portability.test.sh|\
-    fm-pr-private-file-mode.test.sh)
+    fm-pr-private-file-mode.test.sh|fm-session-token.test.sh)
       printf '%s\n' pure-contract-unit
       ;;
     fm-daemon.test.sh|fm-guard-stale-banner.test.sh|fm-pi-watch-extension.test.sh|\

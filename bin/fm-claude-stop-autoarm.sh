@@ -104,6 +104,12 @@ fm_primary_scope_matches "$FM_ROOT" "$STATE" || exit 0
 # idle or away home remains byte-for-byte inert. Missing or malformed locks are
 # uncertainty rather than stale-owner evidence and remain inert.
 RECOVER_SESSION_LOCK=0
+# Keep this session's token claim fresh. This hook is the one thing that runs
+# every turn, so it is the natural heartbeat, and the refresh is a touch on a
+# file the ownership check already read - no process enumeration, no new poll.
+# It never creates the file, so a session that does not own this home cannot
+# start looking like it does.
+fm_session_token_owned_by_self "$STATE" && fm_session_token_refresh "$STATE"
 if ! fm_session_lock_owned_by_self "$STATE"; then
   LOCK_PID=$(cat "$STATE/.lock" 2>/dev/null || true)
   case "$LOCK_PID" in

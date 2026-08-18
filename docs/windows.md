@@ -17,9 +17,14 @@ Each is fixed at exactly one owner:
 | Failure | Owner | Substitute |
 |---|---|---|
 | `ln -s` silently makes a recursive COPY, so every fleet lock spins forever | `bin/fm-proc-lib.sh` | exports `MSYS=winsymlinks:nativestrict` on source; `bin/fm-bootstrap.sh` then PROVES a symlink can be made |
-| MSYS `ps` rejects `-o`, so every process-table read fails on call one | `bin/fm-proc-lib.sh` | `fm_proc_field` reads the `/proc/<pid>/{ppid,pgid,sid,exename,cmdline}` files, with `ps -o` as the non-`/proc` fallback. Fixes harness detection, teardown, the watcher and the process-event runner; does **not** by itself fix the session lock - see "Open" below |
+| MSYS `ps` rejects `-o`, so every process-table read fails on call one | `bin/fm-proc-lib.sh` | `fm_proc_field` reads the `/proc/<pid>/{ppid,pgid,sid,exename,cmdline}` files, with `ps -o` as the non-`/proc` fallback. Fixes harness detection, teardown, the watcher and the process-event runner; does **not** by itself fix the session lock - see "How the session lock is owned" below |
 | `lsof` is absent, so teardown reaps nothing - and Windows then physically refuses to delete the worktree the unreaped agent sits in | `bin/fm-teardown.sh`, `bin/fm-lock-lib.sh` | a bounded `/proc/*/cwd` (and `/proc/*/fd`) scan, which also sees the native Windows children MSYS spawned |
 | `chmod` is a no-op on `noacl` mounts, so no PR can be merged and no watcher check can be armed | `bin/fm-pr-lib.sh` | the exact-mode assertion is capability-gated; see the security note below |
+
+There is no tmux on Windows either, so multi-agent work runs on the ConPTY
+session provider (`bin/backends/conpty.sh`, [`conpty-backend.md`](conpty-backend.md)).
+It is an experimental spawn backend and is never chosen by runtime
+auto-detection - select it explicitly with `config/backend`.
 
 `bin/fm-proc-lib.sh` is the one owner of both process-table reads and platform capability.
 Prefer capability detection over a platform name wherever the question is really "does this work here?" - `/proc` presence, chmod round-trip, symlink creation.
@@ -61,28 +66,25 @@ work.
 `.github/workflows/upstream-sync.yml` runs it daily and fails the scheduled run
 when upstream is not cleanly takeable.
 
-## Open: the session lock still cannot be acquired
+## How the session lock is owned
 
-The `/proc` substitution fixed every process-table read that stays inside the
-MSYS process tree - `bin/fm-harness.sh` now answers `claude` instead of
-`unknown`, and teardown, the watcher and the process-event runner all read their
-fields correctly. The session lock is the one caller it does NOT fix, for a
-second reason the port inventory did not know about.
+The session lock was the last thing keeping a Windows firstmate read-only, and
+it needed a different answer from every other process-table read.
 
 **MSYS's `/proc` contains only MSYS processes.** Claude Code on Windows is a
 native `claude.exe`, so it never appears there, and the Bash tool subprocess it
-spawns reports `ppid = 1`. The ancestry walk therefore terminates on hop one with
-no harness found, and `bin/fm-lock.sh acquire` still refuses - which keeps a
-Windows session read-only under `AGENTS.md` section 3.
+spawns reports `ppid = 1`. The ancestry walk terminates on hop one with no
+harness found. Measured inside a real session (Claude Code 2.1.220,
+MINGW64_NT-10.0-26200): `fm_harness_ancestry_pids` returns nothing and exits 1,
+every time.
 
 The chain is recoverable, just not from `/proc`: the Bash tool subprocess reads
 `msys_ppid = 1` while its Windows parent chain runs bash -> bash -> bash ->
-`claude.exe` -> sh, with `CLAUDECODE=1` present in the environment throughout.
-
-`ps -W` lists native processes but reports `PPID 0` for them, so it cannot walk
-the chain. `Get-CimInstance Win32_Process` can, and identifies `claude.exe` by
-both its name and its install path - but one CIM call costs roughly half a
-second, and the Stop hook runs every turn.
+`claude.exe` -> sh, with `CLAUDECODE=1` present throughout. `ps -W` lists native
+processes but reports `PPID 0` for them, so it cannot walk the chain.
+`Get-CimInstance Win32_Process` can, and identifies `claude.exe` by both its
+name and its install path - but one CIM call costs roughly half a second, and
+the Stop hook runs every turn.
 
 The hard part was never reading the chain - it is what the lock then STORES.
 Every other caller (`fm_harness_pid_alive`, `fm_session_lock_owned_by_self`,
@@ -90,19 +92,86 @@ Every other caller (`fm_harness_pid_alive`, `fm_session_lock_owned_by_self`,
 would put two namespaces behind one field and let a lock-ownership test match the
 wrong process.
 
-**Decided: ownership moves to a per-session token, added alongside the ancestry
-path rather than replacing it.** A session proves it owns the lock by holding a
-unique token, so nothing has to ask "who is my parent", no Windows pid is ever
-recorded, no caller becomes namespace-aware, and no half-second process query
-runs per turn. The Unix ancestry path is untouched and the token path is used
-only where ancestry is unavailable, which is also what keeps upstream merges
-clean. Tracked separately from this change.
+**So ownership is proved by a per-session token, added alongside the ancestry
+path rather than replacing it.**
+
+- The token is a value the harness exports that is stable for one session and
+  different in every other, so a process holding it is provably inside that
+  session. `bin/fm-session-lock-lib.sh` holds the verified source per harness;
+  Claude's is `CLAUDE_CODE_SESSION_ID`, measured identical across `SessionStart`,
+  the Bash tool's `PreToolUse`, `Stop` and `SessionEnd`, and equal to the
+  `session_id` each hook payload carries on stdin.
+- `fm_session_ancestry_unavailable` gates the token path on BOTH the platform and
+  an empty walk. The platform half is load-bearing: off Windows an empty walk is
+  a real answer, and honouring a token there would let any process carrying the
+  variable claim a lock the ancestry walk correctly refuses it. The token path is
+  therefore unreachable off Windows.
+- No Windows pid is recorded anywhere. `state/.lock` still holds a plain numeric
+  MSYS pid, so every existing reader is unchanged and no caller becomes
+  namespace-aware; the token lives beside it in `state/.lock.session`.
+- Nothing queries the Windows process table, per turn or otherwise. Reading a
+  token is an environment lookup plus one small file read.
+
+A token proves identity, not liveness, so two things supply the rest:
+
+- `bin/fm-claude-stop-autoarm.sh` touches the token on every `Stop`, which is the
+  liveness heartbeat. No vendor artifact could serve instead: Claude Code's
+  per-session `session-env` directory and its transcript both survive the process
+  and accumulate.
+- `bin/fm-claude-sessionend-release.sh` clears the token on `SessionEnd`, so an
+  ordinary quit releases the home at once. It clears only a token the ending
+  session itself owns.
+  `FM_SESSION_TOKEN_STALE_AFTER` (4h) then covers only a crash, and the refusal
+  names the one file to delete.
+
+### What was measured on Windows
+
+Real headless Claude Code sessions against a Firstmate home, hooks firing for
+real, Claude Code 2.1.220 on MINGW64_NT-10.0-26200:
+
+| Case | Result |
+|---|---|
+| Fresh session, fresh home | `lock acquired: session token`; `state/.lock` = `153` (a plain MSYS pid), `state/.lock.session` = the session UUID |
+| Second tool call, same session | acquires again idempotently, `state/.lock` unchanged |
+| `SessionStart` -> two `PreToolUse` -> `Stop` -> `SessionEnd` | one identical session id at every hook; ppid is `1` at every hook |
+| `Stop` hook | token mtime advanced `1787048541` -> `1787048604`, so the claim stays fresh per turn |
+| `SessionEnd` | token removed, `state/.lock` left at `153` for the unchanged dead-owner reclaim |
+| Restart into the same home, seconds later | `lock acquired: session token` immediately - no freshness window to wait out |
+| Two overlapping LIVE sessions | the second is refused: `another firstmate session holds the lock for this home`, and the holder's token is not overwritten |
+| Home under the Windows temp directory | `lock acquired: session token` - see below |
+
+Before `bin/fm-claude-sessionend-release.sh` existed, that restart case was
+measured as REFUSED a minute after the first session had exited, which would
+have left a Windows home read-only for four hours after every ordinary quit.
+
+### A second wedge in the same layer: symlink target spelling
+
+Native symlinks made `ln -s` a real link, but MSYS resolves the stored Windows
+target back through its mount table, and the spelling it returns need not be the
+one passed to `ln -s`. A directory created as
+`/c/Users/<user>/AppData/Local/Temp/x/target` reads back as `/tmp/x/target`,
+because the mount table aliases the two:
+
+```
+$ pwd -P    -> /c/Users/johns/AppData/Local/Temp/fmspell.1290/target
+$ readlink  -> /tmp/fmspell.1290/target
+```
+
+`fm_lock_points_to_owner` compared those as raw strings, so
+`fm_lock_try_create` never validated its own link and `fm_lock_acquire_wait`
+spun forever - the wedge the winsymlinks fix removed, reintroduced one layer up.
+Any home under a mount-aliased path hits it.
+
+`fm_lock_same_path` is the fallback, and it uses `cygpath`, which owns the mount
+table. `cd ... && pwd -P` is NOT a resolver here: it canonicalises symlinked
+components but leaves the mount alias exactly as given, so it returns both
+spellings unchanged (measured). The strict string compare stays first and stays
+authoritative; where no `cygpath` exists the strict compare remains the only
+verdict, so this can widen a match and never silently accept an unresolvable one.
 
 ## Not yet ported
 
-- No session provider. There is no tmux on Windows; multi-agent work needs a backend under `bin/backends/`.
 - Relay's artifact writes (`x_mode_write_if_changed` in `bin/fm-bootstrap.sh`) still assert exact modes directly. Relay is off unless the home opts in.
 - Away mode's daemon launch (`bin/fm-afk-launch.sh`) is unexamined on Windows.
 - `fm_pending_reply_pid_identity` (`bin/fm-pending-reply-lib.sh`) still reads sender liveness through `ps -o lstart= -o command=`, which MSYS answers with nothing, so a secondmate's pending reply reads its sender as dead there. The fleet's `/proc` identity (`fm_pid_identity`) is the right substitute but lives in `bin/fm-wake-lib.sh`, which that file sources only inside one function; wiring it needs an owner move rather than a local patch.
-- `bin/fm-arm-command-policy.mjs` compares paths with the platform `path` module, which disarms the protected-watcher-script guard on win32.
 - The macOS-only surfaces (`bin/backends/herdr.sh`, `bin/fm-remote-job-*.sh`, muse) are deliberately out of scope.
