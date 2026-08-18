@@ -159,7 +159,7 @@ Git for Windows bash 5.2.37(1)-release on MINGW64_NT-10.0-26200:
 | With this change | the identity reads in the form `fm-pid-identity.v1 proc-starttime=<ticks> cmdline-hex=<hex>`, the recovery is delivered, the record reaches `recovery_sent`, a live sender reads as alive, and a pid the process table cannot see reads as dead |
 | An untagged record within the `FM_PENDING_REPLY_UNVERIFIABLE_SENDER_SECS` bound (900s default) | defers, stays at `recovery_sending`, and the stored identity is byte-identical afterwards because a liveness read never rewrites it |
 | An untagged record past that bound | reads as dead, reaches `escalated`, and opens exactly one escalation |
-| `tests/fm-pending-reply.test.sh` on that host | passes, 34 assertions |
+| The sender-identity, previous-format migration and bounded-defer cases of `tests/fm-pending-reply.test.sh` on that host | pass |
 | The `fm_pid_identity` case in `tests/fm-windows-portability.test.sh` on that host | passes |
 
 ### A second wedge in the same layer: symlink target spelling
