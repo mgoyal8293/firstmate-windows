@@ -132,6 +132,9 @@ A zero `unmeasured_serial` is not an all-clear: it says only that no script is p
 It also verifies that the parallel lanes, portable serial lane, and real-Herdr family are disjoint and cover every `tests/*.test.sh` script.
 It separately verifies that the portable serial CI shards are non-empty, disjoint, and together equal the portable serial lane.
 It reports, rather than refuses, `unmeasured_serial=<n>` and the names behind it: a newly added test legitimately has no measured duration until it has run once, but an unmeasured script is packed as if it were average, and enough of them unbalance a shard.
+It separately verifies that every script the Windows lane lists exists and that the Windows CI shards are non-empty, disjoint, and together equal that lane.
+The Windows lane is a measured subset overlay rather than another part of the partition above, so it is deliberately excluded from the union check.
+[fm-test-windows-lane.md](fm-test-windows-lane.md) owns that lane's membership, evidence, and shard count.
 
 ## Timing artifacts
 

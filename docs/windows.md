@@ -58,6 +58,20 @@ call site.
   Without it `MSYS=winsymlinks:nativestrict` makes `ln -s` fail rather than copy - which is the safe failure, but no lock can be acquired.
 - Run `bin/fm-bootstrap.sh`. It proves both of the above and prints a `PLATFORM:` line naming the exact remedy when either is missing.
 
+## Validating on Windows
+
+`bin/fm-lint.sh` runs here: `bin/fm-install-shellcheck.sh` and
+`bin/fm-install-actionlint.sh` each carry a pinned Windows arm, and without both
+of them the gate exits 127 on the first missing linter.
+
+The behavior suite carries a measured SUBSET on Windows rather than the whole
+inventory, sharded across separate runners in
+`.github/workflows/windows-ci.yml`.
+[`fm-test-windows-lane.md`](fm-test-windows-lane.md) owns that lane's
+membership, its measurements, and the worklist of scripts that still fail on
+Git Bash; `bin/fm-test-run.sh` owns the lane itself and refuses a CI matrix
+whose shard count disagrees with it.
+
 ## Staying current with upstream
 
 `bin/fm-upstream-sync.sh` fetches upstream, attempts the merge on a throwaway
