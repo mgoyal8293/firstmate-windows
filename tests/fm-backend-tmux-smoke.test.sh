@@ -190,6 +190,22 @@ fm_backend_tmux_target_exists "$TARGET" \
   || fail "fm_backend_tmux_target_exists must report a live window as present"
 pass "real tmux: the equivalence is not vacuous - a live window reads as present"
 
+# --- leader_pid (teardown's last-resort process-group reaper) ----------------
+
+raw_leader=$(tmux display-message -p -t "$TARGET" '#{pane_pid}' 2>/dev/null)
+adapter_leader=$(fm_backend_tmux_leader_pid "$TARGET") \
+  || fail "fm_backend_tmux_leader_pid failed for a live window"
+dispatch_leader=$(fm_backend_leader_pid tmux "$TARGET") \
+  || fail "fm_backend_leader_pid tmux failed for a live window"
+case "$raw_leader" in ''|*[!0-9]*) fail "the raw pane_pid read did not return a pid: '$raw_leader'" ;; esac
+[ "$adapter_leader" = "$raw_leader" ] \
+  || fail "fm_backend_tmux_leader_pid returned '$adapter_leader', the raw pane_pid read returned '$raw_leader'"
+[ "$dispatch_leader" = "$raw_leader" ] \
+  || fail "fm_backend_leader_pid tmux returned '$dispatch_leader', the raw pane_pid read returned '$raw_leader'"
+kill -0 "$adapter_leader" 2>/dev/null \
+  || fail "the reported pane leader pid $adapter_leader is not a live process"
+pass "real tmux: fm_backend_tmux_leader_pid and the fm_backend_leader_pid dispatcher return the raw '#{pane_pid}' read, and it names a live process"
+
 # --- list_live / list_task_windows (the no-metadata discovery inventory) -----
 #
 # Again the property is EQUIVALENCE with the raw pipeline that used to run

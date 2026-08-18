@@ -916,6 +916,27 @@ fm_backend_target_exists() {  # <backend> <target> [expected-label]
   esac
 }
 
+# fm_backend_leader_pid: the pid leading <target>'s pane process group, for the
+# ONE caller that needs to signal a whole pane's process tree rather than read
+# it - fm-teardown.sh's last-resort reaper, used only when no lsof and no /proc
+# cwd scan can enumerate the processes holding the worktree.
+#
+# Deliberately NOT part of the general adapter surface: only tmux exposes a pane
+# leader pid today, and every other backend answers "no such primitive" by
+# failing, which is exactly the fallback-unavailable outcome the reaper already
+# handled for them. A backend gets an arm here when it can genuinely name that
+# pid, never so a list entry can be closed.
+fm_backend_leader_pid() {  # <backend> <target> -> pid, or failure
+  local backend=$1 target=$2
+  case "$backend" in
+    tmux)
+      fm_backend_source tmux || return 1
+      fm_backend_tmux_leader_pid "$target"
+      ;;
+    *) return 1 ;;
+  esac
+}
+
 # fm_backend_list_task_windows: every LIVE endpoint on <backend> whose label
 # looks like a firstmate task window (fm-<id>), one target per line. The
 # no-metadata discovery fallback: a caller that has a task id but no recorded

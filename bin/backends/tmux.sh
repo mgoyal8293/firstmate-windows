@@ -67,6 +67,23 @@ fm_backend_tmux_target_exists() {  # <target>
   tmux display-message -p -t "$1" '#{pane_id}' >/dev/null 2>&1
 }
 
+# fm_backend_tmux_leader_pid: the pid of the process tmux started in <target>'s
+# pane - the pane's own shell, and so the leader of the process group every
+# descendant the pane spawned belongs to. Teardown's last-resort reaper uses it
+# when lsof is missing and no /proc cwd scan is available, to signal that group
+# rather than leave a leaked worktree holder behind.
+#
+# Byte-identical to the `tmux display-message -p -t <target> '#{pane_pid}'` call
+# that used to run inline in fm-teardown.sh's reap_task_backend_process_group.
+# Fails (prints nothing) when tmux cannot answer, which the caller treats as
+# "no process-group fallback available" exactly as before.
+fm_backend_tmux_leader_pid() {  # <target>
+  local pid
+  pid=$(tmux display-message -p -t "$1" '#{pane_pid}' 2>/dev/null) || return 1
+  case "$pid" in ''|*[!0-9]*) return 1 ;; esac
+  printf '%s' "$pid"
+}
+
 # fm_backend_tmux_capture: bounded plain-text pane capture. Mirrors
 # fm-peek.sh's and fm-watch.sh's `tmux capture-pane -p -t "$T" -S -"$N"`.
 fm_backend_tmux_capture() {  # <target> <lines>

@@ -519,6 +519,23 @@ test_backend_validate_spawn_accepts_orca() {
   pass "fm_backend_validate_spawn: all implemented lifecycle backends are spawn-supported"
 }
 
+# fm_backend_leader_pid exists for exactly one caller (fm-teardown.sh's
+# last-resort process-group reaper) and deliberately has no arm for a backend
+# that cannot name a pane leader pid. Failing there is what reproduces the
+# reaper's old `[ "$BACKEND" != tmux ]` early return, so the absence has to be
+# asserted, not assumed. The tmux arm's byte-identity with the raw
+# `display-message '#{pane_pid}'` call is covered against a real tmux server in
+# tests/fm-backend-tmux-smoke.test.sh, and the reaper's end-to-end use of it in
+# tests/fm-teardown.test.sh's lsof-absent case.
+test_leader_pid_only_where_a_pane_leader_exists() {
+  local backend out
+  for backend in herdr zellij orca cmux conpty bogus; do
+    out=$(fm_backend_leader_pid "$backend" "some:target" 2>/dev/null)       && fail "fm_backend_leader_pid should have no answer for $backend, got '$out'"
+    [ -z "$out" ] || fail "fm_backend_leader_pid printed '$out' for $backend, which has no pane leader pid"
+  done
+  pass "fm_backend_leader_pid: fails and prints nothing for every backend with no pane-leader primitive, so teardown falls back exactly as it did before"
+}
+
 test_meta_get_and_backend_of_meta() {
   local meta=$TMP_ROOT/meta-get.meta
   fm_write_meta "$meta" "window=firstmate:fm-x1" "harness=claude"
@@ -1125,6 +1142,7 @@ test_backend_name_cmux_fallback_notice
 test_backend_name_autodetect_notice
 test_backend_name_explicit_beats_detection
 test_backend_validate_refuses_unknown
+test_leader_pid_only_where_a_pane_leader_exists
 test_backend_source_shell_portable
 test_backend_validate_spawn_accepts_orca
 test_meta_get_and_backend_of_meta
