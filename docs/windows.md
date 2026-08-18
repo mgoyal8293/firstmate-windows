@@ -29,7 +29,7 @@ auto-detection - select it explicitly with `config/backend`.
 
 `bin/fm-proc-lib.sh` owns the process-table reads and platform capability, including the `fm_pid_identity` that callers store next to a pid and compare later.
 The fifth row was produced by a second copy of that read: it kept working on Linux, so nothing surfaced until MSYS answered it with nothing.
-One narrower variant remains outside that owner, `task_process_identity` in `bin/fm-teardown.sh`, which is the same `/proc` stat field-22 parse with a `ps -o lstart=` fallback but prints its own shape and omits the cmdline, and it is tracked separately as its own item.
+One narrower variant remains outside that owner, `task_process_identity` in `bin/fm-teardown.sh`, which is the same `/proc` stat field-22 parse with a `ps -o lstart=` fallback but prints its own shape and omits the cmdline, and it is outside the scope of this change.
 Prefer capability detection over a platform name wherever the question is really "does this work here?" - `/proc` presence, chmod round-trip, symlink creation.
 Reserve the `uname -s` arms for behaviour that is genuinely platform-specific.
 
@@ -162,9 +162,6 @@ Git for Windows bash 5.2.37(1)-release on MINGW64_NT-10.0-26200, and Linux 6.18 
 | An untagged record on that host | defers on a live pid, the record stays at `recovery_sending` across a poll, and concludes dead on a gone pid |
 | Suites on that host | `tests/fm-windows-portability.test.sh` exit 0, `tests/fm-pending-reply.test.sh` exit 0, with the previous-format verification case reporting its guarded skip because that platform's ps cannot produce the old form |
 | Off Windows, the identity is byte-identical across the move | `linux-starttime=9894240 cmdline-hex=736c6565700033303000` from both `bin/fm-wake-lib.sh` and `bin/fm-proc-lib.sh`, and `tests/fm-pending-reply.test.sh` passes at origin/main and on this branch |
-
-Pinning `COLUMNS=10000` in the no-`/proc` fallback changes the stored identity string once on a platform that has no `/proc`, so a macOS home reads its existing watcher, away-mode and process-event identities as stale a single time after the upgrade and rewrites them correctly on the next write.
-That consequence is reasoned rather than measured, because no macOS host was reachable from the machine this change was made on.
 
 ### A second wedge in the same layer: symlink target spelling
 

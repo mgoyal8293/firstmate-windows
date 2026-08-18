@@ -190,6 +190,11 @@ fm_pid_identity() {  # <pid>
   case "$pid" in
     ''|*[!0-9]*) return 1 ;;
   esac
+  # Read inline rather than through fm_proc_root deliberately: this function runs
+  # inside the 0.2s confirm and 0.5s attach polls, and a command substitution
+  # would fork a subshell on every call on exactly the platform this file's header
+  # names as paying the highest fork price. fm_proc_root stays the spelling
+  # everywhere that is not in that hot loop.
   proc_root=${FM_PROC_ROOT_OVERRIDE:-/proc}
   if [ -r "$proc_root/$pid/stat" ] && [ -r "$proc_root/$pid/cmdline" ]; then
     stat_line=$(cat "$proc_root/$pid/stat" 2>/dev/null) || return 1
@@ -207,14 +212,10 @@ fm_pid_identity() {  # <pid>
     printf '%s=%s cmdline-hex=%s\n' "$identity_key" "$starttime" "$cmdline_hex"
     return 0
   fi
-  # Neither the caller's locale nor the caller's terminal width may reach a value
-  # that is written once and compared later. LC_ALL=C keeps lstart's date format
-  # invariant, which would otherwise mismatch on a non-C locale (e.g. ko_KR) and
-  # reject a live watcher. COLUMNS pins the width BSD/Darwin ps takes from an
-  # exported COLUMNS, else the terminal, else a roughly 79-column default, and
-  # truncates the trailing command column to, which would otherwise make the
-  # identity depend on the width of whichever terminal happened to write it.
-  out=$(COLUMNS=10000 LC_ALL=C ps -p "$pid" -o lstart= -o command= 2>/dev/null) || return 1
+  # Pin LC_ALL=C so lstart's date format is locale-invariant: the identity is
+  # written under one locale but re-read under the machine's ambient locale, which
+  # would otherwise mismatch on a non-C locale (e.g. ko_KR) and reject a live watcher.
+  out=$(LC_ALL=C ps -p "$pid" -o lstart= -o command= 2>/dev/null) || return 1
   [ -n "$out" ] || return 1
   printf '%s\n' "$out" | sed 's/^[[:space:]]*//'
 }
@@ -224,10 +225,10 @@ fm_pid_identity() {  # <pid>
 # TRANSITIONAL. The identity read exactly as the release before fm_pid_identity
 # owned it wrote it, COLUMNS pin and leading whitespace included, because
 # reproducing byte-for-byte what that release stored is this function's entire
-# purpose: fm_pid_identity's own ps fallback now pins the same width and differs
-# from it only in stripping leading whitespace, so the two are still not
-# interchangeable. What classifies a stored value is its format tag, never a
-# difference in shape between the two readers.
+# purpose: fm_pid_identity's own ps fallback pins no width and strips leading
+# whitespace, so the two differ in both respects and are not interchangeable.
+# What classifies a stored value is its format tag, never a difference in shape
+# between the two readers.
 #
 # Call it ONLY to read an identity an older release already wrote into a record.
 # Never call it to describe a live process for a new record - fm_pid_identity is

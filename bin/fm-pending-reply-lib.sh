@@ -70,8 +70,8 @@
 # can equal one on a /proc runtime, so reading an untagged record as current would
 # report a live sender dead - the precise failure the tag exists to prevent.
 # The tag is what classifies a stored value, never a difference in shape between
-# the two readers: they now pin the same width and differ only in that
-# fm_pid_identity strips leading whitespace where the legacy reader keeps it.
+# the two readers: they differ in both the COLUMNS width pin the legacy reader
+# keeps and fm_pid_identity's stripping of the leading whitespace it preserves.
 # fm_pending_reply_sender_alive therefore reads an untagged record in its own
 # format, through bin/fm-proc-lib.sh's fm_pid_identity_legacy_ps, and never
 # rewrites it: a liveness read holds no lock, so it must not touch the record.
@@ -96,6 +96,10 @@
 #
 # Tunables (env):
 #   FM_PENDING_REPLY_GRACE_SECS   default 120
+#   FM_PENDING_REPLY_UNVERIFIABLE_SENDER_SECS
+#                                 default 900; how long an untagged record whose
+#                                 own reader cannot run here may defer on bare pid
+#                                 liveness before the delivery is called unknown
 #   FM_PENDING_REPLY_DIR_OVERRIDE override the pending-replies directory (tests)
 #   FM_PENDING_REPLY_SEND_HOOK    optional command template for recovery delivery
 #                                 (tests); receives task_id and full message as args
@@ -125,6 +129,11 @@ FM_PENDING_REPLY_SCHEMA='fm-pending-reply.v1'
 FM_PENDING_REPLY_IDENTITY_FORMAT='fm-pid-identity.v1'
 FM_PENDING_REPLY_CORR_RE='corr=[A-Fa-f0-9]{16}'
 FM_PENDING_REPLY_GRACE_DEFAULT=120
+# How long the untagged-record fallback in _fm_pending_reply_untagged_sender_alive
+# may keep deferring on bare pid liveness. Generous next to the one recovery send
+# it covers - a send that has not settled in fifteen minutes is not still in
+# flight - because the cost of being early here is escalating a healthy send.
+FM_PENDING_REPLY_UNVERIFIABLE_SENDER_DEFAULT=900
 
 fm_pending_reply_now() {
   if [ -n "${FM_PENDING_REPLY_NOW:-}" ]; then
@@ -140,6 +149,14 @@ fm_pending_reply_grace_secs() {
     ''|*[!0-9]*) g=$FM_PENDING_REPLY_GRACE_DEFAULT ;;
   esac
   printf '%s' "$g"
+}
+
+fm_pending_reply_unverifiable_sender_secs() {
+  local s=${FM_PENDING_REPLY_UNVERIFIABLE_SENDER_SECS:-$FM_PENDING_REPLY_UNVERIFIABLE_SENDER_DEFAULT}
+  case "$s" in
+    ''|*[!0-9]*) s=$FM_PENDING_REPLY_UNVERIFIABLE_SENDER_DEFAULT ;;
+  esac
+  printf '%s' "$s"
 }
 
 # Directory holding durable pending-reply records for <state-dir>.
@@ -821,7 +838,7 @@ fm_pending_reply_sender_alive() {  # <record-path>
   case "$expected" in
     "$FM_PENDING_REPLY_IDENTITY_FORMAT "*) ;;
     *)
-      _fm_pending_reply_untagged_sender_alive "$pid" "$expected"
+      _fm_pending_reply_untagged_sender_alive "$rec" "$pid" "$expected"
       return $?
       ;;
   esac
@@ -833,10 +850,10 @@ fm_pending_reply_sender_alive() {  # <record-path>
 # one written by the release that read sender identity here itself.
 #
 # An untagged value can only be compared against the exact command that produced
-# it: fm_pid_identity's own ps fallback now pins the same width and differs from
-# it only in stripping leading whitespace, so the two are still not
-# interchangeable even on a runtime with no /proc, and sniffing the stored string
-# for its shape would be a guess about vendor date output. So read it back through
+# it: fm_pid_identity's own ps fallback differs from it in both the COLUMNS width
+# pin and the leading whitespace it strips, so the two are not interchangeable
+# even on a runtime with no /proc, and sniffing the stored string for its shape
+# would be a guess about vendor date output. So read it back through
 # bin/fm-proc-lib.sh's fm_pid_identity_legacy_ps, which is that exact command and
 # is kept there for this one purpose.
 #
@@ -846,8 +863,18 @@ fm_pending_reply_sender_alive() {  # <record-path>
 # read-modify-rewrite the whole record outside the per-correlation lock that a
 # concurrent resolver holds. Every newly written record is tagged, so the
 # transition ends as the untagged records complete, not by upgrading them in place.
-_fm_pending_reply_untagged_sender_alive() {  # <pid> <stored-identity>
-  local pid=$1 expected=$2 legacy
+#
+# The last branch below degrades to bare pid liveness, and that defer is BOUNDED
+# by FM_PENDING_REPLY_UNVERIFIABLE_SENDER_SECS rather than indefinite. Bare
+# liveness cannot tell the original sender from whatever process has since
+# inherited its pid, so a reused pid would read alive on every poll forever and
+# the record would sit at recovery_sending with no age check able to release it.
+# That is an unresolved record silently expiring, which is exactly what the safety
+# property at the top of this file forbids. Past the bound the sender is reported
+# not alive, so fm_pending_reply_reconcile_recovery calls the delivery unknown and
+# the record escalates once, the same way an attempt interrupted mid-send does.
+_fm_pending_reply_untagged_sender_alive() {  # <record-path> <pid> <stored-identity>
+  local rec=$1 pid=$2 expected=$3 legacy attempted now bound
   case "$pid" in ''|*[!0-9]*) return 1 ;; esac
   legacy=$(fm_pid_identity_legacy_ps "$pid") || legacy=''
   if [ -n "$legacy" ]; then
@@ -859,7 +886,13 @@ _fm_pending_reply_untagged_sender_alive() {  # <pid> <stored-identity>
   # as a liveness probe: a pid the process table cannot see at all is gone, and
   # anything else defers to the next poll rather than declaring a live sender dead
   # on evidence this platform cannot produce.
-  fm_pid_identity "$pid" >/dev/null 2>&1
+  fm_pid_identity "$pid" >/dev/null 2>&1 || return 1
+  attempted=$(fm_pending_reply_get "$rec" recovery_attempted_epoch)
+  case "$attempted" in ''|*[!0-9]*) return 0 ;; esac
+  now=$(fm_pending_reply_now)
+  case "$now" in ''|*[!0-9]*) return 0 ;; esac
+  bound=$(fm_pending_reply_unverifiable_sender_secs)
+  [ "$(( now - attempted ))" -lt "$bound" ]
 }
 
 fm_pending_reply_finish_recovery() {  # <state-dir> <corr_id> <confirmed|failed>
