@@ -4,10 +4,15 @@
 # Downloads the official GitHub release archive for the host OS/arch, verifies
 # its per-archive SHA-256 pin, and installs the binary into the destination
 # directory. Supported platforms: linux amd64/x86_64, linux arm64/aarch64,
-# darwin amd64/x86_64, darwin arm64/aarch64. Pins come from the official
-# ShellCheck release asset digests. Verification uses sha256sum when present,
-# otherwise shasum -a 256. An unsupported OS/arch or a missing pin fails
-# without downloading.
+# darwin amd64/x86_64, darwin arm64/aarch64, and Windows (Git Bash / MSYS2 /
+# Cygwin) amd64/x86_64. Pins come from the official ShellCheck release asset
+# digests. Verification uses sha256sum when present, otherwise shasum -a 256.
+# An unsupported OS/arch or a missing pin fails without downloading.
+#
+# Every platform takes the same pinned-download path: the Windows asset is a
+# flat .zip holding shellcheck.exe rather than a .tar.xz holding a versioned
+# directory, so it needs its own extract and install arm below. `unzip` is the
+# only extra tool that arm needs; Git for Windows ships it at /usr/bin/unzip.
 #
 # Usage:
 #   fm-install-shellcheck.sh <destination-directory>
@@ -25,8 +30,9 @@ DESTINATION=${1:?usage: fm-install-shellcheck.sh <destination-directory>}
 
 os=$(uname -s)
 arch=$(uname -m)
-# SHA-256 pins are the GitHub release asset digests for shellcheck v0.11.0
-# .tar.xz archives (https://github.com/koalaman/shellcheck/releases/tag/v0.11.0).
+# SHA-256 pins are the GitHub release asset digests for the shellcheck v0.11.0
+# archives (https://github.com/koalaman/shellcheck/releases/tag/v0.11.0): the
+# per-platform .tar.xz builds, plus the single .zip that is the Windows build.
 case "${os}-${arch}" in
   Linux-x86_64|Linux-amd64)
     ARCHIVE="shellcheck-v${VERSION}.linux.x86_64.tar.xz"
@@ -44,8 +50,14 @@ case "${os}-${arch}" in
     ARCHIVE="shellcheck-v${VERSION}.darwin.aarch64.tar.xz"
     SHA256=56affdd8de5527894dca6dc3d7e0a99a873b0f004d7aabc30ae407d3f48b0a79
     ;;
+  MINGW*-x86_64|MINGW*-amd64|MSYS*-x86_64|MSYS*-amd64|CYGWIN*-x86_64|CYGWIN*-amd64)
+    # Koalaman publishes one Windows asset with no platform token in its name.
+    # It is an x86_64 build; arm64 Windows is deliberately not claimed here.
+    ARCHIVE="shellcheck-v${VERSION}.zip"
+    SHA256=8a4e35ab0b331c85d73567b12f2a444df187f483e5079ceffa6bda1faa2e740e
+    ;;
   *)
-    die "unsupported platform ${os}-${arch}; need linux or darwin on amd64/x86_64 or arm64/aarch64"
+    die "unsupported platform ${os}-${arch}; need linux or darwin on amd64/x86_64 or arm64/aarch64, or Windows on amd64/x86_64"
     ;;
 esac
 [ -n "$SHA256" ] || die "no pinned checksum for ${os}-${arch}"
@@ -78,6 +90,21 @@ fi
     "$ARCHIVE" "$SHA256" "$ACTUAL_SHA256" >&2
   exit 1
 }
+case "$os" in
+  MINGW*|MSYS*|CYGWIN*)
+    # The Windows asset is a flat zip (LICENSE.txt, README.txt, shellcheck.exe),
+    # not a .tar.xz with a shellcheck-v<version>/ prefix, and GNU tar cannot read
+    # zip. Install under the .exe name so `command -v shellcheck` resolves it the
+    # way fm-lint.sh expects.
+    command -v unzip >/dev/null 2>&1 \
+      || die "need unzip to extract $ARCHIVE (Git for Windows ships /usr/bin/unzip); otherwise install ShellCheck ${VERSION} yourself, e.g. scoop install shellcheck"
+    unzip -q "$TMP/$ARCHIVE" -d "$TMP"
+    mkdir -p "$DESTINATION"
+    install -m 0755 "$TMP/shellcheck.exe" "$DESTINATION/shellcheck.exe"
+    "$DESTINATION/shellcheck.exe" --version
+    exit 0
+    ;;
+esac
 tar -xJf "$TMP/$ARCHIVE" -C "$TMP"
 mkdir -p "$DESTINATION"
 install -m 0755 "$TMP/shellcheck-v${VERSION}/shellcheck" "$DESTINATION/shellcheck"
