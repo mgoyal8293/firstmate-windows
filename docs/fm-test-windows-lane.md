@@ -113,7 +113,9 @@ MSYS-DLL pattern named under "Scripts excluded, and why" below.
 `bin/fm-lint.sh` was unrunnable on Windows before this work:
 `bin/fm-install-shellcheck.sh` only knew Linux and Darwin archives, and
 `bin/fm-lint.sh` exits 127 without ShellCheck.
-`bin/fm-lint-workflows.sh` needs actionlint for the same reason.
+Its default path then runs `bin/fm-lint-workflows.sh`, which needs actionlint for
+the same reason - so both pinned installers have to be present, or the gate exits
+127 at the first linter it cannot find.
 
 Both installers now have a pinned Windows arm.
 Both Windows assets are zips holding a bare `.exe`, not `.tar.{xz,gz}` holding a
