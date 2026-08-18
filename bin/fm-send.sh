@@ -280,7 +280,16 @@ fm_send_resolve_target() {  # <raw-target>
       if [ "$colons" -ge 2 ]; then
         assumed=herdr
       else
-        assumed=tmux
+        # A single-colon ad hoc target with no recorded task used to be assumed
+        # to be tmux unconditionally, which on a home running any other session
+        # provider verified a same-shaped target against a backend the home does
+        # not run (and, where tmux is not installed at all, against nothing).
+        # Assume the home's OWN resolved backend instead: on a tmux home
+        # fm_backend_name returns tmux, so this path is unchanged there.
+        # 2>/dev/null suppresses fm_backend_name's herdr/cmux auto-detect
+        # NOTICE, which is spawn-time advice and not a diagnostic for a send.
+        assumed=$(fm_backend_name 2>/dev/null) || assumed=""
+        [ -n "$assumed" ] || assumed=tmux
       fi
       if ! fm_backend_target_exists "$assumed" "$raw"; then
         echo "error: explicit target '$raw' is not a live $assumed endpoint (tried meta=$STATE/$raw.meta; metadata window/terminal lookup; backend=$assumed). Use fm-<id> for a recorded task/lane, or pass a target whose backend endpoint can be verified." >&2
