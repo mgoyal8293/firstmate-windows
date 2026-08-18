@@ -16,6 +16,9 @@
 # Diagnostics print to stderr prefixed by ${FM_LOCK_LOG_PREFIX:-fm-lock} so each
 # caller's output stays recognizable.
 
+# shellcheck source=bin/fm-proc-lib.sh
+. "$(dirname -- "${BASH_SOURCE[0]}")/fm-proc-lib.sh"
+
 fm_lock_log() {
   echo "${FM_LOCK_LOG_PREFIX:-fm-lock}: $*" >&2
 }
@@ -52,13 +55,57 @@ fm_lock_lsof_holder() {
   return 2
 }
 
+# fm_lock_proc_holder <target>: same contract as fm_lock_lsof_holder, answered
+# from /proc - 0 a process holds it (as cwd or an open fd), 1 provably none, 2
+# the scan could not run.
+fm_lock_proc_holder() {
+  local target=$1 out
+  out=$(fm_proc_pids_holding_path "$target" 2>/dev/null) || return 2
+  [ -z "$out" ] || return 0
+  return 1
+}
+
+# The /proc counterpart of fm_lock_has_live_holder's lsof body, with the same
+# fail-safe defaults: anything other than "provably no holder on both" is live.
+fm_lock_proc_has_live_holder() {
+  local lock=$1 dir=$2 status
+  fm_proc_scan_available || return 0
+  if [ -n "$lock" ]; then
+    if fm_lock_proc_holder "$lock"; then
+      return 0
+    else
+      status=$?
+      [ "$status" -eq 1 ] || return 0
+    fi
+  fi
+  if [ -n "$dir" ]; then
+    if fm_lock_proc_holder "$dir"; then
+      return 0
+    else
+      status=$?
+      [ "$status" -eq 1 ] || return 0
+    fi
+  fi
+  return 1
+}
+
 # fm_lock_has_live_holder <lock> <dir>: 0 if a live process holds $lock or the
 # companion $dir open, OR if the answer is uncertain - a missing lsof or an lsof
 # error is treated as "cannot prove no holder" (fail safe: assume live). Returns
 # 1 only when lsof reports provably no holder on both.
 fm_lock_has_live_holder() {
   local lock=$1 dir=$2 status
-  command -v lsof >/dev/null 2>&1 || return 0
+  # Git for Windows ships no lsof, which would make every abandoned index.lock or
+  # packed-refs.lock permanently unprovable and leave it for manual removal. The
+  # /proc scan answers the same question from cwd plus the per-pid fd links.
+  # Scoped to Windows on purpose: on a POSIX host a missing lsof is a degraded
+  # toolchain, and answering "provably no holder" there would START proving
+  # staleness where this owner has always refused to. Its own uncertainty stays
+  # fail-safe either way - a scan that cannot run returns "cannot prove".
+  if fm_platform_is_windows && ! command -v lsof >/dev/null 2>&1; then
+    fm_lock_proc_has_live_holder "$lock" "$dir"
+    return $?
+  fi
   if [ -n "$lock" ]; then
     if fm_lock_lsof_holder "$lock"; then
       return 0

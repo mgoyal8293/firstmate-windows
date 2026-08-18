@@ -144,6 +144,8 @@ CONFIG="${FM_CONFIG_OVERRIDE:-$FM_HOME/config}"
 SECONDMATE_REG="$DATA/secondmates.md"
 SUB_HOME_MARKER=".fm-secondmate-home"
 SUB_HOME_PARENT_MARKER=".fm-secondmate-parent"
+# shellcheck source=bin/fm-proc-lib.sh
+. "$SCRIPT_DIR/fm-proc-lib.sh"
 # shellcheck source=bin/fm-tasks-axi-lib.sh
 . "$SCRIPT_DIR/fm-tasks-axi-lib.sh"
 # shellcheck source=bin/fm-backend.sh
@@ -1294,6 +1296,31 @@ pids_with_cwd_under() {  # <dir>
   local dir=$1 out pid path line
   [ -n "$dir" ] && [ -d "$dir" ] || return 0
   dir=$(cd "$dir" && pwd -P) || return 1
+  # Git for Windows ships no lsof at all, and unlike POSIX it then also REFUSES
+  # the removal (a live process holding the directory as cwd makes both `rm -rf`
+  # and `git worktree remove --force` fail), so the reaper is exactly what a
+  # Windows teardown cannot do without. The /proc scan is the same shape and the
+  # same "bounded by process count" cost, and on MSYS it resolves the cwd of the
+  # native Windows children MSYS spawned as well as its own.
+  #
+  # Deliberately a Windows ARM rather than a general "lsof is missing" fallback:
+  # on a POSIX host a missing lsof is a degraded toolchain, and the existing
+  # backend process-group fallback is the conservative answer there. Widening
+  # this would silently change what evidence a Linux or macOS teardown acts on.
+  if fm_platform_is_windows && ! command -v lsof >/dev/null 2>&1; then
+    # `cd /` first: unlike the lsof form this scan runs in THIS process tree, so
+    # its own subshell and the short-lived readlink children would otherwise be
+    # reported whenever teardown's cwd happens to sit under $dir, and each would
+    # vanish before the identity read and force a rescan.
+    out=$(cd / && fm_proc_pids_with_cwd_under "$dir") || return 1
+    [ -n "$out" ] || return 0
+    while IFS= read -r pid; do
+      [ -n "$pid" ] && [ "$pid" != "$$" ] && printf '%s\n' "$pid"
+    done <<EOF
+$out
+EOF
+    return 0
+  fi
   out=$(lsof -a -d cwd -Fpn 2>/dev/null) || return 1
   [ -n "$out" ] || return 0
   pid=
@@ -1383,28 +1410,28 @@ reap_task_backend_process_group() {  # <label>
     echo "warning: lsof is unavailable; cannot identify the tmux pane process group for $ID" >&2
     return 0
   }
-  pgid=$(ps -o pgid= -p "$leader" 2>/dev/null) || pgid=""
+  pgid=$(fm_proc_field "$leader" pgid) || pgid=""
   pgid=$(printf '%s' "$pgid" | tr -d '[:space:]')
   case "$pgid" in ''|*[!0-9]*|0|1)
     echo "warning: lsof is unavailable; cannot resolve the tmux pane process group for $ID" >&2
     return 0
     ;;
   esac
-  own_pgid=$(ps -o pgid= -p "$$" 2>/dev/null) || own_pgid=""
+  own_pgid=$(fm_proc_field "$$" pgid) || own_pgid=""
   own_pgid=$(printf '%s' "$own_pgid" | tr -d '[:space:]')
   if [ "$pgid" = "$own_pgid" ]; then
     echo "warning: lsof is unavailable; refusing to signal teardown's own process group for $ID" >&2
     return 0
   fi
   task_process_identity_matches "$leader" "$leader_start" || return 0
-  current_pgid=$(ps -o pgid= -p "$leader" 2>/dev/null) || current_pgid=""
+  current_pgid=$(fm_proc_field "$leader" pgid) || current_pgid=""
   current_pgid=$(printf '%s' "$current_pgid" | tr -d '[:space:]')
   [ "$current_pgid" = "$pgid" ] || return 0
   echo "teardown: reaping leaked $label process group for $ID: $pgid" >&2
   kill -TERM -- "-$pgid" 2>/dev/null || true
   sleep 1
   if task_process_identity_matches "$leader" "$leader_start" \
-     && [ "$(ps -o pgid= -p "$leader" 2>/dev/null | tr -d '[:space:]')" = "$pgid" ] \
+     && [ "$(fm_proc_field "$leader" pgid | tr -d '[:space:]')" = "$pgid" ] \
      && kill -0 -- "-$pgid" 2>/dev/null; then
     echo "teardown: force-killing leaked $label process group for $ID: $pgid" >&2
     kill -KILL -- "-$pgid" 2>/dev/null || true
@@ -1421,7 +1448,14 @@ reap_task_worktree_processes() {  # <label> <dir>...
   local label=$1 pids pid identity current_pids i pass=1 max_passes=3
   local -a tracked_pids tracked_identities remaining_pids remaining_identities
   shift
-  if ! command -v lsof >/dev/null 2>&1; then
+  # On Windows a missing lsof is no longer a missing scan: pids_with_cwd_under
+  # answers from /proc there, including for the native Windows children MSYS
+  # spawned, so the reap runs normally. Without it a Windows teardown reaps
+  # nothing AND the OS then refuses to delete the worktree the unreaped agent is
+  # still sitting in. Every other platform keeps the backend process-group
+  # fallback exactly as before.
+  if ! command -v lsof >/dev/null 2>&1 \
+    && ! { fm_platform_is_windows && fm_proc_scan_available; }; then
     reap_task_backend_process_group "$label"
     return 0
   fi

@@ -174,7 +174,9 @@ if [ -e "$FM_HOME" ] || [ -L "$FM_HOME" ]; then
   fi
 else
   CREATED_HOME=1
-  git clone --quiet -- "$FM_ROOT" "$FM_HOME" || die "could not clone the remote Firstmate home"
+  # -c core.symlinks=true: see bin/fm-home-seed.sh - .claude/skills is a tracked
+  # symlink and a checkout that flattens it loads no project skills at all.
+  git clone --quiet -c core.symlinks=true -- "$FM_ROOT" "$FM_HOME" || die "could not clone the remote Firstmate home"
 fi
 for operational_dir in data state config projects; do
   operational_path="$FM_HOME/$operational_dir"

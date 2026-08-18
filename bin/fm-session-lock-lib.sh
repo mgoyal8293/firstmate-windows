@@ -15,6 +15,8 @@
 # decision, so this file delegates to it rather than widening the name match.
 # shellcheck source=bin/fm-cursor-lib.sh
 . "$(dirname -- "${BASH_SOURCE[0]}")/fm-cursor-lib.sh"
+# shellcheck source=bin/fm-proc-lib.sh
+. "$(dirname -- "${BASH_SOURCE[0]}")/fm-proc-lib.sh"
 
 # Known harness command names; extend when a new adapter is verified.
 FM_HARNESS_RE='claude|codex|opencode|grok|kimi|^pi$|^pi-signed$'
@@ -37,6 +39,15 @@ FM_HARNESS_NAMES=(claude codex opencode grok kimi pi-signed pi)
 fm_harness_path_name() {  # <path>
   local path=$1 name
   [ -n "$path" ] || return 1
+  # On the Windows runtimes the process table reports native paths
+  # (C:\Users\...\claude\...), whose components this POSIX match would never
+  # see. Normalising the separator is what lets the SAME component rule identify
+  # a version-named Claude Code install there. Confined to those platforms
+  # because a backslash is a legal character inside a POSIX path component, and
+  # rewriting it elsewhere would invent components that do not exist.
+  if fm_platform_is_windows; then
+    path=${path//\\//}
+  fi
   for name in "${FM_HARNESS_NAMES[@]}"; do
     case "/$path/" in
       */"$name"/*) printf '%s' "$name"; return 0 ;;
@@ -109,8 +120,8 @@ fm_harness_process_matches() {  # <comm> <args>
 fm_harness_ancestry_pids() {
   local pid=$$ comm args extending=0 printed=0
   for _ in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16; do
-    comm=$(ps -o comm= -p "$pid" 2>/dev/null) || break
-    args=$(ps -o args= -p "$pid" 2>/dev/null)
+    comm=$(fm_proc_field "$pid" comm) || break
+    args=$(fm_proc_field "$pid" args)
     if fm_harness_process_matches "$comm" "$args"; then
       printf '%s\n' "$pid"
       printed=1
@@ -119,7 +130,7 @@ fm_harness_ancestry_pids() {
     elif [ "$extending" -eq 1 ]; then
       break
     fi
-    pid=$(ps -o ppid= -p "$pid" 2>/dev/null | tr -d ' ')
+    pid=$(fm_proc_field "$pid" ppid | tr -d ' ')
     [ -n "$pid" ] && [ "$pid" -gt 1 ] || break
   done
   [ "$printed" -eq 1 ]
@@ -147,8 +158,8 @@ EOF
 fm_harness_pid_alive() {
   local pid=$1 comm args
   kill -0 "$pid" 2>/dev/null || return 1
-  comm=$(ps -o comm= -p "$pid" 2>/dev/null) || return 1
-  args=$(ps -o args= -p "$pid" 2>/dev/null)
+  comm=$(fm_proc_field "$pid" comm) || return 1
+  args=$(fm_proc_field "$pid" args)
   fm_harness_process_matches "$comm" "$args"
 }
 
