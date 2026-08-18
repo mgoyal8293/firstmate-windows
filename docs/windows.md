@@ -222,6 +222,9 @@ None of these needed a code change, but a Windows operator meets them in this or
   It is harmless because it is fully merged, but nothing prunes it, so one accumulates per task.
 - **`fm-remote-job-reap-orphans` cannot scan this account's processes** and says so during teardown.
   No remote work was involved, and the remote-job scripts are already out of scope below, so the line is benign here rather than a missed reap.
+- **Teardown leaves the ConPTY session directory behind.**
+  The task's own records go, and the session itself is dead, but `state/conpty/<session>/` and its `transcript.log` remain.
+  That transcript is deliberately durable evidence rather than a leak, so the note is only that one directory accumulates per completed task.
 - **A scripted headless session does not end while a task is live.**
   `claude -p` buffers its transcript until exit, and the Stop-hook arm keeps the session open while `state/*.meta` still names in-flight work, so a one-shot headless firstmate keeps re-arming instead of returning.
   Interactive sessions are the normal shape and are unaffected; this only shapes how a Windows run can be scripted.
