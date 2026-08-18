@@ -89,8 +89,11 @@ jq   -> /c/Users/<user>/AppData/Local/.../jq
 The lane builds `FM_TEST_BASE_PATH` from `command -v` at run time rather than
 from literal paths, so a runner-image change - a new Node directory, a relocated
 `gh` - cannot silently empty it again.
-`tests/fm-remote-doctor.test.sh` hardcodes `BASE_PATH` with no override and is
-not fixed here.
+All 16 test files that build a restricted PATH honour `FM_TEST_BASE_PATH` as of
+`1baa477`, `tests/fm-remote-doctor.test.sh` among them, so nothing here needs an
+override added. Where such a test still fails on Windows the cause is the
+`$TOOLS` prefix of `ln -sf` symlinks, not the base path - the same restricted-PATH
+MSYS-DLL pattern named under "Scripts excluded, and why" below.
 
 ## Lint lane
 
@@ -164,7 +167,7 @@ predicted figures trustworthy. That run was taken before the five green-by-skip
 scripts were dropped, so it covered 14 scripts including the 2 that skipped;
 the same shard is now 13 scripts and 928s, and the drop moves no measured work.
 
-`timeout-minutes: 40` is a hang tripwire with roughly 3x margin over a healthy
+`timeout-minutes: 40` is a hang tripwire with roughly 2.6x margin over a healthy
 15.5-minute shard, not the expected end of the lane. GitHub's Windows runners are
 slower than the machine these numbers came from.
 
@@ -376,8 +379,10 @@ prints that install prompt and exits 49. The probe reported a working interprete
 and then every call failed, so the run died rather than degrading - and `now_ms`
 would have injected the prompt text into the run's own output.
 
-`fm_test_python3` probes by actually executing `-c 'pass'`, caches the answer, and
-also accepts `python`, often the only real interpreter on a Windows machine.
+`fm_test_python3` probes by actually executing the interpreter, caches the answer,
+and also accepts `python`, often the only real interpreter on a Windows machine -
+but only a Python 3 one, since the runner's own JSON payloads need `pathlib` and
+`open(..., encoding=)`, and a bare `-c 'pass'` would let a Python 2 through.
 Executing the interpreter is the only probe that answers the question being asked,
 so this too is one fix rather than a platform arm.
 

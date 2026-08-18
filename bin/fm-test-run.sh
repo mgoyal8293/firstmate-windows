@@ -106,9 +106,9 @@ PORTABLE_SERIAL_DEFAULT_WEIGHT_MS=20000
 WINDOWS_SHARDS=4
 
 # Balance hint for a Windows-lane script with no measured Windows duration.
-# Close to the measured per-script mean so a newly listed test neither starves
-# nor overloads the shard it lands in.
-WINDOWS_DEFAULT_WEIGHT_MS=82644
+# The measured per-script mean of the lane below (3,714,000 ms over 40 scripts),
+# so a newly listed test neither starves nor overloads the shard it lands in.
+WINDOWS_DEFAULT_WEIGHT_MS=92850
 
 usage() {
   awk '
@@ -141,7 +141,10 @@ now_iso() {
 # whole run rather than degrading. Probe by executing.
 #
 # Also accepts `python`, because that is frequently the only real interpreter on
-# a Windows machine.
+# a Windows machine - but only when it is a Python 3. The payloads below are
+# Python-3-only (`pathlib`, `open(..., encoding=)`), and `-c 'pass'` succeeds
+# under Python 2 as well, so the probe asks for the major version rather than
+# merely for an interpreter that starts. One execution answers both questions.
 # The answer lands in FM_TEST_PYTHON3_CACHE rather than on stdout: callers run
 # in the shell that needs the cache, so a `$(fm_test_python3)` would probe again
 # on every call and double the interpreter startups the probe exists to bound.
@@ -156,7 +159,8 @@ fm_test_python3() {
   esac
   for candidate in python3 python; do
     if command -v "$candidate" >/dev/null 2>&1 \
-      && "$candidate" -c 'pass' >/dev/null 2>&1; then
+      && "$candidate" -c 'import sys; sys.exit(0 if sys.version_info[0] >= 3 else 1)' \
+        >/dev/null 2>&1; then
       FM_TEST_PYTHON3_CACHE=$candidate
       return 0
     fi

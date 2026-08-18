@@ -22,6 +22,7 @@ ACTIONLINT_SHA_LINUX_AMD64=8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc
 ACTIONLINT_SHA_LINUX_ARM64=325e971b6ba9bfa504672e29be93c24981eeb1c07576d730e9f7c8805afff0c6
 ACTIONLINT_SHA_DARWIN_AMD64=5b44c3bc2255115c9b69e30efc0fecdf498fdb63c5d58e17084fd5f16324c644
 ACTIONLINT_SHA_DARWIN_ARM64=aba9ced2dee8d27fecca3dc7feb1a7f9a52caefa1eb46f3271ea66b6e0e6953f
+ACTIONLINT_SHA_WINDOWS_AMD64=6e7241b51e6817ea6a047693d8e6fed13b31819c9a0dd6c5a726e1592d22f6e9
 
 fm_install_stub_uname() {
   local fakebin=$1
@@ -119,6 +120,35 @@ done
 exit 2
 SH
   chmod +x "$fakebin/tar"
+}
+
+# The Windows asset is a zip holding actionlint.exe at its root rather than a
+# .tar.gz holding a bare actionlint, so the Windows arm extracts with unzip.
+# Mirrors that layout at the -d destination.
+fm_install_stub_unzip_actionlint() {
+  local fakebin=$1
+  cat > "$fakebin/unzip" <<'SH'
+#!/usr/bin/env bash
+dest=.
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    -d)
+      dest=$2
+      shift 2
+      ;;
+    *)
+      shift
+      ;;
+  esac
+done
+mkdir -p "$dest"
+cat > "$dest/actionlint.exe" <<'EOF'
+#!/usr/bin/env bash
+printf '1.7.12\n'
+EOF
+chmod +x "$dest/actionlint.exe"
+SH
+  chmod +x "$fakebin/unzip"
 }
 
 fm_install_stub_sleep() {
@@ -314,7 +344,7 @@ test_installer_retries_transient_download_failure() {
 }
 
 test_installer_selects_platform_archive_url_and_checksum() {
-  local tmp fakebin destination out url_log uname_s uname_m archive sha
+  local tmp fakebin destination out url_log uname_s uname_m archive sha binary
   tmp=$(fm_test_tmproot fm-actionlint-platform)
   fakebin=$(fm_fakebin "$tmp")
   destination="$tmp/bin"
@@ -324,9 +354,10 @@ test_installer_selects_platform_archive_url_and_checksum() {
   fm_install_stub_curl "$fakebin"
   fm_install_stub_hasher "$fakebin" sha256sum
   fm_install_stub_tar_actionlint "$fakebin"
+  fm_install_stub_unzip_actionlint "$fakebin"
   fm_install_stub_sleep "$fakebin"
 
-  while IFS=$'\t' read -r uname_s uname_m archive sha; do
+  while IFS=$'\t' read -r uname_s uname_m archive sha binary; do
     [ -n "$uname_s" ] || continue
     rm -rf "$destination"
     : > "$url_log"
@@ -339,16 +370,21 @@ test_installer_selects_platform_archive_url_and_checksum() {
     assert_contains "$(cat "$url_log")" \
       "https://github.com/rhysd/actionlint/releases/download/v${REQUIRED}/${archive}" \
       "installer used the wrong URL for ${uname_s}/${uname_m}"
-    [ -x "$destination/actionlint" ] || fail "installer did not install actionlint for ${uname_s}/${uname_m}"
+    [ -x "$destination/$binary" ] \
+      || fail "installer did not install $binary for ${uname_s}/${uname_m}"
   done <<EOF
-Linux	x86_64	actionlint_${REQUIRED}_linux_amd64.tar.gz	$ACTIONLINT_SHA_LINUX_AMD64
-Linux	amd64	actionlint_${REQUIRED}_linux_amd64.tar.gz	$ACTIONLINT_SHA_LINUX_AMD64
-Linux	aarch64	actionlint_${REQUIRED}_linux_arm64.tar.gz	$ACTIONLINT_SHA_LINUX_ARM64
-Linux	arm64	actionlint_${REQUIRED}_linux_arm64.tar.gz	$ACTIONLINT_SHA_LINUX_ARM64
-Darwin	x86_64	actionlint_${REQUIRED}_darwin_amd64.tar.gz	$ACTIONLINT_SHA_DARWIN_AMD64
-Darwin	amd64	actionlint_${REQUIRED}_darwin_amd64.tar.gz	$ACTIONLINT_SHA_DARWIN_AMD64
-Darwin	arm64	actionlint_${REQUIRED}_darwin_arm64.tar.gz	$ACTIONLINT_SHA_DARWIN_ARM64
-Darwin	aarch64	actionlint_${REQUIRED}_darwin_arm64.tar.gz	$ACTIONLINT_SHA_DARWIN_ARM64
+Linux	x86_64	actionlint_${REQUIRED}_linux_amd64.tar.gz	$ACTIONLINT_SHA_LINUX_AMD64	actionlint
+Linux	amd64	actionlint_${REQUIRED}_linux_amd64.tar.gz	$ACTIONLINT_SHA_LINUX_AMD64	actionlint
+Linux	aarch64	actionlint_${REQUIRED}_linux_arm64.tar.gz	$ACTIONLINT_SHA_LINUX_ARM64	actionlint
+Linux	arm64	actionlint_${REQUIRED}_linux_arm64.tar.gz	$ACTIONLINT_SHA_LINUX_ARM64	actionlint
+Darwin	x86_64	actionlint_${REQUIRED}_darwin_amd64.tar.gz	$ACTIONLINT_SHA_DARWIN_AMD64	actionlint
+Darwin	amd64	actionlint_${REQUIRED}_darwin_amd64.tar.gz	$ACTIONLINT_SHA_DARWIN_AMD64	actionlint
+Darwin	arm64	actionlint_${REQUIRED}_darwin_arm64.tar.gz	$ACTIONLINT_SHA_DARWIN_ARM64	actionlint
+Darwin	aarch64	actionlint_${REQUIRED}_darwin_arm64.tar.gz	$ACTIONLINT_SHA_DARWIN_ARM64	actionlint
+MINGW64_NT-10.0-26200	x86_64	actionlint_${REQUIRED}_windows_amd64.zip	$ACTIONLINT_SHA_WINDOWS_AMD64	actionlint.exe
+MINGW64_NT-10.0-26200	amd64	actionlint_${REQUIRED}_windows_amd64.zip	$ACTIONLINT_SHA_WINDOWS_AMD64	actionlint.exe
+MSYS_NT-10.0-26200	x86_64	actionlint_${REQUIRED}_windows_amd64.zip	$ACTIONLINT_SHA_WINDOWS_AMD64	actionlint.exe
+CYGWIN_NT-10.0-26200	x86_64	actionlint_${REQUIRED}_windows_amd64.zip	$ACTIONLINT_SHA_WINDOWS_AMD64	actionlint.exe
 EOF
   pass "actionlint installer selects the official archive, URL, and checksum per OS/arch"
 }
