@@ -869,6 +869,11 @@ select_lane() {
   [ "$found" -eq 1 ] || die "lane '$want' selected no tests"
 }
 
+# Every comm input below is produced by `LC_ALL=C sort`, and comm validates its
+# inputs' order using the AMBIENT locale. On a non-C locale - Git Bash defaults
+# to en_US.UTF-8 - comm rejects C-sorted input as "not in sorted order" and the
+# guard fails for the locale's reasons rather than the inventory's. Comparison
+# locale therefore has to match the sort locale.
 run_coverage_guard() {
   local tmp missing extra a b shard
   local -a saved_scripts=()
@@ -887,8 +892,8 @@ run_coverage_guard() {
     return 1
   fi
   cat "$tmp/s1" "$tmp/s2" | LC_ALL=C sort -u >"$tmp/shards_union"
-  missing=$(comm -23 "$tmp/proven" "$tmp/shards_union" || true)
-  extra=$(comm -13 "$tmp/proven" "$tmp/shards_union" || true)
+  missing=$(LC_ALL=C comm -23 "$tmp/proven" "$tmp/shards_union" || true)
+  extra=$(LC_ALL=C comm -13 "$tmp/proven" "$tmp/shards_union" || true)
   if [ -n "$missing" ] || [ -n "$extra" ]; then
     log "coverage guard: portable shards must equal the proven-isolated set"
     [ -z "$missing" ] || { log "missing from shards:"; printf '%s\n' "$missing" >&2; }
@@ -932,8 +937,8 @@ run_coverage_guard() {
     return 1
   fi
   LC_ALL=C sort -u "$tmp/serial_shards_raw" >"$tmp/serial_shards"
-  missing=$(comm -23 "$tmp/serial" "$tmp/serial_shards" || true)
-  extra=$(comm -13 "$tmp/serial" "$tmp/serial_shards" || true)
+  missing=$(LC_ALL=C comm -23 "$tmp/serial" "$tmp/serial_shards" || true)
+  extra=$(LC_ALL=C comm -13 "$tmp/serial" "$tmp/serial_shards" || true)
   if [ -n "$missing" ] || [ -n "$extra" ]; then
     log "coverage guard: portable serial shards must equal the portable serial lane"
     [ -z "$missing" ] || { log "missing from serial shards:"; printf '%s\n' "$missing" >&2; }
@@ -945,7 +950,7 @@ run_coverage_guard() {
   for pair in "shards_union:serial" "shards_union:herdr" "serial:herdr"; do
     a=${pair%%:*}
     b=${pair#*:}
-    comm -12 "$tmp/$a" "$tmp/$b" >"$tmp/overlap"
+    LC_ALL=C comm -12 "$tmp/$a" "$tmp/$b" >"$tmp/overlap"
     if [ -s "$tmp/overlap" ]; then
       log "coverage guard: overlap between $a and $b:"
       cat "$tmp/overlap" >&2
@@ -963,8 +968,8 @@ run_coverage_guard() {
     return 1
   fi
   LC_ALL=C sort -u "$tmp/union_raw" >"$tmp/union"
-  missing=$(comm -23 "$tmp/all" "$tmp/union" || true)
-  extra=$(comm -13 "$tmp/all" "$tmp/union" || true)
+  missing=$(LC_ALL=C comm -23 "$tmp/all" "$tmp/union" || true)
+  extra=$(LC_ALL=C comm -13 "$tmp/all" "$tmp/union" || true)
   if [ -n "$missing" ] || [ -n "$extra" ]; then
     log "coverage guard: union of portable shards + portable serial + Herdr must equal tests/*.test.sh"
     [ -z "$missing" ] || { log "missing from union:"; printf '%s\n' "$missing" >&2; }
@@ -977,7 +982,7 @@ run_coverage_guard() {
     "$ROOT/bin/fm-test-isolation-proof.sh" --list | LC_ALL=C sort -u >"$tmp/proof_list"
     if ! cmp -s "$tmp/proven" "$tmp/proof_list"; then
       log "coverage guard: embedded proven-isolated set diverges from bin/fm-test-isolation-proof.sh --list"
-      comm -3 "$tmp/proven" "$tmp/proof_list" >&2 || true
+      LC_ALL=C comm -3 "$tmp/proven" "$tmp/proof_list" >&2 || true
       rm -rf "$tmp"
       return 1
     fi
@@ -991,7 +996,7 @@ run_coverage_guard() {
   select_lane windows
   printf '%s\n' "${SCRIPTS[@]+"${SCRIPTS[@]}"}" | LC_ALL=C sort -u >"$tmp/windows"
   SCRIPTS=("${saved_scripts[@]+"${saved_scripts[@]}"}")
-  missing=$(comm -23 "$tmp/windows" "$tmp/all" || true)
+  missing=$(LC_ALL=C comm -23 "$tmp/windows" "$tmp/all" || true)
   if [ -n "$missing" ]; then
     log "coverage guard: windows lane lists scripts that are not in tests/*.test.sh:"
     printf '%s\n' "$missing" >&2
@@ -1021,8 +1026,8 @@ run_coverage_guard() {
     return 1
   fi
   LC_ALL=C sort -u "$tmp/windows_shards_raw" >"$tmp/windows_shards"
-  missing=$(comm -23 "$tmp/windows" "$tmp/windows_shards" || true)
-  extra=$(comm -13 "$tmp/windows" "$tmp/windows_shards" || true)
+  missing=$(LC_ALL=C comm -23 "$tmp/windows" "$tmp/windows_shards" || true)
+  extra=$(LC_ALL=C comm -13 "$tmp/windows" "$tmp/windows_shards" || true)
   if [ -n "$missing" ] || [ -n "$extra" ]; then
     log "coverage guard: windows shards must equal the windows lane"
     [ -z "$missing" ] || { log "missing from windows shards:"; printf '%s\n' "$missing" >&2; }
