@@ -39,6 +39,9 @@
 # adapter-local composer normalizer would be the second copy that owner exists
 # to prevent.
 
+# shellcheck source=bin/fm-proc-lib.sh
+. "$(dirname -- "${BASH_SOURCE[0]}")/fm-proc-lib.sh"
+
 # Bounded probe budget in seconds. Cursor's --help is local and returns
 # immediately; the bound exists so a hung or interactive impostor cannot wedge
 # a spawn or a readiness check.
@@ -192,7 +195,7 @@ fm_cursor_argv0_for_pid() {  # <pid> [comm-fallback]
     [ -n "$argv0" ] && { printf '%s\n' "$argv0"; return 0; }
   fi
   if [ -z "$fallback" ]; then
-    fallback=$(LC_ALL=C ps -p "$pid" -o comm= 2>/dev/null || true)
+    fallback=$(fm_proc_field "$pid" comm 2>/dev/null || true)
   fi
   [ -n "$fallback" ] || return 1
   printf '%s\n' "$fallback"

@@ -378,6 +378,10 @@
       "audience": "operator-current"
     },
     {
+      "path": "docs/windows.md",
+      "audience": "maintainer-architecture"
+    },
+    {
       "path": "docs/zellij-backend.md",
       "audience": "operator-current"
     },

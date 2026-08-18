@@ -2296,6 +2296,45 @@ EOF
   pass "missing lsof falls back to reaping the tmux pane process group"
 }
 
+# The Windows arm of the same gap. Git for Windows ships no lsof at all AND then
+# physically refuses to delete a directory a live process holds as its cwd, so a
+# teardown that only warned would leave an undeletable worktree behind every
+# time. Driven from a POSIX runner through the platform test seam, because
+# otherwise this arm has no regression coverage until someone runs the suite on
+# Windows.
+test_windows_without_lsof_reaps_from_proc() {
+  local case_dir rc pid path_without_lsof
+  case_dir=$(make_case windows-proc-reap)
+  write_meta "$case_dir" no-mistakes ship
+  land_shippable_commit "$case_dir"
+  path_without_lsof=$(make_path_without_lsof "$case_dir")
+  PATH="$path_without_lsof" command -v lsof >/dev/null 2>&1 \
+    && fail "windows-proc-reap: fixture path unexpectedly exposes lsof"
+
+  ( cd "$case_dir/wt" && exec sleep 300 ) &
+  pid=$!
+  disown
+  sleep 0.3
+  kill -0 "$pid" 2>/dev/null || fail "windows-proc-reap: setup sleeper did not start"
+
+  rc=0
+  export FM_PLATFORM_UNAME_OVERRIDE=MINGW64_NT-10.0-26200
+  FM_TEARDOWN_TEST_PATH="$path_without_lsof" \
+    run_teardown "$case_dir" > "$case_dir/stdout" 2> "$case_dir/stderr" || rc=$?
+  unset FM_PLATFORM_UNAME_OVERRIDE
+
+  expect_code 0 "$rc" "windows-proc-reap: teardown should succeed"
+  if kill -0 "$pid" 2>/dev/null; then
+    kill -KILL "$pid" 2>/dev/null || true
+    fail "windows-proc-reap: the leaked worktree process survived teardown, so Windows would refuse the removal"
+  fi
+  assert_grep "reaping leaked worktree process" "$case_dir/stderr" \
+    "windows-proc-reap: teardown did not reap from the /proc scan"
+  assert_no_grep "lsof is unavailable" "$case_dir/stderr" \
+    "windows-proc-reap: teardown fell back to the process group instead of scanning /proc"
+  pass "on Windows a missing lsof reaps from the /proc cwd scan instead of leaving an undeletable worktree"
+}
+
 test_lsof_error_refuses_before_removal() {
   local case_dir rc
   case_dir=$(make_case lsof-error-refusal)
@@ -2642,6 +2681,7 @@ test_own_autonomous_run_is_left_alone
 test_leaked_worktree_process_is_reaped
 test_leaked_tasktmp_process_is_reaped
 test_lsof_absent_reaps_tmux_process_group
+test_windows_without_lsof_reaps_from_proc
 test_lsof_error_refuses_before_removal
 test_reused_pid_identity_is_not_force_killed
 test_exec_changed_process_is_still_reaped

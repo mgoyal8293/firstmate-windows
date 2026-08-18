@@ -2,6 +2,13 @@
 # Shared durable wake queue and portable lock helpers.
 
 FM_WAKE_LIB_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# Sourced FIRST: fm_lock_try_create below builds every lock in the fleet with a
+# bare `ln -s`, and on default Git for Windows that resolves to a recursive COPY
+# which readlink can never validate, so every lock spins forever behind
+# fm_lock_acquire_wait. bin/fm-proc-lib.sh normalises that on source, and also
+# owns the /proc process-table primitives the same platform needs.
+# shellcheck source=bin/fm-proc-lib.sh
+. "$FM_WAKE_LIB_DIR/fm-proc-lib.sh"
 FM_WAKE_DEFAULT_ROOT="$(cd "$FM_WAKE_LIB_DIR/.." && pwd)"
 FM_ROOT="${FM_ROOT_OVERRIDE:-${FM_ROOT:-$FM_WAKE_DEFAULT_ROOT}}"
 FM_HOME="${FM_HOME:-${FM_ROOT_OVERRIDE:-$FM_ROOT}}"
@@ -365,6 +372,25 @@ fm_lock_remove_stray_owner_link() {
   if [ -L "$stray" ] && [ "$(readlink "$stray" 2>/dev/null || true)" = "$ownerdir" ]; then
     rm -f "$stray" 2>/dev/null || true
   fi
+  fm_lock_remove_symlink_copy "$lockdir" "$ownerdir"
+}
+
+# A Windows runtime whose winsymlinks mode is not "nativestrict" answers `ln -s`
+# with a recursive COPY of the owner directory instead of a link or an error.
+# fm_lock_try_create's own [ -e "$lockdir" ] guard then makes that copy a
+# PERMANENT wedge - the lock can never be created again until someone removes it
+# by hand. Recognise the copy by its contents (the owner's own pid file, naming
+# this process) and undo it, so the failure stays a failed attempt.
+# Deliberately narrow: anything that is not provably this attempt's own copy is
+# left exactly where it is.
+fm_lock_remove_symlink_copy() {
+  local lockdir=$1 ownerdir=$2 mypid
+  fm_platform_is_windows || return 0
+  [ -d "$lockdir" ] && [ ! -L "$lockdir" ] || return 0
+  mypid=${BASHPID:-$$}
+  [ "$(cat "$lockdir/pid" 2>/dev/null || true)" = "$mypid" ] || return 0
+  [ "$(cat "$ownerdir/pid" 2>/dev/null || true)" = "$mypid" ] || return 0
+  rm -rf -- "$lockdir" 2>/dev/null || true
 }
 
 fm_lock_claim_blocked_by_steal() {

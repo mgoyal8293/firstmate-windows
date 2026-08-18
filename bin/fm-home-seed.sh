@@ -415,7 +415,12 @@ ensure_home() {
     [ -d "$home" ] || { echo "error: $home exists and is not a directory" >&2; return 1; }
   else
     mkdir -p "$(dirname "$home")"
-    git clone --quiet "$FM_ROOT" "$home"
+    # core.symlinks: the repo's one tracked symlink is .claude/skills ->
+    # ../.agents/skills, and Git for Windows ships core.symlinks=false, which
+    # checks that blob out as a plain file holding the target path. The seeded
+    # home would then silently load zero project skills. Explicit here rather
+    # than inherited so the seed does not depend on the operator's global config.
+    git clone --quiet -c core.symlinks=true "$FM_ROOT" "$home"
   fi
   verify_firstmate_home "$home"
 }

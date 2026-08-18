@@ -39,6 +39,8 @@ FM_AFK_STATE="${FM_STATE_OVERRIDE:-$FM_HOME/state}"
 FM_AFK_LOCK="$FM_AFK_STATE/.supervise-daemon.lock"
 FM_AFK_DAEMON="$FM_AFK_START_DIR/fm-supervise-daemon.sh"
 
+# shellcheck source=bin/fm-proc-lib.sh
+. "$FM_AFK_START_DIR/fm-proc-lib.sh"
 # shellcheck source=bin/fm-wake-lib.sh
 . "$FM_AFK_START_DIR/fm-wake-lib.sh"
 
@@ -89,7 +91,7 @@ daemon_pid_matches() {
     [ "$current" = "$identity" ]
     return
   fi
-  command=$(ps -p "$pid" -o command= 2>/dev/null || true)
+  command=$(fm_proc_field "$pid" args 2>/dev/null || true)
   case "$command" in
     *"$FM_AFK_DAEMON"*|*"fm-supervise-daemon.sh"*) return 0 ;;
   esac
