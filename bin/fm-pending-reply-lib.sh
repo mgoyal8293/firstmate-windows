@@ -37,7 +37,8 @@
 #   request_turn_completed_epoch=
 #   recovery_attempted_epoch=
 #   recovery_sender_pid=
-#   recovery_sender_identity=
+#   recovery_sender_identity= "<format-tag> <identity>"; see the sender-identity
+#                           note below
 #   recovery_sent_epoch=
 #   recovery_delivery_outcome=
 #   recovery_turn_seen_busy=
@@ -53,6 +54,22 @@
 #   wrong_home_sightings=   comma-separated identities of counted sightings
 #   wrong_home_scan_signature=
 #   grace_secs=             bounded grace before recovery is eligible
+#
+# Sender identity: recovery_sender_identity records which process committed the
+# one recovery attempt, so an attempt interrupted mid-send can be told apart from
+# one still in flight. bin/fm-proc-lib.sh's fm_pid_identity is the fleet's only
+# process-identity read and this library uses it unchanged - it must, because the
+# reader this file used to carry was `ps -o lstart= -o command=`, which MSYS `ps`
+# rejects outright, so on Git for Windows the sender identity was unreadable, the
+# one recovery attempt was never sent, and the record could never escalate either.
+# The stored value carries FM_PENDING_REPLY_IDENTITY_FORMAT in the SAME field
+# rather than in a second one, because two fields leave a window where a crash
+# between the two writes makes the tag and the identity disagree, and this
+# library's whole recovery path exists for exactly those windows.
+# An untagged value was written by that previous reader. No fm_pid_identity output
+# can equal one on a /proc runtime, so reading an untagged record as current would
+# report a live sender dead - the precise failure the tag exists to prevent.
+# fm_pending_reply_sender_alive owns that transition and drains it per record.
 #
 # Escalation lifecycle: an escalation is not just a message, it OPENS a durable
 # keyed decision in the parent status log, and bin/fm-classify-lib.sh's fold is
@@ -78,6 +95,13 @@
 
 # shellcheck source=bin/fm-marker-lib.sh
 _FM_PENDING_REPLY_LIB_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd 2>/dev/null)" || _FM_PENDING_REPLY_LIB_DIR="."
+# Sourced at top level, unlike bin/fm-wake-lib.sh further down: fm-proc-lib.sh
+# assigns no FM_ROOT/FM_HOME/STATE of its own and creates no directories, so it
+# cannot capture this library's caller the way sourcing the wake library early
+# would. It owns fm_pid_identity, which fm_pending_reply_sender_alive needs at
+# every poll rather than inside one function.
+# shellcheck source=bin/fm-proc-lib.sh
+. "$_FM_PENDING_REPLY_LIB_DIR/fm-proc-lib.sh"
 # shellcheck source=bin/fm-marker-lib.sh
 . "$_FM_PENDING_REPLY_LIB_DIR/fm-marker-lib.sh"
 # shellcheck source=bin/fm-backend.sh
@@ -88,6 +112,10 @@ _FM_PENDING_REPLY_LIB_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd 2>/dev/n
 . "$_FM_PENDING_REPLY_LIB_DIR/fm-classify-lib.sh"
 
 FM_PENDING_REPLY_SCHEMA='fm-pending-reply.v1'
+# Format tag stored with recovery_sender_identity. Bump it only when the stored
+# shape changes, and leave fm_pending_reply_sender_alive able to recognise what
+# the previous tag wrote.
+FM_PENDING_REPLY_IDENTITY_FORMAT='fm-pid-identity.v1'
 FM_PENDING_REPLY_CORR_RE='corr=[A-Fa-f0-9]{16}'
 FM_PENDING_REPLY_GRACE_DEFAULT=120
 
@@ -739,7 +767,7 @@ fm_pending_reply_send_recovery() {  # <state-dir> <corr_id>
   parent_home=$(fm_pending_reply_get "$rec" parent_home)
   msg=$(fm_pending_reply_recovery_message "$rec")
   sender_pid=${BASHPID:-$$}
-  sender_identity=$(fm_pending_reply_pid_identity "$sender_pid") || return 1
+  sender_identity=$(fm_pending_reply_tagged_identity "$sender_pid") || return 1
   fm_pending_reply_set "$rec" recovery_sender_pid "$sender_pid" || return 1
   fm_pending_reply_set "$rec" recovery_sender_identity "$sender_identity" || return 1
   fm_pending_reply_set "$rec" recovery_attempted_epoch "$now" || return 1
@@ -766,12 +794,16 @@ fm_pending_reply_send_recovery() {  # <state-dir> <corr_id>
   return 1
 }
 
-fm_pending_reply_pid_identity() {  # <pid>
+# The sender identity to store for pid $1, or non-zero when the process table
+# cannot answer. Reads nothing itself: bin/fm-proc-lib.sh's fm_pid_identity is the
+# one owner of that read, and this only tags the result so the stored value states
+# which format it is in (see the sender-identity note in this file's header).
+fm_pending_reply_tagged_identity() {  # <pid>
   local pid=$1 identity
   case "$pid" in ''|*[!0-9]*) return 1 ;; esac
-  identity=$(COLUMNS=10000 LC_ALL=C ps -p "$pid" -o lstart= -o command= 2>/dev/null) || return 1
+  identity=$(fm_pid_identity "$pid") || return 1
   [ -n "$identity" ] || return 1
-  printf '%s' "$identity"
+  printf '%s %s' "$FM_PENDING_REPLY_IDENTITY_FORMAT" "$identity"
 }
 
 fm_pending_reply_sender_alive() {  # <record-path>
@@ -779,8 +811,44 @@ fm_pending_reply_sender_alive() {  # <record-path>
   pid=$(fm_pending_reply_get "$rec" recovery_sender_pid)
   expected=$(fm_pending_reply_get "$rec" recovery_sender_identity)
   [ -n "$expected" ] || return 1
-  actual=$(fm_pending_reply_pid_identity "$pid") || return 1
+  case "$expected" in
+    "$FM_PENDING_REPLY_IDENTITY_FORMAT "*) ;;
+    *)
+      _fm_pending_reply_untagged_sender_alive "$rec" "$pid" "$expected"
+      return $?
+      ;;
+  esac
+  actual=$(fm_pending_reply_tagged_identity "$pid") || return 1
   [ "$actual" = "$expected" ]
+}
+
+# Transition path for a record whose stored identity carries no format tag, i.e.
+# one written by the release that read sender identity here itself.
+#
+# An untagged value can only be compared against the exact command that produced
+# it, COLUMNS pin included: fm_pid_identity's own ps fallback differs from it in
+# both that pin and in leading-whitespace handling, so the two are not
+# interchangeable even on a runtime with no /proc, and sniffing the stored string
+# for its shape would be a guess about vendor date output. So verify it the way it
+# was written, then rewrite the record in the current format with one atomic field
+# write, and the transition drains itself one record at a time.
+_fm_pending_reply_untagged_sender_alive() {  # <record-path> <pid> <stored-identity>
+  local rec=$1 pid=$2 expected=$3 legacy current
+  case "$pid" in ''|*[!0-9]*) return 1 ;; esac
+  legacy=$(COLUMNS=10000 LC_ALL=C ps -p "$pid" -o lstart= -o command= 2>/dev/null)
+  if [ -n "$legacy" ]; then
+    [ "$legacy" = "$expected" ] || return 1
+    if current=$(fm_pending_reply_tagged_identity "$pid"); then
+      fm_pending_reply_set "$rec" recovery_sender_identity "$current" || true
+    fi
+    return 0
+  fi
+  # This runtime's ps cannot answer that form at all - the MSYS case - so an
+  # untagged identity can never be matched here. Use the one identity owner purely
+  # as a liveness probe: a pid the process table cannot see at all is gone, and
+  # anything else defers to the next poll rather than declaring a live sender dead
+  # on evidence this platform cannot produce.
+  fm_pid_identity "$pid" >/dev/null 2>&1
 }
 
 fm_pending_reply_finish_recovery() {  # <state-dir> <corr_id> <confirmed|failed>

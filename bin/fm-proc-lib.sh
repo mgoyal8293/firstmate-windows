@@ -1,9 +1,11 @@
 #!/usr/bin/env bash
 # Shared process-table and platform-capability primitives.
 #
-# ONE owner of the two questions every ancestry walk, reaper and lock holder
-# check asks: "what does the process table say about pid N?" and "does this
-# platform behave the way POSIX callers assume?".
+# ONE owner of the two questions every ancestry walk, reaper, lock holder check
+# and stored-identity comparison asks: "what does the process table say about pid
+# N?" and "does this platform behave the way POSIX callers assume?". Every such
+# read lives here, including fm_pid_identity: a second copy of one of these reads
+# is a second answer to the same question, and the copy is the one that rots.
 #
 # It exists because Git for Windows ships MSYS `ps`, not procps: `ps -o` is
 # rejected outright, so every `ps -o comm=`/`args=`/`ppid=`/`pgid=` call fails on
@@ -12,11 +14,11 @@
 # firstmate reads, including for the native Windows children MSYS spawned, so the
 # fix is a capability read rather than a platform fork.
 #
-# Detection is by capability, never by uname, for the reason bin/fm-wake-lib.sh
-# already records at fm_pid_identity: the /proc layout is what decides whether
-# the fast path is usable, and keying on the platform name would both miss
-# runtimes that grow the files and break ones that lose them. Linux and macOS
-# have no /proc/<pid>/ppid, so they keep the exact `ps` path they use today.
+# Detection is by capability, never by uname: the /proc layout is what decides
+# whether the fast path is usable, and keying on the platform name would both
+# miss runtimes that grow the files and break ones that lose them. Linux and
+# macOS have no /proc/<pid>/ppid, so they keep the exact `ps` path they use
+# today.
 #
 # This file is sourced by scripts. Its only effect on source is to normalise the
 # MSYS symlink mode below - environment normalisation in the same class as the
@@ -156,6 +158,53 @@ fm_proc_field() {  # <pid> <field>
     return 0
   fi
   LC_ALL=C ps -o "$field=" -p "$pid" 2>/dev/null
+}
+
+# fm_pid_identity <pid>
+#
+# A stable identity for the process at pid $1: two reads of the same live
+# process print the same string, and a pid that has since been reused prints a
+# different one. Callers store it next to a pid and compare it later, so nothing
+# printed here may vary with the wall clock or the caller's locale.
+#
+# Prefer a Linux-compatible /proc when present: stat field 22 (starttime, clock
+# ticks since boot) is immune to the wall-clock steps that re-render the ps
+# lstart fallback's date (observed as WSL2 btime drift) and would evict a live
+# watcher; combining the full NUL-separated cmdline keeps PID reuse a mismatch
+# even on a tick collision.
+#
+# Detection is by capability for the reason this file's header gives: Git
+# Bash/MSYS exposes these compatible files while its Cygwin ps rejects the
+# portable fallback's -o fields, so keying on uname would answer nothing there.
+fm_pid_identity() {  # <pid>
+  local pid=$1 out proc_root stat_line starttime cmdline_hex identity_key
+  local -a stat_fields
+  case "$pid" in
+    ''|*[!0-9]*) return 1 ;;
+  esac
+  proc_root=$(fm_proc_root)
+  if [ -r "$proc_root/$pid/stat" ] && [ -r "$proc_root/$pid/cmdline" ]; then
+    stat_line=$(cat "$proc_root/$pid/stat" 2>/dev/null) || return 1
+    # After the final comm delimiter, array index 19 is proc stat field 22.
+    read -r -a stat_fields <<< "${stat_line##*)}"
+    [ "${#stat_fields[@]}" -ge 20 ] || return 1
+    starttime=${stat_fields[19]}
+    case "$starttime" in
+      ''|*[!0-9]*) return 1 ;;
+    esac
+    cmdline_hex=$(od -An -v -tx1 "$proc_root/$pid/cmdline" 2>/dev/null | tr -d '[:space:]') || return 1
+    [ -n "$cmdline_hex" ] || return 1
+    identity_key=proc-starttime
+    [ "$FM_PROC_UNAME_S" != Linux ] || identity_key=linux-starttime
+    printf '%s=%s cmdline-hex=%s\n' "$identity_key" "$starttime" "$cmdline_hex"
+    return 0
+  fi
+  # Pin LC_ALL=C so lstart's date format is locale-invariant: the identity is
+  # written under one locale but re-read under the machine's ambient locale, which
+  # would otherwise mismatch on a non-C locale (e.g. ko_KR) and reject a live watcher.
+  out=$(LC_ALL=C ps -p "$pid" -o lstart= -o command= 2>/dev/null) || return 1
+  [ -n "$out" ] || return 1
+  printf '%s\n' "$out" | sed 's/^[[:space:]]*//'
 }
 
 # Current working directory of pid $1, or non-zero when it cannot be read.
