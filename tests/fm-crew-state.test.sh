@@ -143,7 +143,7 @@ make_no_timeout_toolbin() {  # <dir> -> echoes toolbin path
     [ -n "$real" ] || fail "missing tool for no-timeout path: $tool"
     case "$(uname -s)" in
       MINGW*|MSYS*)
-        printf '#!%s\nexec %s "$@"\n' "$shell" "$real" > "$tb/$tool"
+        printf '#!%s\nexec "%s" "$@"\n' "$shell" "$real" > "$tb/$tool"
         chmod +x "$tb/$tool"
         ;;
       *)

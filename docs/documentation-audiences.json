@@ -270,6 +270,10 @@
       "audience": "maintainer-verification"
     },
     {
+      "path": "docs/fm-test-windows-lane.md",
+      "audience": "maintainer-verification"
+    },
+    {
       "path": "docs/gitlab-merge-watch.md",
       "audience": "maintainer-verification"
     },

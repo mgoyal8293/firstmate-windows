@@ -34,7 +34,9 @@ whole suite.
 
 A script joins the lane when it exits 0 with no failed assertion on Git Bash.
 A gate skip counts as green: that is the test declining to run, which it does on
-Linux too.
+Linux too. But a script that can *only* skip on this runner, because the tool it
+needs is not installed there, is left out - see the five green-by-skip scripts
+below.
 
 The list is **enumerated, not derived**.
 The Linux serial lane is derived on purpose, so a newly added test lands in a
@@ -107,37 +109,60 @@ Measured: **rc=0 in 5m35s** for 304 shell files plus 4 workflow files, with
 
 ## Lane composition
 
-Measured by running all 95 candidate scripts serially from a frozen checkout
+Measured by running all 98 candidate scripts serially from a frozen checkout
 with a 180-second per-script bound, plus dedicated longer runs for the three
 scripts that bound exceeded.
 
 | | scripts |
 |---|---:|
 | candidates measured | 98 |
-| **in the lane (exit 0, no failed assertion)** | **45** |
+| measured green (exit 0, no failed assertion) | 45 |
+| of those, green only because they gate-skip on the runner - dropped | 5 |
+| **in the lane** | **40** |
 | failing on Windows, excluded | 41 |
 | still unresolved (hit the 180s bound, no failure seen) | 12 |
 
 45 + 41 + 12 = 98. One of the 41, `tests/fm-teardown.test.sh`, has its cause
 isolated below; the other 40 are recorded but not chased.
 
-Total lane cost: **61.9 min** of serial Git Bash work.
+### The five green-by-skip scripts are not lane members
+
+`tests/fm-afk-inject-e2e.test.sh`, `tests/fm-backend-tmux-smoke.test.sh` and
+`tests/fm-tmux-agent-liveness.test.sh` exit early on `command -v tmux`;
+`tests/fm-backend-herdr-focus-flash-e2e.test.sh` on `command -v herdr`;
+`tests/fm-claude-stop-autoarm-live-e2e.test.sh` unless `FM_CLAUDE_LIVE_E2E=1`.
+The job installs none of that, so on `windows-latest` those five can only skip.
+They are dropped from the lane rather than carried, and neither tmux nor herdr is
+installed on the runner - not needing tmux is the point of this port.
+
+Dropping them loses no Windows coverage, because they never executed anything
+there. What it buys is honesty about what the lane runs: a dropped member is
+visible in `list_windows`, whereas a member that silently skips every run is
+invisible, and there would be no signal if the runner image later lost a tool.
+That is the same principle behind the Linux serial lane's "Require tmux for e2e
+tests" step (`.github/workflows/ci.yml`), which hard-fails so those scripts
+cannot quietly skip on a required gate. The Windows lane reaches it from the
+other direction: no tool, no member.
+
+Total lane cost: **61.9 min** of serial Git Bash work (3,714,000 ms of hints).
 The longest single script is `tests/fm-decision-hold-lifecycle.test.sh` at 860s,
 which is the floor no shard count can lower - so 4 shards is the useful maximum
 here, not 8 or 16. Beyond 4 the floor binds and extra runners buy nothing.
 
-| shard | scripts | measured |
+| shard | scripts | predicted |
 |---|---:|---:|
-| `windows-1of4` | 7 | 930s (15.5 min) |
-| `windows-2of4` | 9 | 929s (15.5 min) |
-| `windows-3of4` | 15 | 928s (15.5 min) |
-| `windows-4of4` | 14 | 927s (15.4 min) |
-| imbalance | | 3s |
+| `windows-1of4` | 6 | 929s (15.5 min) |
+| `windows-2of4` | 8 | 929s (15.5 min) |
+| `windows-3of4` | 13 | 928s (15.5 min) |
+| `windows-4of4` | 13 | 928s (15.5 min) |
+| imbalance | | 1s |
 
-**`windows-4of4` was then run end to end on Git Bash to check that sum against
+**`windows-4of4` was run end to end on Git Bash to check that sum against
 reality: rc=0, 14/14 scripts, 0 failures, 2 gate skips, wall 932s (15.5 min)**
 against 927s predicted - 0.5% out, which is what makes the other three shards'
-predicted figures trustworthy.
+predicted figures trustworthy. That run was taken before the five green-by-skip
+scripts were dropped, so it covered 14 scripts including the 2 that skipped;
+the same shard is now 13 scripts and 928s, and the drop moves no measured work.
 
 `timeout-minutes: 40` is a hang tripwire with roughly 3x margin over a healthy
 15.5-minute shard, not the expected end of the lane. GitHub's Windows runners are
@@ -324,15 +349,18 @@ comm: file 2 is not in sorted order
 comm: input is not in sorted order
 ```
 
-Every `comm` input in `run_coverage_guard` is produced by `LC_ALL=C sort`, but
+Every `comm` input in `run_coverage_guard` - and in the runner's own
+`tests/fm-test-run.test.sh` - is produced by `LC_ALL=C sort`, but
 `comm` validates its inputs' order using the **ambient** locale. Git Bash
 defaults to `en_US.UTF-8`, whose collation differs from C, so `comm` rejected
 correctly-sorted input and the guard failed for the locale's reasons rather than
 the inventory's. This is also why `tests/fm-test-run.test.sh` failed on Windows.
 
-Fixed by matching the comparison locale to the sort locale. That is correct on
-every platform - sort with `LC_ALL=C`, compare with `LC_ALL=C` - so it is one fix
-rather than a platform arm.
+Fixed by matching the comparison locale to the sort locale, in the guard and in
+that test. That is correct on every platform - sort with `LC_ALL=C`, compare with
+`LC_ALL=C` - so it is one fix rather than a platform arm. The worklist below
+still records `tests/fm-test-run.test.sh` as failing because that is what the
+sweep measured; this is its cause, and it is fixed.
 
 ### A capability probe that lied about Python
 

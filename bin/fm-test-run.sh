@@ -142,19 +142,22 @@ now_iso() {
 #
 # Also accepts `python`, because that is frequently the only real interpreter on
 # a Windows machine.
+# The answer lands in FM_TEST_PYTHON3_CACHE rather than on stdout: callers run
+# in the shell that needs the cache, so a `$(fm_test_python3)` would probe again
+# on every call and double the interpreter startups the probe exists to bound.
+# Empty means unprobed, "-" means no working interpreter.
 FM_TEST_PYTHON3_CACHE=
 fm_test_python3() {
   local candidate
-  if [ -n "$FM_TEST_PYTHON3_CACHE" ]; then
-    [ "$FM_TEST_PYTHON3_CACHE" = "-" ] && return 1
-    printf '%s\n' "$FM_TEST_PYTHON3_CACHE"
-    return 0
-  fi
+  case "$FM_TEST_PYTHON3_CACHE" in
+    '') ;;
+    '-') return 1 ;;
+    *) return 0 ;;
+  esac
   for candidate in python3 python; do
     if command -v "$candidate" >/dev/null 2>&1 \
       && "$candidate" -c 'pass' >/dev/null 2>&1; then
       FM_TEST_PYTHON3_CACHE=$candidate
-      printf '%s\n' "$candidate"
       return 0
     fi
   done
@@ -163,9 +166,8 @@ fm_test_python3() {
 }
 
 now_ms() {
-  local py
-  if py=$(fm_test_python3); then
-    "$py" -c 'import time; print(int(time.time() * 1000))'
+  if fm_test_python3; then
+    "$FM_TEST_PYTHON3_CACHE" -c 'import time; print(int(time.time() * 1000))'
   else
     # Second precision only when no working Python is available.
     echo $(($(date +%s) * 1000))
@@ -652,21 +654,22 @@ portable_serial_shard_index() {
 # lane is a real, disjoint, complete partition of whatever is listed.
 #
 # Membership rule: exited 0 with no failed assertion on Git Bash. A gate skip
-# counts as green - that is the test declining to run, the same as on Linux.
+# counts as green - that is the test declining to run, the same as on Linux -
+# but a script that can ONLY gate-skip on this runner, because the tool it needs
+# is not installed there, is left out: it would inflate the lane's headline count
+# without executing anything, and unlike the Linux lane there is no hard-fail
+# step asserting the tool is present. A dropped member is visible here; a
+# silently skipping one is not.
 # docs/fm-test-windows-lane.md records the measurement behind each entry.
 list_windows() {
   cat <<'EOF'
-tests/fm-afk-inject-e2e.test.sh
 tests/fm-afk-return.test.sh
 tests/fm-ask-user-authority.test.sh
 tests/fm-backend-conpty.test.sh
-tests/fm-backend-herdr-focus-flash-e2e.test.sh
-tests/fm-backend-tmux-smoke.test.sh
 tests/fm-brief.test.sh
 tests/fm-busy-state.test.sh
 tests/fm-calm-pi-extension.test.sh
 tests/fm-classify-decision-key.test.sh
-tests/fm-claude-stop-autoarm-live-e2e.test.sh
 tests/fm-claude-stop-autoarm.test.sh
 tests/fm-composer-ghost.test.sh
 tests/fm-composer-lib.test.sh
@@ -693,7 +696,6 @@ tests/fm-tangle-guard.test.sh
 tests/fm-task-delivery.test.sh
 tests/fm-test-fixture-cleanup.test.sh
 tests/fm-test-isolation-proof.test.sh
-tests/fm-tmux-agent-liveness.test.sh
 tests/fm-tmux-submit-busy.test.sh
 tests/fm-trace-context-lib.test.sh
 tests/fm-transition-lib.test.sh
@@ -709,17 +711,13 @@ EOF
 # they say, so a stale hint costs a slower shard rather than lost coverage.
 windows_weight_hints() {
   cat <<'EOF'
-tests/fm-afk-inject-e2e.test.sh 1000
 tests/fm-afk-return.test.sh 63000
 tests/fm-ask-user-authority.test.sh 3000
 tests/fm-backend-conpty.test.sh 25000
-tests/fm-backend-herdr-focus-flash-e2e.test.sh 1000
-tests/fm-backend-tmux-smoke.test.sh 1000
 tests/fm-brief.test.sh 21000
 tests/fm-busy-state.test.sh 24000
 tests/fm-calm-pi-extension.test.sh 3000
 tests/fm-classify-decision-key.test.sh 24000
-tests/fm-claude-stop-autoarm-live-e2e.test.sh 1000
 tests/fm-claude-stop-autoarm.test.sh 135000
 tests/fm-composer-ghost.test.sh 54000
 tests/fm-composer-lib.test.sh 119000
@@ -746,7 +744,6 @@ tests/fm-tangle-guard.test.sh 108000
 tests/fm-task-delivery.test.sh 57000
 tests/fm-test-fixture-cleanup.test.sh 21000
 tests/fm-test-isolation-proof.test.sh 15000
-tests/fm-tmux-agent-liveness.test.sh 1000
 tests/fm-tmux-submit-busy.test.sh 37000
 tests/fm-trace-context-lib.test.sh 6000
 tests/fm-transition-lib.test.sh 4000
@@ -1104,7 +1101,8 @@ aggregate_timing_json() {
   shift
   [ "$#" -gt 0 ] || die "--aggregate-json requires at least one input timing JSON"
   local py
-  py=$(fm_test_python3) || die "--aggregate-json requires a working python3"
+  fm_test_python3 || die "--aggregate-json requires a working python3"
+  py=$FM_TEST_PYTHON3_CACHE
   "$py" - "$out" "$@" <<'PY'
 import json, sys
 from pathlib import Path
@@ -1540,9 +1538,10 @@ write_json_artifact() {
   local families_file=${11}
 
   local py
-  if ! py=$(fm_test_python3); then
+  if ! fm_test_python3; then
     die "--json requires a working python3 to emit a valid timing artifact"
   fi
+  py=$FM_TEST_PYTHON3_CACHE
 
   "$py" - "$out" "$started" "$finished" "$run_id" "$total" "$failed" "$skipped" "$duration" "$selection" "$records_file" "$families_file" <<'PY'
 import json, sys
@@ -1860,6 +1859,9 @@ FAMILIES_TSV="$RUN_TMP/families.tsv"
 : >"$RECORDS"
 trap 'rm -rf "$RUN_TMP"' EXIT
 
+# Resolve Python once here, in the shell that owns the cache, so the timing
+# calls below and every forked worker inherit one probe rather than repeating it.
+fm_test_python3 || true
 RUN_STARTED_ISO=$(now_iso)
 RUN_STARTED_MS=$(now_ms)
 RUN_ID="fm-test-run-${RUN_STARTED_MS}-$$"
