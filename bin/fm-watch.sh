@@ -224,16 +224,18 @@ window_kind() {
   echo unknown
 }
 
-# window_backend: the backend recorded in the meta whose window= matches <w>,
-# defaulting to tmux (absent backend= means tmux; the P1 compatibility
-# contract) when no matching meta carries the field, or none matches at all.
+# window_backend: the backend recorded in the meta whose window= matches <w>.
+# The absent-backend= default is the P1 compatibility contract and is owned by
+# fm_backend_of_meta (bin/fm-backend.sh) - this used to re-implement the same
+# grep and the same default inline, which is exactly how the two drift. The
+# literal tmux below is the no-meta-at-all case, not the absent-field case;
+# every window this watcher iterates comes from a meta (recorded_windows), so it
+# is reached only when a window that came from metadata no longer matches any.
 window_backend() {
-  local w=$1 meta backend
+  local w=$1 meta
   meta=$(fm_backend_meta_for_window "$w" "$STATE" 2>/dev/null || true)
   if [ -n "$meta" ]; then
-    backend=$(grep '^backend=' "$meta" | cut -d= -f2- || true)
-    [ -n "$backend" ] || backend=tmux
-    echo "$backend"
+    printf '%s\n' "$(fm_backend_of_meta "$meta")"
     return 0
   fi
   echo tmux

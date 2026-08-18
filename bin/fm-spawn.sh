@@ -54,7 +54,8 @@
 #   auto-detected tmux stays silent; zellij and orca are never auto-detected.
 #   codex-app is not a known backend yet; docs/codex-app-backend.md owns that
 #   blocked backend contract. Default tmux spawns do not write backend= to meta;
-#   absent backend= means tmux. cmux does not support --secondmate spawns yet.
+#   absent backend= means tmux - except on Windows, where backend= is always
+#   written because no tmux exists there for the default to name. cmux does not support --secondmate spawns yet.
 #   A backend spawn refusal (missing dependency, version gate, unauthenticated
 #   socket, or unsupported secondmate mode) is terminal for that selected backend;
 #   callers must surface it instead of silently retrying another backend.
@@ -2701,7 +2702,19 @@ preserve_relaunch_meta() {
   # backend= is written only for a non-default (non-tmux) backend, so the
   # default path's meta stays byte-identical (absent backend= means tmux;
   # data/fm-backend-design-d7's P1 compatibility contract).
-  [ "$BACKEND" = tmux ] || echo "backend=$BACKEND"
+  #
+  # WINDOWS ARM. That contract is load-bearing for every existing POSIX home,
+  # so the absent-value default itself is NOT touched: fm_backend_of_meta still
+  # answers tmux, and a POSIX home's existing meta files keep reading back
+  # exactly as they always have. What changes is only what a Windows home
+  # WRITES. There is no tmux on Windows, so an absent backend= there would name
+  # a session provider that cannot exist; recording it explicitly means no
+  # Windows meta ever depends on the default. Reinterpreting the absent value
+  # per home was the alternative and is worse: it would retroactively change how
+  # already-written records read whenever config/backend changed.
+  if [ "$BACKEND" != tmux ] || fm_platform_is_windows; then
+    echo "backend=$BACKEND"
+  fi
   if [ "$BACKEND" = herdr ]; then
     echo "herdr_session=$HERDR_SES"
     echo "herdr_workspace_id=$HERDR_WORKSPACE_ID"
