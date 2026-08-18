@@ -14,9 +14,13 @@
 #      fm_lock_try_create and every lock in the fleet then spins forever.
 #   3. fm_proc_pids_with_cwd_under replaces the absent lsof, because Windows
 #      also physically REFUSES to delete a directory a live process sits in.
+#   4. fm_lock_same_path lets the same lock validation survive MSYS reading a
+#      native symlink back in a DIFFERENT spelling from the one it was given,
+#      which is the second way that validation can never match and every lock
+#      spins forever.
 #
-# The fourth blocker - the private-file mode assertion - is a security boundary
-# and has its own file: tests/fm-pr-private-file-mode.test.sh.
+# The remaining blocker - the private-file mode assertion - is a security
+# boundary and has its own file: tests/fm-pr-private-file-mode.test.sh.
 set -u
 
 # shellcheck source=tests/lib.sh
@@ -24,6 +28,8 @@ set -u
 
 # shellcheck source=/dev/null
 . "$ROOT/bin/fm-proc-lib.sh"
+# shellcheck source=/dev/null
+. "$ROOT/bin/fm-wake-lib.sh"
 
 # Build a fake MSYS-shaped /proc: per-pid scalar files instead of Linux's stat.
 fake_msys_proc() {  # <root> <pid> <ppid> <pgid> <sid> <exename> <arg>...
@@ -206,6 +212,95 @@ test_proc_cwd_scan_reports_scan_failure_distinctly() {
   pass "fm_proc_pids_with_cwd_under: an unusable /proc returns failure, not an empty result"
 }
 
+
+# --- 4. symlink target spelling ---------------------------------------------
+
+# Run a predicate with PATH replaced, then put PATH back. Replacing PATH is the
+# case under test - these functions decide what to do by probing for a resolver
+# on it - so the warnings about doing that are the expected shape here.
+with_path() {  # <path> <command>...
+  local restore=$PATH rc=0
+  # shellcheck disable=SC2123 # Replacing the search path is exactly what is under test.
+  PATH=$1
+  shift
+  "$@" || rc=$?
+  PATH=$restore
+  return "$rc"
+}
+
+# MSYS resolves a native symlink's stored Windows target back through its mount
+# table, so readlink can answer in a canonical POSIX spelling that is not the
+# one passed to `ln -s`. Measured on Git-for-Windows MINGW64: a directory
+# created as /c/Users/<user>/AppData/Local/Temp/x/target reads back as
+# /tmp/x/target, because the mount table aliases the two. The strict compare in
+# fm_lock_points_to_owner then never matches, fm_lock_try_create never validates
+# its own link, and fm_lock_acquire_wait spins forever.
+#
+# cygpath owns the mount table and is therefore the only thing that can answer
+# this; `cd ... && pwd -P` cannot, because it canonicalises symlinked components
+# but leaves the mount alias exactly as given (also measured). The test drives
+# the resolver through a stub so the contract is pinned on a POSIX host too.
+test_lock_same_path_resolves_a_mount_alias_only_through_cygpath() {
+  local dir out
+  dir=$(fm_test_tmproot fm-lock-same-path) || fail "could not create a fixture dir"
+  mkdir -p "$dir/real" "$dir/other"
+
+  # No cygpath (every POSIX host): the strict compare is the only verdict, so
+  # two different spellings stay unresolved rather than being widened.
+  out=0
+  with_path /nonexistent-for-this-test fm_lock_same_path "$dir/real" "$dir/other" || out=1
+  [ "$out" = 1 ] || fail "same-path: without cygpath, two paths must never be reported the same"
+  out=0
+  with_path /nonexistent-for-this-test fm_lock_same_path "$dir/real" "$dir/real" || out=1
+  [ "$out" = 1 ] \
+    || fail "same-path: without a resolver even an identical pair must stay unresolved; the strict compare in fm_lock_points_to_owner is what accepts it"
+
+  # With a cygpath that reports the alias: the two spellings resolve together.
+  mkdir -p "$dir/stub"
+  cat > "$dir/stub/cygpath" <<'STUB'
+#!/usr/bin/env bash
+# Stand-in for the MSYS mount table: both spellings of the temp directory are
+# one Windows path, and anything else is returned unchanged.
+p=${!#}
+case "$p" in
+  /c/Users/probe/AppData/Local/Temp/*) printf 'C:/Users/probe/AppData/Local/Temp/%s\n' "${p#/c/Users/probe/AppData/Local/Temp/}" ;;
+  /tmp/*) printf 'C:/Users/probe/AppData/Local/Temp/%s\n' "${p#/tmp/}" ;;
+  *) printf '%s\n' "$p" ;;
+esac
+STUB
+  chmod +x "$dir/stub/cygpath"
+  out=0
+  with_path "$dir/stub:$PATH" \
+    fm_lock_same_path /c/Users/probe/AppData/Local/Temp/home/state/.wake.lock.owner.AbCdEf \
+    /tmp/home/state/.wake.lock.owner.AbCdEf || out=1
+  [ "$out" = 0 ] \
+    || fail "same-path: the two spellings of one mount-aliased directory must resolve to the same location"
+  out=0
+  with_path "$dir/stub:$PATH" \
+    fm_lock_same_path /c/Users/probe/AppData/Local/Temp/home/state/.wake.lock.owner.AbCdEf \
+    /tmp/home/state/.wake.lock.owner.ZzZzZz || out=1
+  [ "$out" = 1 ] \
+    || fail "same-path: SECURITY - two genuinely different owner directories must never resolve the same"
+  pass "fm_lock_same_path: widens a mount-aliased spelling through cygpath and stays strict everywhere else"
+}
+
+# The widening must live only in the fallback: an exact readlink answer is still
+# accepted with no resolver involved at all.
+test_lock_points_to_owner_still_accepts_an_exact_readlink_answer() {
+  local dir
+  dir=$(fm_test_tmproot fm-lock-points-to-owner) || fail "could not create a fixture dir"
+  mkdir -p "$dir/owner" "$dir/nocyg"
+  ln -s "$dir/owner" "$dir/lock" || fail "fixture: could not create the owner link"
+  # A PATH carrying readlink and deliberately no cygpath, so the case holds on a
+  # Windows host running this suite too.
+  ln -s "$(command -v readlink)" "$dir/nocyg/readlink" || fail "fixture: could not stage readlink"
+  with_path "$dir/nocyg" fm_lock_points_to_owner "$dir/lock" "$dir/owner" \
+    || fail "points-to-owner: an exact readlink match must be accepted without any resolver"
+  with_path "$dir/nocyg" fm_lock_points_to_owner "$dir/lock" "$dir/somewhere-else" \
+    && fail "points-to-owner: a link to a different directory must never validate"
+  pass "fm_lock_points_to_owner: the strict readlink compare remains the primary, unresolved verdict"
+}
+
 test_proc_field_reads_msys_layout
 test_proc_field_falls_back_to_ps_where_proc_is_absent
 test_proc_field_rejects_bad_input
@@ -214,3 +309,5 @@ test_symlink_probe_proves_rather_than_assumes
 test_native_symlink_mode_is_set_and_preserves_operator_choice
 test_proc_cwd_scan_finds_processes_rooted_under_a_directory
 test_proc_cwd_scan_reports_scan_failure_distinctly
+test_lock_same_path_resolves_a_mount_alias_only_through_cygpath
+test_lock_points_to_owner_still_accepts_an_exact_readlink_answer
