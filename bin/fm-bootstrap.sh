@@ -754,6 +754,25 @@ secondmate_handoff_detect() {
 }
 
 install_cmd() {
+  # Windows arm first: brew does not exist there, so the generic hint named a
+  # package manager the host cannot have. Confirmed live on Windows, where every
+  # missing-tool line read "brew install <tool>". winget ships with Windows 10+
+  # and scoop is the common alternative, so both are named. Only tools that
+  # genuinely have a Windows package get an install command; the POSIX-only
+  # session providers get pointed at the backend that does exist there instead.
+  if fm_platform_is_windows; then
+    case "$1" in
+      node) echo "winget install OpenJS.NodeJS  # or scoop install nodejs" ; return 0 ;;
+      git) echo "winget install Git.Git  # or scoop install git" ; return 0 ;;
+      gh) echo "winget install GitHub.cli  # or scoop install gh" ; return 0 ;;
+      curl) echo "winget install cURL.cURL  # or scoop install curl" ; return 0 ;;
+      jq) echo "winget install jqlang.jq  # or scoop install jq" ; return 0 ;;
+      tmux|zellij|cmux)
+        echo "no Windows package; set config/backend to conpty instead (docs/conpty-backend.md)"
+        return 0
+        ;;
+    esac
+  fi
   case "$1" in
     tmux|node|git|gh|curl|jq|orca|zellij) echo "brew install $1  # or the platform's package manager" ;;
     cmux) echo "brew install --cask cmux  # or see https://cmux.com" ;;
