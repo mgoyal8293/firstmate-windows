@@ -48,6 +48,7 @@ test_proc_field_reads_msys_layout() {
   root=$(fm_test_tmproot fm-proc) || fail "proc-field: could not create a fixture root"
   fake_msys_proc "$root" 4242 1 4242 4242 '/c/nvm4w/nodejs/node' \
     'C:\Users\x\AppData\Local\claude\versions\2.1.220\claude.js' --resume
+  # shellcheck disable=SC2034 # Read by bin/fm-proc-lib.sh fm_proc_root.
   FM_PROC_ROOT_OVERRIDE=$root
 
   out=$(fm_proc_field 4242 ppid) || fail "proc-field: ppid read failed"
@@ -78,6 +79,7 @@ test_proc_field_falls_back_to_ps_where_proc_is_absent() {
   # substitution invisible off Windows. Where it does not (MSYS `ps` rejects -o
   # outright, the blocker this whole file exists for) there is nothing to fall
   # back TO, and the caller correctly reads the pid as unreadable.
+  # shellcheck disable=SC2034 # Read by bin/fm-proc-lib.sh fm_proc_root.
   FM_PROC_ROOT_OVERRIDE=$root
   if LC_ALL=C ps -o ppid= -p "$$" >/dev/null 2>&1; then
     out=$(fm_proc_field "$$" ppid | tr -d '[:space:]') \
@@ -97,6 +99,7 @@ test_proc_field_falls_back_to_ps_where_proc_is_absent() {
 }
 
 test_proc_field_rejects_bad_input() {
+  # shellcheck disable=SC2034 # Read by bin/fm-proc-lib.sh fm_proc_root.
   FM_PROC_ROOT_OVERRIDE=/nonexistent-proc-root
   fm_proc_field '' ppid >/dev/null 2>&1 && fail "proc-field: an empty pid must not succeed"
   fm_proc_field 'not-a-pid' ppid >/dev/null 2>&1 && fail "proc-field: a non-numeric pid must not succeed"
@@ -108,6 +111,7 @@ test_proc_field_rejects_unknown_field() {
   local root
   root=$(fm_test_tmproot fm-proc) || fail "proc-field: could not create a fixture root"
   fake_msys_proc "$root" 77 1 77 77 /usr/bin/bash
+  # shellcheck disable=SC2034 # Read by bin/fm-proc-lib.sh fm_proc_root.
   FM_PROC_ROOT_OVERRIDE=$root
   fm_proc_field 77 lstart >/dev/null 2>&1 \
     && fail "proc-field: an unmapped field must not silently succeed on the /proc path"
@@ -132,21 +136,33 @@ test_symlink_probe_proves_rather_than_assumes() {
 }
 
 test_native_symlink_mode_is_set_and_preserves_operator_choice() {
-  local out
+  local out start
   # The exported normalisation is what the whole lock layer depends on, so it is
   # asserted on the platform it applies to and asserted INERT everywhere else.
-  out=$(MSYS= bash -c ". '$ROOT/bin/fm-proc-lib.sh'; printf '%s' \"\${MSYS:-}\"")
-  if fm_platform_is_windows; then
-    case "$out" in
-      *winsymlinks:nativestrict*) : ;;
-      *) fail "native-symlinks: MSYS must carry winsymlinks:nativestrict, got '$out'" ;;
+  #
+  # Both starting states are covered on purpose. fm_platform_enable_native_symlinks
+  # branches on "${MSYS:-}", which collapses an UNSET variable and a
+  # PRESENT-BUT-EMPTY one to the same '' arm - so that equivalence is an
+  # assumption, and an assumption a test should pin rather than inherit. `env -u`
+  # and `env MSYS=` are the two states spelled out; a bare `MSYS= bash` prefix
+  # would only ever exercise the second.
+  for start in unset empty; do
+    case "$start" in
+      unset) out=$(env -u MSYS bash -c ". '$ROOT/bin/fm-proc-lib.sh'; printf '%s' \"\${MSYS:-}\"") ;;
+      empty) out=$(env MSYS= bash -c ". '$ROOT/bin/fm-proc-lib.sh'; printf '%s' \"\${MSYS:-}\"") ;;
     esac
-  else
-    [ -z "$out" ] \
-      || fail "native-symlinks: must stay inert off Windows, but MSYS became '$out'"
-  fi
+    if fm_platform_is_windows; then
+      case "$out" in
+        *winsymlinks:nativestrict*) : ;;
+        *) fail "native-symlinks: from $start, MSYS must carry winsymlinks:nativestrict, got '$out'" ;;
+      esac
+    else
+      [ -z "$out" ] \
+        || fail "native-symlinks: from $start, must stay inert off Windows, but MSYS became '$out'"
+    fi
+  done
   # An operator who already expressed a winsymlinks preference keeps it verbatim.
-  out=$(MSYS=winsymlinks:lnk bash -c ". '$ROOT/bin/fm-proc-lib.sh'; printf '%s' \"\$MSYS\"")
+  out=$(env MSYS=winsymlinks:lnk bash -c ". '$ROOT/bin/fm-proc-lib.sh'; printf '%s' \"\$MSYS\"")
   [ "$out" = winsymlinks:lnk ] \
     || fail "native-symlinks: an existing winsymlinks preference must be preserved, got '$out'"
   pass "fm_platform_enable_native_symlinks: sets nativestrict on Windows, inert elsewhere, never overrides an explicit choice"
@@ -179,6 +195,7 @@ test_proc_cwd_scan_finds_processes_rooted_under_a_directory() {
 }
 
 test_proc_cwd_scan_reports_scan_failure_distinctly() {
+  # shellcheck disable=SC2034 # Read by bin/fm-proc-lib.sh fm_proc_root.
   FM_PROC_ROOT_OVERRIDE=/definitely-not-a-proc-root
   fm_proc_pids_with_cwd_under /tmp >/dev/null 2>&1 \
     && fail "cwd-scan: an impossible scan must return non-zero, never a proven-empty result"

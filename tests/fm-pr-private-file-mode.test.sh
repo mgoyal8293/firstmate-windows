@@ -26,6 +26,23 @@ set -u
 # shellcheck source=/dev/null
 . "$ROOT/bin/fm-pr-lib.sh"
 
+# Clear the capability memo so the next probe re-measures. The two globals are
+# owned by bin/fm-pr-lib.sh, so shellcheck cannot see their use from here.
+# shellcheck disable=SC2034 # Read and written by bin/fm-pr-lib.sh fm_pr_mode_enforced.
+reset_mode_memo() {
+  FM_PR_MODE_ENFORCED_DIR=
+  FM_PR_MODE_ENFORCED=
+}
+
+# Pin the memo to "this directory does not enforce modes", which is exactly the
+# state the probe reaches on a Git-for-Windows noacl mount. Simulating it is what
+# lets the waiver's behaviour be asserted from a POSIX runner.
+# shellcheck disable=SC2034 # Read by bin/fm-pr-lib.sh fm_pr_mode_enforced.
+pin_mode_not_enforced() {  # <dir>
+  FM_PR_MODE_ENFORCED_DIR=$1
+  FM_PR_MODE_ENFORCED=1
+}
+
 test_mode_assertion_stays_strict_where_chmod_works() {
   local root f
   root=$(fm_test_tmproot fm-mode) || fail "mode-gate: could not create a fixture root"
@@ -36,13 +53,13 @@ test_mode_assertion_stays_strict_where_chmod_works() {
     pass "skip: this filesystem does not enforce modes, so the strict half cannot be exercised here"
     return 0
   }
-  FM_PR_MODE_ENFORCED_DIR=; FM_PR_MODE_ENFORCED=
+  reset_mode_memo
   fm_pr_file_mode_is "$f" 600 || fail "mode-gate: a correct mode must validate"
-  FM_PR_MODE_ENFORCED_DIR=; FM_PR_MODE_ENFORCED=
+  reset_mode_memo
   fm_pr_file_mode_is "$f" 700 \
     && fail "mode-gate: SECURITY - a WRONG mode must be refused where chmod round-trips"
   chmod 0644 "$f"
-  FM_PR_MODE_ENFORCED_DIR=; FM_PR_MODE_ENFORCED=
+  reset_mode_memo
   fm_pr_file_mode_is "$f" 600 \
     && fail "mode-gate: SECURITY - a world-readable artifact must be refused where chmod round-trips"
   pass "fm_pr_file_mode_is: the exact-mode assertion stays strict wherever chmod round-trips"
@@ -56,11 +73,10 @@ test_mode_assertion_is_waived_only_where_chmod_cannot_round_trip() {
   chmod 0644 "$f"
   # Simulate the noacl filesystem by pinning the memo to "not enforced" for this
   # directory, which is exactly the state the probe reaches on Git for Windows.
-  FM_PR_MODE_ENFORCED_DIR=$root
-  FM_PR_MODE_ENFORCED=1
+  pin_mode_not_enforced "$root"
   fm_pr_file_mode_is "$f" 600 \
     || fail "mode-gate: where modes are not enforced the assertion must be waived, or no PR can ever be merged"
-  FM_PR_MODE_ENFORCED_DIR=; FM_PR_MODE_ENFORCED=
+  reset_mode_memo
   pass "fm_pr_file_mode_is: waives the exact-mode assertion only where the filesystem provably cannot express it"
 }
 
@@ -79,19 +95,19 @@ exit 0
 SH
   chmod +x "$fakebin/chmod"
 
-  FM_PR_MODE_ENFORCED_DIR=; FM_PR_MODE_ENFORCED=
+  reset_mode_memo
   PATH="$fakebin:$PATH" fm_pr_mode_enforced "$root" \
     && fail "mode-probe: a no-op chmod must NOT read as an enforcing filesystem"
 
-  FM_PR_MODE_ENFORCED_DIR=; FM_PR_MODE_ENFORCED=
+  reset_mode_memo
   if fm_pr_mode_enforced "$root"; then
     : # the real chmod on this host enforces, which is the other half below
   else
     pass "skip: this filesystem does not enforce modes, so the contrast cannot be shown here"
-    FM_PR_MODE_ENFORCED_DIR=; FM_PR_MODE_ENFORCED=
+    reset_mode_memo
     return 0
   fi
-  FM_PR_MODE_ENFORCED_DIR=; FM_PR_MODE_ENFORCED=
+  reset_mode_memo
   pass "fm_pr_mode_enforced: a no-op chmod reads as not-enforcing even though mktemp already created the probe at 0600"
 }
 
@@ -101,8 +117,7 @@ test_private_file_binding_keeps_its_other_assertions_when_mode_is_waived() {
   f="$root/artifact"
   : > "$f"
   device=$(fm_pr_file_device "$f") || fail "mode-gate: could not read the fixture device"
-  FM_PR_MODE_ENFORCED_DIR=$root
-  FM_PR_MODE_ENFORCED=1
+  pin_mode_not_enforced "$root"
 
   fm_pr_private_file_valid "$f" 600 "$device" \
     || fail "mode-gate: the binding must still validate a genuine private artifact"
@@ -120,7 +135,7 @@ test_private_file_binding_keeps_its_other_assertions_when_mode_is_waived() {
     fm_pr_private_file_valid "$f" 600 "$device" \
       && fail "mode-gate: SECURITY - a link count above 1 must still be refused when the mode check is waived"
   }
-  FM_PR_MODE_ENFORCED_DIR=; FM_PR_MODE_ENFORCED=
+  reset_mode_memo
   pass "fm_pr_private_file_valid: device pin, symlink refusal and link-count 1 all survive the waived mode assertion"
 }
 

@@ -75,33 +75,28 @@ spawns reports `ppid = 1`. The ancestry walk therefore terminates on hop one wit
 no harness found, and `bin/fm-lock.sh acquire` still refuses - which keeps a
 Windows session read-only under `AGENTS.md` section 3.
 
-Measured inside a genuine Windows Claude Code session (2.1.200, `claude -p` with
-a SessionStart hook), the chain is recoverable, just not from `/proc`:
-
-```
-MSYS pid=89  winpid=12140  msys_ppid=1        CLAUDECODE=1
-12140 bash.exe   ppid=10412   .../bash.exe .../probe.sh
-10412 bash.exe   ppid=41800   .../bash.exe -c "bash \"$CLAUDE_PROJECT_DIR/probe.sh\""
-41800 bash.exe   ppid=34040   .../bash.exe -c "bash \"$CLAUDE_PROJECT_DIR/probe.sh\""
-34040 claude.exe ppid=29440   ...\@anthropic-ai\claude-code\bin\claude.exe -p ...
-29440 sh.exe     ppid=14864   .../sh.exe /c/.../npm/claude -p ...
-```
+The chain is recoverable, just not from `/proc`: the Bash tool subprocess reads
+`msys_ppid = 1` while its Windows parent chain runs bash -> bash -> bash ->
+`claude.exe` -> sh, with `CLAUDECODE=1` present in the environment throughout.
 
 `ps -W` lists native processes but reports `PPID 0` for them, so it cannot walk
 the chain. `Get-CimInstance Win32_Process` can, and identifies `claude.exe` by
-both its name and its install path - but one CIM call costs **566 ms**, and the
-Stop hook runs it every turn.
+both its name and its install path - but one CIM call costs roughly half a
+second, and the Stop hook runs every turn.
 
-This is a design decision, not a missing line of code, and it is the inventory's
-own P0 item 3 ("harness ancestry under Windows Claude Code - needs discussion").
-The hard part is not reading the chain, it is what the lock then STORES: every
-other caller (`fm_harness_pid_alive`, `fm_session_lock_owned_by_self`, `kill -0`)
-treats the recorded value as an MSYS pid, and a Windows pid is a different
-namespace. Recording one without a namespace tag would let a lock-ownership test
-match the wrong process. Options worth weighing: a tagged Windows identity across
-the session-lock owner; a single whole-table CIM read cached per hook run; or
-leaning on `CLAUDECODE` for detection while finding another way to answer "is
-this the session that owns the lock?".
+The hard part was never reading the chain - it is what the lock then STORES.
+Every other caller (`fm_harness_pid_alive`, `fm_session_lock_owned_by_self`,
+`kill -0`) treats the recorded value as an MSYS pid, so recording a Windows pid
+would put two namespaces behind one field and let a lock-ownership test match the
+wrong process.
+
+**Decided: ownership moves to a per-session token, added alongside the ancestry
+path rather than replacing it.** A session proves it owns the lock by holding a
+unique token, so nothing has to ask "who is my parent", no Windows pid is ever
+recorded, no caller becomes namespace-aware, and no half-second process query
+runs per turn. The Unix ancestry path is untouched and the token path is used
+only where ancestry is unavailable, which is also what keeps upstream merges
+clean. Tracked separately from this change.
 
 ## Not yet ported
 

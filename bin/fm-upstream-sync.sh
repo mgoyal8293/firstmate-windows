@@ -105,6 +105,7 @@ SUMMARY=
 
 WORKTREE=
 SCRATCH_BRANCH="fm/upstream-sync-scratch-$$"
+# shellcheck disable=SC2329 # Registered by the EXIT trap below.
 cleanup() {
   [ -n "$WORKTREE" ] || return 0
   if [ "$KEEP" -eq 1 ]; then
