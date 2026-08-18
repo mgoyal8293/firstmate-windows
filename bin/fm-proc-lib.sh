@@ -36,6 +36,14 @@
 # the only way those arms get regression coverage at all before someone runs the
 # suite on Windows.
 FM_PROC_UNAME_S="${FM_PLATFORM_UNAME_OVERRIDE:-$(uname -s 2>/dev/null || echo unknown)}"
+# The same read with the test seam deliberately NOT consulted, for the one thing
+# the seam must never reach: the identity string fm_pid_identity prints.
+# A capability arm is evaluated now and acted on now, so the suite driving it from
+# a POSIX runner is exactly the point. An identity is written once and compared
+# later, possibly by another process, so an identity whose bytes moved with the
+# seam would mismatch for a live unchanged process - the false-dead verdict this
+# file exists to prevent.
+FM_PROC_HOST_UNAME_S="$(uname -s 2>/dev/null || echo unknown)"
 
 # True on the Windows POSIX-emulation runtimes: Git for Windows / MSYS2
 # (MINGW32_NT-*, MINGW64_NT-*, MSYS_NT-*) and Cygwin (CYGWIN_NT-*).
@@ -195,14 +203,18 @@ fm_pid_identity() {  # <pid>
     cmdline_hex=$(od -An -v -tx1 "$proc_root/$pid/cmdline" 2>/dev/null | tr -d '[:space:]') || return 1
     [ -n "$cmdline_hex" ] || return 1
     identity_key=proc-starttime
-    [ "$FM_PROC_UNAME_S" != Linux ] || identity_key=linux-starttime
+    [ "$FM_PROC_HOST_UNAME_S" != Linux ] || identity_key=linux-starttime
     printf '%s=%s cmdline-hex=%s\n' "$identity_key" "$starttime" "$cmdline_hex"
     return 0
   fi
-  # Pin LC_ALL=C so lstart's date format is locale-invariant: the identity is
-  # written under one locale but re-read under the machine's ambient locale, which
-  # would otherwise mismatch on a non-C locale (e.g. ko_KR) and reject a live watcher.
-  out=$(LC_ALL=C ps -p "$pid" -o lstart= -o command= 2>/dev/null) || return 1
+  # Neither the caller's locale nor the caller's terminal width may reach a value
+  # that is written once and compared later. LC_ALL=C keeps lstart's date format
+  # invariant, which would otherwise mismatch on a non-C locale (e.g. ko_KR) and
+  # reject a live watcher. COLUMNS pins the width BSD/Darwin ps takes from an
+  # exported COLUMNS, else the terminal, else a roughly 79-column default, and
+  # truncates the trailing command column to, which would otherwise make the
+  # identity depend on the width of whichever terminal happened to write it.
+  out=$(COLUMNS=10000 LC_ALL=C ps -p "$pid" -o lstart= -o command= 2>/dev/null) || return 1
   [ -n "$out" ] || return 1
   printf '%s\n' "$out" | sed 's/^[[:space:]]*//'
 }
@@ -211,9 +223,11 @@ fm_pid_identity() {  # <pid>
 #
 # TRANSITIONAL. The identity read exactly as the release before fm_pid_identity
 # owned it wrote it, COLUMNS pin and leading whitespace included, because
-# reproducing the bytes that release stored is this function's entire purpose:
-# fm_pid_identity's own ps fallback differs from it in both the width pin and in
-# whitespace handling, so the two are not interchangeable.
+# reproducing byte-for-byte what that release stored is this function's entire
+# purpose: fm_pid_identity's own ps fallback now pins the same width and differs
+# from it only in stripping leading whitespace, so the two are still not
+# interchangeable. What classifies a stored value is its format tag, never a
+# difference in shape between the two readers.
 #
 # Call it ONLY to read an identity an older release already wrote into a record.
 # Never call it to describe a live process for a new record - fm_pid_identity is

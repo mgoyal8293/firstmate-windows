@@ -69,6 +69,9 @@
 # An untagged value was written by that previous reader. No fm_pid_identity output
 # can equal one on a /proc runtime, so reading an untagged record as current would
 # report a live sender dead - the precise failure the tag exists to prevent.
+# The tag is what classifies a stored value, never a difference in shape between
+# the two readers: they now pin the same width and differ only in that
+# fm_pid_identity strips leading whitespace where the legacy reader keeps it.
 # fm_pending_reply_sender_alive therefore reads an untagged record in its own
 # format, through bin/fm-proc-lib.sh's fm_pid_identity_legacy_ps, and never
 # rewrites it: a liveness read holds no lock, so it must not touch the record.
@@ -830,8 +833,8 @@ fm_pending_reply_sender_alive() {  # <record-path>
 # one written by the release that read sender identity here itself.
 #
 # An untagged value can only be compared against the exact command that produced
-# it, COLUMNS pin included: fm_pid_identity's own ps fallback differs from it in
-# both that pin and in leading-whitespace handling, so the two are not
+# it: fm_pid_identity's own ps fallback now pins the same width and differs from
+# it only in stripping leading whitespace, so the two are still not
 # interchangeable even on a runtime with no /proc, and sniffing the stored string
 # for its shape would be a guess about vendor date output. So read it back through
 # bin/fm-proc-lib.sh's fm_pid_identity_legacy_ps, which is that exact command and
