@@ -714,6 +714,83 @@ FM_CMUX_CLAUDE_COMPOSER_LIVE=1 bin/fm-test-run.sh tests/fm-cmux-claude-composer-
 
 The portable classifier regression is `tests/fm-backend-cmux.test.sh`.
 
+## conpty
+
+The compatibility floor is Windows 10 1809 (ConPTY's own floor) with Node 20.
+Active live evidence is a manual pass recorded on 2026-08-18 against Windows 10.0.26200, Node v22.18.0, node-pty 1.1.0, @xterm/headless 6.0.0, and a real Claude Code 2.1.220.
+Windows is not a Firstmate CI platform, so this evidence is a recorded manual pass rather than a gate that reruns on every change; the portable regression is `tests/fm-backend-conpty.test.sh`, which fakes the session client.
+
+Detachment and reattach:
+
+```text
+launcher returned in 142 ms
+{"ok":true,"daemonPid":36576,"pipe":"\\\\.\\pipe\\fmpty-gb1","epoch":1}
+```
+
+The launcher returns immediately because the daemon is started with explicit file-backed stdio.
+The naive `stdio: 'ignore'` recipe leaks an ancestor pipe handle into the grandchild and blocks the launching pipeline for the grandchild's whole life; the spike measured that at two full minutes.
+A fresh, unrelated process read the session and drove the agent after the launcher had exited.
+The same was reconfirmed against this implementation from PowerShell 5.1 with no node involved, so the reattach path does not depend on the client being the program that started the session.
+
+Liveness, with identity validated by name and process start time:
+
+```text
+shell-only session
+  state=dead why=only shells attached
+  procs=[{"pid":6676,"name":"bash.exe","startTicks":"639226461832722731","identityValidated":true}, ...]
+
+after launching claude in the same session
+  state=alive why=harness process claude.exe screen=agent identityValidated=true
+  procs=[..., {"pid":18652,"name":"claude.exe","startTicks":"639226462588540213","identityValidated":true}, ...]
+```
+
+Probe cost was the spike's fourth follow-up item and is resolved:
+
+| Source | Measured | Use |
+| --- | --- | --- |
+| warm liveness read, end to end | 48-67 ms | the normal path |
+| `tasklist.exe /FO CSV /NH` | ~410-450 ms | name-only fallback |
+| `powershell Get-Process` (all pids) | ~625 ms | batched name plus start ticks |
+| `powershell Get-CimInstance Win32_Process` | ~1100 ms | rejected, no advantage |
+| `tasklist.exe /V` | ~38 000 ms | never used |
+
+`wmic` is absent from this Windows build, so it is not an option for creation times.
+The spike's stale-cache defect was reproduced (a read served a 230 s-old process list) and fixed: liveness now refreshes before deciding, and concurrent readers wait on the same in-flight sweep.
+
+| Guarantee | Command shape | Result |
+| --- | --- | --- |
+| Create | `spawn --id <scoped> --cmd <bash> --arg -i --cwd <dir>` | Detached daemon bound its pipe; launcher exited in 142 ms. |
+| Reattach | any later process, `health --id <scoped>` | `live`, answered with the session nonce, no pid consulted. |
+| Reattach, non-node | PowerShell 5.1 talking to the pipe directly | Pinged the identity oracle, read `agent-state`, wrote text, submitted it, and read the screen back. The control surface is not node-specific, which matters because Firstmate's backends are shell scripts. |
+| Duplicate refusal | second `spawn` on a live id | Refused; the pipe is also the mutex (`EADDRINUSE`). |
+| cwd before harness | OSC title from Git Bash | `/d/AI/winfm-backend/work/proj`, and it followed a `cd`. |
+| cwd after harness | same read once Claude owned the title | Title became `✳ <answer>`; the last shell-reported path was correctly retained. |
+| Literal send | `send --text-file <f>` then `key --key Enter` | Unsubmitted, then submitted. |
+| Composer, empty | shared classifier, `styled=1 cursor=1` | `empty`, cursor row 37 reading `❯`. |
+| Composer, pending | after typing without submitting | `pending`, cursor column 72. |
+| Submit | `fm_backend_send_text_submit` | Verdict `empty`, the only string that confirms delivery. |
+| Busy | `busy` before, during, after a turn | `lastDataAgeMs` 1665 -> 28 -> 3483; bytes 3818 -> 5079 -> 7185. |
+| Clean kill | `kill --id <scoped>` | Daemon, shell, and `claude.exe` all gone; zero orphans. |
+| Crash | `taskkill /F` on the daemon | Daemon, shell, and `claude.exe` all gone; no orphan held the worktree. |
+| Crash detection | `health` after that kill | `crashed` (record still `running`), transcript preserved at 3665 bytes. |
+| Recorded-pid identity | `verify` after that kill | Both recorded pids reported `gone`, never guessed alive. |
+| Restart | `restart --id <scoped>` | New epoch 2 with a new nonce; prior transcript rotated to `transcript.log.epoch1`. |
+
+Unknowns the spike left open, resolved here:
+
+| Unknown | Result |
+| --- | --- |
+| Resize under load | Four resizes (100x30, 160x50, 80x24, 120x40) during continuous output: all clean, and the styled screen stayed exactly one line per row at every size, so the cursor row kept indexing correctly. |
+| Non-ASCII and wide glyphs | Exact for all nine cases: CJK, Japanese kana, astral emoji, combining marks, box drawing, Latin accents, Cyrillic, and mixed-width runs. Buffer content matched what was written byte for byte. |
+| Scrollback limits | Exact and bounded. With `--scrollback 500` and 2000 emitted lines, the buffer held 540 rows (500 scrollback plus a 40-row viewport) and capture returned exactly those. The durable transcript held all 2000. While Claude holds the alternate screen the buffer type is `alternate` and no scrollback exists at all, matching tmux on an alt-screen pane. |
+| Behaviour across a Windows sign-out | **Not verified by a live sign-out.** Measured: the daemon, its shell, and the agent all run in interactive logon SessionId 4, alongside only a `services` session 0, so Windows' session teardown at logoff ends them. Separately verified: the pipe namespace is machine-global, not session-scoped - an unrelated process listed all live `fmpty-*` pipes among 340 - so the control surface is not the limiting factor. A live sign-out would have terminated the session running the verification itself; `docs/conpty-backend.md` carries the exact two-minute test to settle it. |
+
+```sh
+tests/fm-backend-conpty.test.sh
+```
+
+Refresh this proof before accepting a node-pty, xterm.js, or Windows upgrade: rerun the manual pass above on a Windows host and update the version line.
+
 ## Codex App host tools
 
 A reusable Desktop host-tool smoke ran on 2026-07-06 against Codex Desktop bundle version 26.623.101652, build 4674, bundle id `com.openai.codex`.

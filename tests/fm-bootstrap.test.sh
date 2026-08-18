@@ -637,7 +637,12 @@ test_unknown_backend_reports_invalid_configuration() {
   fakebin=$(make_fake_toolchain "$case_dir")
   out=$(PATH="$fakebin:$BASE_PATH" FM_HOME="$case_dir/home" FM_ROOT_OVERRIDE="$case_dir/home" \
     FM_FAKE_TREEHOUSE_LEASE_HELP=1 "$ROOT/bin/fm-bootstrap.sh")
-  assert_contains "$out" "BACKEND_INVALID: bogus (known: tmux herdr zellij orca cmux)" \
+  # Derived from FM_BACKEND_KNOWN rather than spelled out again: this assertion
+  # is about the diagnostic naming the known set, not about which backends
+  # happen to be in it, and a hardcoded copy silently rots every time one is
+  # added.
+  known=$(bash -c '. "$0/bin/fm-backend.sh" >/dev/null 2>&1; printf "%s" "$FM_BACKEND_KNOWN"' "$ROOT")
+  assert_contains "$out" "BACKEND_INVALID: bogus (known: $known)" \
     "bootstrap should report an unknown resolved backend"
   assert_not_contains "$out" "MISSING: tmux" "an unknown backend should not silently fall back to tmux dependencies"
   pass "bootstrap: unknown resolved backends fail closed with an actionable diagnostic"
