@@ -156,6 +156,40 @@ if fm_backend_tmux_resolve_bare_selector "no-such-window-xyz" 2>/dev/null; then
 fi
 pass "real tmux: fm_backend_tmux_resolve_bare_selector fails for a window that does not exist"
 
+# --- target_exists (the cheap read-only presence probe) ----------------------
+#
+# The property under test is EQUIVALENCE, not a particular verdict: the adapter
+# function and the fm_backend_target_exists dispatcher must answer exactly what
+# the raw `tmux display-message -p -t <target> '#{pane_id}'` call they replaced
+# answered, for the same targets. That is the whole safety argument for moving
+# the probe out of bin/fm-backend.sh's dispatcher and out of fm-crew-state.sh's
+# pane_readable. Asserting a fixed verdict instead would encode this tmux
+# build's own target-resolution behaviour, which the refactor neither owns nor
+# changes.
+probe_verdicts() {  # <target> -> "<raw> <adapter> <dispatcher>", each 0 or 1
+  local target=$1 raw adapter dispatcher
+  tmux display-message -p -t "$target" '#{pane_id}' >/dev/null 2>&1 && raw=0 || raw=1
+  fm_backend_tmux_target_exists "$target" && adapter=0 || adapter=1
+  fm_backend_target_exists tmux "$target" && dispatcher=0 || dispatcher=1
+  printf '%s %s %s' "$raw" "$adapter" "$dispatcher"
+}
+
+for probe_target in "$TARGET" "$SESSION:fm-no-such-window" "no-such-session:fm-smoke1" ""; do
+  verdicts=$(probe_verdicts "$probe_target")
+  read -r raw_v adapter_v dispatcher_v <<< "$verdicts"
+  [ "$adapter_v" = "$raw_v" ] \
+    || fail "fm_backend_tmux_target_exists disagrees with the raw pane_id probe for '$probe_target' (raw=$raw_v adapter=$adapter_v)"
+  [ "$dispatcher_v" = "$raw_v" ] \
+    || fail "fm_backend_target_exists tmux disagrees with the raw pane_id probe for '$probe_target' (raw=$raw_v dispatcher=$dispatcher_v)"
+done
+pass "real tmux: fm_backend_tmux_target_exists and the fm_backend_target_exists dispatcher return the raw pane_id probe's verdict for a live window, an unknown window, an unknown session, and an empty target"
+
+# A live window must still read as present, so the equivalence above cannot go
+# vacuous by every path failing together.
+fm_backend_tmux_target_exists "$TARGET" \
+  || fail "fm_backend_tmux_target_exists must report a live window as present"
+pass "real tmux: the equivalence is not vacuous - a live window reads as present"
+
 # --- kill and recovery-grade missing-window classification ------------------
 
 fm_backend_tmux_kill "$TARGET"

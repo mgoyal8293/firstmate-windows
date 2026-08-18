@@ -36,6 +36,17 @@ fm_backend_tmux_resolve_bare_selector() {  # <name>
     || { echo "error: no window named $name" >&2; return 1; }
 }
 
+# fm_backend_tmux_target_exists: the cheap, read-only "is this window still
+# there?" probe. Byte-identical to the `tmux display-message -p -t <target>
+# '#{pane_id}'` call it replaces, which used to sit inline in
+# bin/fm-backend.sh's fm_backend_target_exists arm and, duplicated, in
+# fm-crew-state.sh's pane_readable. Every other backend already answered that
+# question from its own adapter; tmux was the last one asking it from the
+# dispatcher.
+fm_backend_tmux_target_exists() {  # <target>
+  tmux display-message -p -t "$1" '#{pane_id}' >/dev/null 2>&1
+}
+
 # fm_backend_tmux_capture: bounded plain-text pane capture. Mirrors
 # fm-peek.sh's and fm-watch.sh's `tmux capture-pane -p -t "$T" -S -"$N"`.
 fm_backend_tmux_capture() {  # <target> <lines>

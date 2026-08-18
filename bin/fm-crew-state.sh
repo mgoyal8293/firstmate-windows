@@ -149,7 +149,13 @@ BACKEND_TARGET=$(fm_backend_target_of_meta "$META")
 EXPECTED_LABEL="fm-$ID"
 pane_readable() {  # <target>
   case "$TASK_BACKEND" in
-    tmux) tmux display-message -p -t "$1" '#{pane_id}' >/dev/null 2>&1 ;;
+    # fm_backend_target_exists's tmux arm runs the byte-identical probe this
+    # arm used to issue inline (`tmux display-message -p -t <target>
+    # '#{pane_id}'`), so the tmux verdict is unchanged and this script no
+    # longer names a session provider's command itself. The non-tmux arm keeps
+    # its capture read deliberately: target_exists is a plain presence probe,
+    # while these adapters answer "readable" by actually reading the surface.
+    tmux) fm_backend_target_exists "$TASK_BACKEND" "$1" "$EXPECTED_LABEL" ;;
     *) fm_backend_capture "$TASK_BACKEND" "$1" 1 "$EXPECTED_LABEL" >/dev/null 2>&1 ;;
   esac
 }
