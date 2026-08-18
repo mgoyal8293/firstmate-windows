@@ -201,7 +201,7 @@ The run needed no code change of its own: what it produced is this record and th
 
 ### What the run turned up
 
-None of these needed a code change, but a Windows operator meets them in this order.
+None of these were fixed in this run, but a Windows operator meets them in this order.
 
 - **The ConPTY daemon needs one dependency install per checkout.**
   `npm install --omit=dev` in `bin/backends/conpty` took 36 seconds and used prebuilt binaries, so no MSVC toolchain was involved.
@@ -223,9 +223,11 @@ None of these needed a code change, but a Windows operator meets them in this or
   That path applied to this task and its precondition was met, because the pooled worktree was still on `fm/winfm-e2e-typo` when teardown began, and the worktree reaper runs before the prune rather than after it, so an agent still holding the worktree does not excuse the outcome.
   The prune targeted the ref that survived: `bin/fm-merge-local.sh` resolved `fm/winfm-e2e-typo` in the project's own ref store and fast-forwarded `main` to `e255fd7`, so the pooled worktree and the project share refs, and the only other pooled worktree sat at a detached `b6dcc30`, which rules out a checked-out-elsewhere refusal.
   A control test on the same Windows host, in the same project and pool root, ran teardown's two commands unsilenced with nothing holding the worktree and both succeeded, ending in `Deleted branch fm/prunetest (was e255fd7)`.
-  So the prune ran against a ref it should have removed and the ref survived, which is a real Windows defect that this record had not previously carried.
+  So the prune ran against a ref it should have removed and the ref survived, which is a real defect, observed on Windows, whose platform-specificity is not established.
+  The failure belongs to this run's context, a worktree whose processes had just been force-killed and needed a second reap pass, and nothing here rules out the same failure in the same context off Windows.
   Which of the two commands failed is not established, because the detach discards its stderr and the delete discards both its output and its exit status; establishing that is separate work.
   The leftover ref is harmless in itself because it is fully merged.
+  Tracked as `winfm-merged-branch-prune` (queued, firstmate-windows).
 - **`fm-remote-job-reap-orphans` cannot scan this account's processes** and says so during teardown.
   No remote work was involved, and the remote-job scripts are already out of scope below, so the line is benign here rather than a missed reap.
 - **Teardown left the ConPTY session directory behind.**
