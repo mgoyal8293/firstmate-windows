@@ -80,9 +80,13 @@ Launch it with `--trust`, or none of its project hooks load; it also has no turn
 
 ```sh
 gh auth login
-git clone https://github.com/kunchenguid/firstmate
+git clone -c core.symlinks=true https://github.com/kunchenguid/firstmate
 cd firstmate
 ```
+
+`-c core.symlinks=true` matters on Windows and is a no-op elsewhere: `.claude/skills` is a tracked symlink, and Git for Windows defaults to checking it out as a plain file, which leaves the harness with no project skills and no error.
+Windows also needs Developer Mode (or `SeCreateSymbolicLinkPrivilege`) enabled so the fleet's locks can be created at all; `bin/fm-bootstrap.sh` proves this at session start and reports a `PLATFORM:` line when it cannot.
+See [docs/windows.md](docs/windows.md) for what is and is not verified on Windows today.
 
 Then launch one of the co-primary harnesses; AGENTS.md takes over from there:
 

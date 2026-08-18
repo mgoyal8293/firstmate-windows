@@ -13,6 +13,14 @@ A GitHub Actions check (`Require no-mistakes`) runs on PRs targeting `main` and 
 It evaluates every PR opening and body edit independently, so a later edit cannot replace an earlier pending compliance check.
 GitHub Actions and Dependabot are exempt so their automation keeps working, but regular contributor PRs without the signature will not be reviewed or merged.
 
+## Windows-port changes
+
+This fork carries firstmate to Git for Windows.
+Write every platform difference as an added `case "$(uname -s)" in MINGW*|MSYS*)` arm, or a capability probe, **inside the existing function** - git merges added arms cleanly, and a rewritten file conflicts on every upstream touch until the port stops being maintainable.
+Prefer a capability probe wherever the real question is "does this work here?" (is `/proc` readable, does `chmod` round-trip, can a symlink be made); reserve the platform name for behavior that is genuinely platform-specific.
+Keep each substitution at one owner and leave its call sites alone.
+[`docs/windows.md`](docs/windows.md) is the map; run `bin/fm-upstream-sync.sh` before assuming this fork is current.
+
 ## Workflow
 
 1. Fork the repo, then clone the parent repo or set your local `origin` back to the parent (`git@github.com:kunchenguid/firstmate.git`).
