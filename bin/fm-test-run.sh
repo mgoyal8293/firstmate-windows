@@ -10,6 +10,8 @@
 #   fm-test-run.sh --changed [--base <git-ref>]
 #   fm-test-run.sh --lane portable-parallel-1|portable-parallel-2|portable-serial
 #   fm-test-run.sh --lane portable-serial-<k>of<n>   (one CI serial shard)
+#   fm-test-run.sh --lane windows                    (the whole Windows lane)
+#   fm-test-run.sh --lane windows-<k>of<n>           (one CI Windows shard)
 #   fm-test-run.sh --proven-isolated
 #   fm-test-run.sh tests/<name>.test.sh [more scripts...]
 #
@@ -97,6 +99,16 @@ PORTABLE_SERIAL_SHARDS=4
 # the measured per-script mean so a newly added test neither starves nor
 # overloads the shard it lands in.
 PORTABLE_SERIAL_DEFAULT_WEIGHT_MS=20000
+
+# How many separate-runner shards the Windows lane splits into.
+# One owner: CI lane names carry this count and are refused when they disagree,
+# exactly as PORTABLE_SERIAL_SHARDS works for the Linux serial lane.
+WINDOWS_SHARDS=4
+
+# Balance hint for a Windows-lane script with no measured Windows duration.
+# Close to the measured per-script mean so a newly listed test neither starves
+# nor overloads the shard it lands in.
+WINDOWS_DEFAULT_WEIGHT_MS=82644
 
 usage() {
   awk '
@@ -275,6 +287,12 @@ list_known_lanes() {
     i=$((i + 1))
   done
   printf '%s\n' real-herdr-gated
+  printf '%s\n' windows
+  i=1
+  while [ "$i" -le "$WINDOWS_SHARDS" ]; do
+    printf 'windows-%sof%s\n' "$i" "$WINDOWS_SHARDS"
+    i=$((i + 1))
+  done
 }
 
 # Exact proven-isolated candidate set (same paths as
@@ -587,6 +605,198 @@ portable_serial_shard_index() {
   printf '%s\n' "$index"
 }
 
+# The Windows lane: an explicit allowlist rather than a derived remainder.
+#
+# Git Bash pays 14-18x more per process than Linux, so the derived
+# portable-serial remainder - 115 scripts, ~34 min on Linux - is several hours
+# on Windows and cannot be made to fit any job timeout by sharding alone: the
+# longest single script sets a floor no shard count can lower. This lane
+# therefore carries a measured subset instead.
+#
+# Enumerated on purpose. The Linux serial lane is derived so a newly added test
+# lands in a required lane by default; here that same default would drop an
+# unported test into a green gate and turn it red. A new test joins this lane
+# when it is measured green on Windows, and the coverage guard still proves the
+# lane is a real, disjoint, complete partition of whatever is listed.
+#
+# Membership rule: exited 0 with no failed assertion on Git Bash. A gate skip
+# counts as green - that is the test declining to run, the same as on Linux.
+# docs/fm-test-windows-lane.md records the measurement behind each entry.
+list_windows() {
+  cat <<'EOF'
+tests/fm-afk-inject-e2e.test.sh
+tests/fm-afk-return.test.sh
+tests/fm-ask-user-authority.test.sh
+tests/fm-backend-conpty.test.sh
+tests/fm-backend-herdr-focus-flash-e2e.test.sh
+tests/fm-backend-tmux-smoke.test.sh
+tests/fm-brief.test.sh
+tests/fm-busy-state.test.sh
+tests/fm-calm-pi-extension.test.sh
+tests/fm-classify-decision-key.test.sh
+tests/fm-claude-stop-autoarm-live-e2e.test.sh
+tests/fm-claude-stop-autoarm.test.sh
+tests/fm-composer-ghost.test.sh
+tests/fm-composer-lib.test.sh
+tests/fm-crew-state.test.sh
+tests/fm-decision-hold-lifecycle.test.sh
+tests/fm-gate-refuse.test.sh
+tests/fm-gitignore-config.test.sh
+tests/fm-gotmp.test.sh
+tests/fm-herdr-session-cleanup.test.sh
+tests/fm-pi-primary-types.test.sh
+tests/fm-pr-merge.test.sh
+tests/fm-pr-private-file-mode.test.sh
+tests/fm-project-origin.test.sh
+tests/fm-remote-entrypoint.test.sh
+tests/fm-review-diff.test.sh
+tests/fm-send-popup-settle.test.sh
+tests/fm-send-settle.test.sh
+tests/fm-send-strict.test.sh
+tests/fm-spawn-batch.test.sh
+tests/fm-spawn-pool-base-freshen.test.sh
+tests/fm-supervision-events.test.sh
+tests/fm-supervision-instructions.test.sh
+tests/fm-tangle-guard.test.sh
+tests/fm-task-delivery.test.sh
+tests/fm-test-fixture-cleanup.test.sh
+tests/fm-test-isolation-proof.test.sh
+tests/fm-tmux-agent-liveness.test.sh
+tests/fm-tmux-submit-busy.test.sh
+tests/fm-trace-context-lib.test.sh
+tests/fm-transition-lib.test.sh
+tests/fm-upstream-sync.test.sh
+tests/fm-vendor-auth-probe.test.sh
+tests/fm-wake-queue.test.sh
+tests/fm-windows-portability.test.sh
+EOF
+}
+
+# Measured Git Bash durations, in ms, for the scripts above. Hints only affect
+# balance: the coverage guard keeps the partition complete and disjoint whatever
+# they say, so a stale hint costs a slower shard rather than lost coverage.
+windows_weight_hints() {
+  cat <<'EOF'
+tests/fm-afk-inject-e2e.test.sh 1000
+tests/fm-afk-return.test.sh 63000
+tests/fm-ask-user-authority.test.sh 3000
+tests/fm-backend-conpty.test.sh 25000
+tests/fm-backend-herdr-focus-flash-e2e.test.sh 1000
+tests/fm-backend-tmux-smoke.test.sh 1000
+tests/fm-brief.test.sh 21000
+tests/fm-busy-state.test.sh 24000
+tests/fm-calm-pi-extension.test.sh 3000
+tests/fm-classify-decision-key.test.sh 24000
+tests/fm-claude-stop-autoarm-live-e2e.test.sh 1000
+tests/fm-claude-stop-autoarm.test.sh 135000
+tests/fm-composer-ghost.test.sh 54000
+tests/fm-composer-lib.test.sh 119000
+tests/fm-crew-state.test.sh 171000
+tests/fm-decision-hold-lifecycle.test.sh 860000
+tests/fm-gate-refuse.test.sh 117000
+tests/fm-gitignore-config.test.sh 1000
+tests/fm-gotmp.test.sh 23000
+tests/fm-herdr-session-cleanup.test.sh 154000
+tests/fm-pi-primary-types.test.sh 1000
+tests/fm-pr-merge.test.sh 165000
+tests/fm-pr-private-file-mode.test.sh 5000
+tests/fm-project-origin.test.sh 2000
+tests/fm-remote-entrypoint.test.sh 2000
+tests/fm-review-diff.test.sh 83000
+tests/fm-send-popup-settle.test.sh 102000
+tests/fm-send-settle.test.sh 43000
+tests/fm-send-strict.test.sh 119000
+tests/fm-spawn-batch.test.sh 74000
+tests/fm-spawn-pool-base-freshen.test.sh 122000
+tests/fm-supervision-events.test.sh 15000
+tests/fm-supervision-instructions.test.sh 7000
+tests/fm-tangle-guard.test.sh 108000
+tests/fm-task-delivery.test.sh 57000
+tests/fm-test-fixture-cleanup.test.sh 21000
+tests/fm-test-isolation-proof.test.sh 15000
+tests/fm-tmux-agent-liveness.test.sh 1000
+tests/fm-tmux-submit-busy.test.sh 37000
+tests/fm-trace-context-lib.test.sh 6000
+tests/fm-transition-lib.test.sh 4000
+tests/fm-upstream-sync.test.sh 17000
+tests/fm-vendor-auth-probe.test.sh 79000
+tests/fm-wake-queue.test.sh 826000
+tests/fm-windows-portability.test.sh 7000
+EOF
+}
+
+windows_weight_for() {
+  local want=$1 path ms
+  while read -r path ms; do
+    if [ "$path" = "$want" ]; then
+      printf '%s\n' "$ms"
+      return 0
+    fi
+  done < <(windows_weight_hints)
+  printf '%s\n' "$WINDOWS_DEFAULT_WEIGHT_MS"
+}
+
+# Longest-processing-time assignment of the Windows lane to WINDOWS_SHARDS bins,
+# printing "<shard>\t<script>" for every script. Deterministic: candidates are
+# ordered by hint descending then path, and ties between equally loaded bins
+# always take the lowest bin index.
+windows_assignments() {
+  local ms script i best best_load
+  local -a loads=()
+  i=1
+  while [ "$i" -le "$WINDOWS_SHARDS" ]; do
+    loads[i]=0
+    i=$((i + 1))
+  done
+  while IFS=$'\t' read -r ms script; do
+    [ -n "$script" ] || continue
+    best=1
+    best_load=${loads[1]}
+    i=2
+    while [ "$i" -le "$WINDOWS_SHARDS" ]; do
+      if [ "${loads[i]}" -lt "$best_load" ]; then
+        best_load=${loads[i]}
+        best=$i
+      fi
+      i=$((i + 1))
+    done
+    loads[best]=$((best_load + ms))
+    printf '%s\t%s\n' "$best" "$script"
+  done < <(
+    while IFS= read -r script; do
+      [ -n "$script" ] || continue
+      printf '%s\t%s\n' "$(windows_weight_for "$script")" "$script"
+    done < <(list_windows) | LC_ALL=C sort -t$'\t' -k1,1nr -k2,2
+  )
+}
+
+# Parse "<k>of<n>" from a windows shard lane and echo <k>, refusing when <n>
+# disagrees with this script's configured count so a CI matrix built for a
+# different shard count fails loudly instead of dropping tests.
+windows_shard_index() {
+  local lane=$1 spec index count
+  spec=${lane#windows-}
+  index=${spec%%of*}
+  count=${spec#*of}
+  case "$spec" in
+    *of*) ;;
+    *) die "unknown lane '$lane' (see --list-lanes)" ;;
+  esac
+  case "$index" in
+    ''|*[!0-9]*) die "unknown lane '$lane' (see --list-lanes)" ;;
+  esac
+  case "$count" in
+    ''|*[!0-9]*) die "unknown lane '$lane' (see --list-lanes)" ;;
+  esac
+  if [ "$count" -ne "$WINDOWS_SHARDS" ]; then
+    die "lane '$lane' asks for $count windows shards but this runner is configured for $WINDOWS_SHARDS (see --list-lanes)"
+  fi
+  if [ "$index" -lt 1 ] || [ "$index" -gt "$WINDOWS_SHARDS" ]; then
+    die "lane '$lane' shard index is outside 1..$WINDOWS_SHARDS (see --list-lanes)"
+  fi
+  printf '%s\n' "$index"
+}
+
 select_proven_isolated() {
   local s
   while IFS= read -r s; do
@@ -633,6 +843,24 @@ select_lane() {
     real-herdr-gated)
       select_family real-herdr-gated
       found=1
+      ;;
+    windows)
+      while IFS= read -r s; do
+        [ -n "$s" ] || continue
+        add_script "$s"
+        found=1
+      done < <(list_windows)
+      ;;
+    windows-*)
+      # One separate-runner shard of the Windows lane, still serial in itself.
+      shard=$(windows_shard_index "$want")
+      while IFS=$'\t' read -r idx s; do
+        [ -n "$s" ] || continue
+        if [ "$idx" = "$shard" ]; then
+          add_script "$s"
+          found=1
+        fi
+      done < <(windows_assignments)
       ;;
     *)
       die "unknown lane '$want' (see --list-lanes)"
@@ -755,6 +983,54 @@ run_coverage_guard() {
     fi
   fi
 
+  # The Windows lane is a measured SUBSET overlay of tests/*.test.sh, not another
+  # part of the parallel + serial + Herdr partition, so it is deliberately left
+  # out of the union check above. What must still hold: every listed script
+  # exists, and the shards partition the list exactly.
+  SCRIPTS=()
+  select_lane windows
+  printf '%s\n' "${SCRIPTS[@]+"${SCRIPTS[@]}"}" | LC_ALL=C sort -u >"$tmp/windows"
+  SCRIPTS=("${saved_scripts[@]+"${saved_scripts[@]}"}")
+  missing=$(comm -23 "$tmp/windows" "$tmp/all" || true)
+  if [ -n "$missing" ]; then
+    log "coverage guard: windows lane lists scripts that are not in tests/*.test.sh:"
+    printf '%s\n' "$missing" >&2
+    rm -rf "$tmp"
+    return 1
+  fi
+  : >"$tmp/windows_shards_raw"
+  shard=1
+  while [ "$shard" -le "$WINDOWS_SHARDS" ]; do
+    SCRIPTS=()
+    select_lane "windows-${shard}of${WINDOWS_SHARDS}"
+    if [ "${#SCRIPTS[@]}" -eq 0 ]; then
+      log "coverage guard: windows shard $shard of $WINDOWS_SHARDS is empty"
+      SCRIPTS=("${saved_scripts[@]+"${saved_scripts[@]}"}")
+      rm -rf "$tmp"
+      return 1
+    fi
+    printf '%s\n' "${SCRIPTS[@]}" >>"$tmp/windows_shards_raw"
+    shard=$((shard + 1))
+  done
+  SCRIPTS=("${saved_scripts[@]+"${saved_scripts[@]}"}")
+  LC_ALL=C sort "$tmp/windows_shards_raw" | uniq -d >"$tmp/windows_shard_dups"
+  if [ -s "$tmp/windows_shard_dups" ]; then
+    log "coverage guard: windows shards share scripts:"
+    cat "$tmp/windows_shard_dups" >&2
+    rm -rf "$tmp"
+    return 1
+  fi
+  LC_ALL=C sort -u "$tmp/windows_shards_raw" >"$tmp/windows_shards"
+  missing=$(comm -23 "$tmp/windows" "$tmp/windows_shards" || true)
+  extra=$(comm -13 "$tmp/windows" "$tmp/windows_shards" || true)
+  if [ -n "$missing" ] || [ -n "$extra" ]; then
+    log "coverage guard: windows shards must equal the windows lane"
+    [ -z "$missing" ] || { log "missing from windows shards:"; printf '%s\n' "$missing" >&2; }
+    [ -z "$extra" ] || { log "extra beyond windows lane:"; printf '%s\n' "$extra" >&2; }
+    rm -rf "$tmp"
+    return 1
+  fi
+
   # Serial scripts packed at the default weight because nothing measured them.
   # Reported, not refused: a newly added test legitimately has no measurement
   # until it has run once. It is reported because an unmeasured script is what
@@ -779,6 +1055,9 @@ run_coverage_guard() {
     log "coverage guard: portable serial scripts with no measured duration, packed at ${PORTABLE_SERIAL_DEFAULT_WEIGHT_MS}ms (docs/fm-test-portable-shards.md owns the refresh):"
     cat "$tmp/unhinted" >&2
   fi
+  printf 'FM_TEST_COVERAGE_WINDOWS ok windows=%s windows_shards=%s\n' \
+    "$(wc -l <"$tmp/windows" | tr -d ' ')" \
+    "$WINDOWS_SHARDS"
   rm -rf "$tmp"
   return 0
 }
