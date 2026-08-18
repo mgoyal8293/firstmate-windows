@@ -80,10 +80,15 @@
 _FM_PENDING_REPLY_LIB_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd 2>/dev/null)" || _FM_PENDING_REPLY_LIB_DIR="."
 # shellcheck source=bin/fm-marker-lib.sh
 . "$_FM_PENDING_REPLY_LIB_DIR/fm-marker-lib.sh"
+# Endpoint reads go through bin/fm-backend.sh's dispatchers, which load the
+# recorded task's own adapter; no session provider's library is sourced here.
 # shellcheck source=bin/fm-backend.sh
 . "$_FM_PENDING_REPLY_LIB_DIR/fm-backend.sh"
-# shellcheck source=bin/fm-tmux-lib.sh
-. "$_FM_PENDING_REPLY_LIB_DIR/fm-tmux-lib.sh"
+# The rendered-tail busy fallback below uses fm_busy_lines_match, whose owner is
+# the shared, backend-independent shape library. It used to arrive here only as
+# a transitive effect of sourcing tmux's own library.
+# shellcheck source=bin/fm-composer-lib.sh
+. "$_FM_PENDING_REPLY_LIB_DIR/fm-composer-lib.sh"
 # shellcheck source=bin/fm-classify-lib.sh
 . "$_FM_PENDING_REPLY_LIB_DIR/fm-classify-lib.sh"
 

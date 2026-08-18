@@ -127,7 +127,8 @@
 #          FM_INJECT_CONFIRM_RETRIES Enter-retry attempts on a swallowed Enter
 #                                   (default 3); the digest is typed once, only
 #                                   Enter is retried. Composer-empty detection is
-#                                   structural and style-aware (bin/fm-tmux-lib.sh):
+#                                   structural and style-aware (the shared shape
+#                                   owner bin/fm-composer-lib.sh):
 #                                   it drops dim/faint ghost text and strips the
 #                                   harness's box borders before deciding, so a
 #                                   ghost-only or bordered-but-empty composer is
@@ -147,15 +148,21 @@ FM_DAEMON_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 FM_ROOT="${FM_ROOT_OVERRIDE:-$(cd "$FM_DAEMON_DIR/.." && pwd)}"
 FM_HOME="${FM_HOME:-${FM_ROOT_OVERRIDE:-$FM_ROOT}}"
 
-# Shared tmux pane primitives for supervisor injection (busy/composer detection
-# + verify-retry submit). Sourced at top level so BOTH the executed daemon and
-# the unit tests (which source this file for its pure functions) get the
-# corrected composer detection. Stale task rechecks use fm-backend.sh below.
-# shellcheck source=bin/fm-tmux-lib.sh
-. "$FM_DAEMON_DIR/fm-tmux-lib.sh"
-
+# Backend dispatch: the supervisor-pane busy read, composer classification, and
+# verified submit all go through fm_backend_busy_state /
+# fm_backend_composer_state / fm_backend_send_text_submit, so each session
+# provider answers with its own primitives and this daemon holds none of tmux's.
+# bin/fm-tmux-lib.sh is loaded by bin/backends/tmux.sh when (and only when) the
+# tmux adapter is the one dispatched to; sourcing it here as well pulled tmux's
+# composer/submit core into every away-mode daemon regardless of backend.
 # shellcheck source=bin/fm-backend.sh
 . "$FM_DAEMON_DIR/fm-backend.sh"
+
+# The harness-scoped rendered-tail busy match (fm_busy_lines_match) is owned by
+# the shared, backend-independent shape library, not by any adapter; it used to
+# arrive here only as a transitive effect of sourcing tmux's own library.
+# shellcheck source=bin/fm-composer-lib.sh
+. "$FM_DAEMON_DIR/fm-composer-lib.sh"
 
 # Canonical construction and parsing for every Firstmate operational input.
 # shellcheck source=bin/fm-operational-input.sh
@@ -205,7 +212,8 @@ WEDGE_ALARM_NOTIFIER_PID=
 # status_is_captain_relevant, window_to_task, scan_captain_relevant_statuses) now
 # live in bin/fm-classify-lib.sh, shared with the always-on watcher.
 # Composer-empty detection, submit acknowledgement, and the harness-scoped
-# supervisor-pane busy guard live in bin/fm-tmux-lib.sh.
+# supervisor-pane busy guard are the backend's own (bin/fm-backend.sh dispatches
+# them; bin/fm-tmux-lib.sh is tmux's implementation).
 # FM_BUSY_REGEX also overrides Grok's isolated task-state fallback.
 INJECT_FAIL_SLEEP_DEFAULT=30
 INJECT_CONFIRM_RETRIES_DEFAULT=3

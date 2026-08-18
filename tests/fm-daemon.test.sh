@@ -20,6 +20,12 @@ if [ -z "${FM_TEST_DAEMON_SOURCED:-}" ]; then
   # shellcheck source=bin/fm-supervise-daemon.sh
   . "$DAEMON"
 fi
+# The composer/submit cases below test bin/fm-tmux-lib.sh's own tmux primitives
+# (fm_tmux_composer_state, fm_tmux_submit_core), which the daemon reaches
+# through backend dispatch rather than by sourcing. Source their owner directly
+# instead of relying on a caller to have pulled them in.
+# shellcheck source=bin/fm-tmux-lib.sh
+. "$ROOT/bin/fm-tmux-lib.sh"
 
 TMP_ROOT=$(fm_test_tmproot fm-daemon-tests)
 FM_DAEMON_PRIMARY_HARNESS=claude
