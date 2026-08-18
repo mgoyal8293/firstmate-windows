@@ -1,0 +1,82 @@
+name: Upstream freshness
+
+# Reports whether this Windows port can take upstream's latest. It NEVER merges:
+# a clean textual merge can still move the code a `case "$(uname -s)" in MINGW*)`
+# arm was guarding, and landing that silently would surface only when someone
+# needed the port to work. bin/fm-upstream-sync.sh owns the whole procedure.
+
+on:
+  schedule:
+    # Daily, early UTC. Cheap enough to catch drift while it is still one commit.
+    - cron: '17 5 * * *'
+  workflow_dispatch:
+    inputs:
+      tests:
+        description: 'Test selection on the merged tree (changed, all, none, or a lane name)'
+        required: false
+        default: 'changed'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: upstream-sync
+  cancel-in-progress: true
+
+jobs:
+  freshness:
+    name: Upstream merge dry run
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+      - name: Add upstream remote
+        env:
+          UPSTREAM_URL: https://github.com/kunchenguid/firstmate.git
+        run: git remote add upstream "$UPSTREAM_URL"
+      - name: Install pinned ShellCheck
+        run: |
+          set -eu
+          bin/fm-install-shellcheck.sh "$RUNNER_TEMP/bin"
+          echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
+      - name: Dry-run the upstream merge
+        id: sync
+        env:
+          TESTS: ${{ inputs.tests || 'changed' }}
+        run: |
+          set +e
+          bin/fm-upstream-sync.sh \
+            --base origin/main \
+            --tests "$TESTS" \
+            --json "$RUNNER_TEMP/upstream-sync.json" \
+            > "$RUNNER_TEMP/upstream-sync.txt" 2>&1
+          echo "rc=$?" >> "$GITHUB_OUTPUT"
+          cat "$RUNNER_TEMP/upstream-sync.txt"
+      - name: Publish the report
+        if: always()
+        run: |
+          set -eu
+          {
+            echo '## Upstream freshness'
+            echo
+            echo '```'
+            cat "$RUNNER_TEMP/upstream-sync.txt" 2>/dev/null || echo '(no report produced)'
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+      - name: Upload the report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: upstream-sync-report
+          path: |
+            ${{ runner.temp }}/upstream-sync.txt
+            ${{ runner.temp }}/upstream-sync.json
+          if-no-files-found: warn
+      # Surfaced as a failed scheduled run so drift is noticed, never merged.
+      - name: Fail on conflicts or failing tests
+        if: steps.sync.outputs.rc != '0'
+        run: |
+          echo "upstream is not cleanly takeable right now (exit ${{ steps.sync.outputs.rc }}); see the report above" >&2
+          exit 1
