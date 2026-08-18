@@ -185,7 +185,7 @@ Claude Code 2.1.220 on MINGW64_NT-10.0-26200, Git for Windows 2.50.1, node v22.1
 | Session start takes the lock | `bin/fm-session-start.sh` ran from the `SessionStart` hook and printed `lock acquired: session token`. `state/.lock` held a plain MSYS pid and `state/.lock.session` held the session UUID. Bootstrap's mutating sweeps ran (`.pr-check-migration-scan-v1`, `.inactive-outcome-reconcile`, a created `.wake-queue`), and the deferred network stage recorded `locked=1`, so the session was genuinely not read-only |
 | Spawn a crewmate on ConPTY | `state/<id>.meta` recorded `backend=conpty` and its `conpty_session`. The crewmate's shell entered the pooled worktree `~/.treehouse/<pool>/1/<project>`, distinct from the project checkout, and the spawn's isolation assertion passed. `GOTMPDIR` was exported into the pane as intended |
 | Agent liveness and busy state | `fm_backend_conpty_agent_state` returned `alive` with `why: harness process claude.exe` and `identityValidated: true`, reading the real native process list (`claude.exe`, `sh.exe`, `bash.exe`, `treehouse.exe`). `bin/fm-crew-state.sh` reported `state: working - source: pane - harness busy (claude-hook)` while it worked, and `state: done - source: status-log` afterwards |
-| Supervise for real | The Stop-hook auto-arm armed the watcher, creating `state/.watch.lock` as a real native symlink to its `.owner.<suffix>` file. The worker's activity produced four durable `signal:` wake records naming its status and turn-ended files. The session was rewoken, drained them, and acknowledged them with the generation-bound `--ack-through 4 --recovery-generation <gen>`, taking the queue to zero. One steer was delivered through `bin/fm-send.sh` |
+| Supervise for real | The Stop-hook auto-arm armed the watcher, creating `state/.watch.lock` as a real native symlink to its `.owner.<suffix>` directory. The worker's activity produced four durable `signal:` wake records naming its status and turn-ended files. The session was rewoken, drained them, and acknowledged them with the generation-bound `--ack-through 4 --recovery-generation <gen>`, taking the queue to zero. One steer was delivered through `bin/fm-send.sh` |
 | The change lands on the branch | Commit `e255fd7` on `fm/winfm-e2e-typo`, a one-line comment fix, `git diff main..HEAD` exactly one changed line, clean tree, `bash -n` still parsing |
 | Teardown refuses unlanded work | With the commit on the branch but not yet on local `main`, `bin/fm-teardown.sh` refused: `REFUSED: local-only worktree <path> has work not yet merged into main and not on any remote`, listed `e255fd7` as the commit at risk, and named the merge, push, and explicit-discard routes out. The task metadata, status log, and live session were all still present afterwards |
 | Approved landing | `bin/fm-merge-local.sh` fast-forwarded the project's `main` to `e255fd7` |
@@ -219,12 +219,14 @@ None of these needed a code change, but a Windows operator meets them in this or
   That is correct behaviour, and it is not Windows-specific, but a scratch Windows home hits it immediately because the obvious scratch project has no remote.
 - **A merged task branch is left behind in the project.**
   After the local merge and teardown, `fm/<id>` still existed in the demo project.
-  It is harmless because it is fully merged, but nothing prunes it, so one accumulates per task.
+  `bin/fm-teardown.sh` does have a prune for it: on a non-secondmate task it resolves the worktree's current branch, detaches the worktree, then runs `git branch -D`, with both steps silenced.
+  The worktree did reach a detached HEAD while `fm/winfm-e2e-typo` survived, which is consistent with that delete not taking effect, but this run did not establish why, so the cause is UNVERIFIED and confirming it is separate work.
+  The leftover ref is harmless in itself because it is fully merged.
 - **`fm-remote-job-reap-orphans` cannot scan this account's processes** and says so during teardown.
   No remote work was involved, and the remote-job scripts are already out of scope below, so the line is benign here rather than a missed reap.
 - **Teardown leaves the ConPTY session directory behind.**
   The task's own records go, and the session itself is dead, but `state/conpty/<session>/` and its `transcript.log` remain.
-  That transcript is deliberately durable evidence rather than a leak, so the note is only that one directory accumulates per completed task.
+  This is a durable backend limit rather than a Windows one, and [`conpty-backend.md`](conpty-backend.md) "Active limits" owns it.
 - **A scripted headless session does not end while a task is live.**
   `claude -p` buffers its transcript until exit, and the Stop-hook arm keeps the session open while `state/*.meta` still names in-flight work, so a one-shot headless firstmate keeps re-arming instead of returning.
   Interactive sessions are the normal shape and are unaffected; this only shapes how a Windows run can be scripted.
