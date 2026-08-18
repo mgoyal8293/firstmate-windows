@@ -6,6 +6,7 @@ It replaces the session provider only; Treehouse remains the worktree provider, 
 
 Unlike every other backend, `conpty` has no third-party multiplexer behind it.
 Firstmate ships the session daemon itself, in [`bin/backends/conpty/`](../bin/backends/conpty/), because Windows offers nothing to adopt: a raw pseudoconsole is destroyed when its creating process exits, so a session provider has to own a process that outlives the caller.
+The control surface is a named pipe speaking newline-delimited JSON, and it is deliberately not node-specific: PowerShell 5.1 has been verified driving a live session end to end with no node involved, which matters because firstmate's backends are shell scripts.
 
 ## Setup
 

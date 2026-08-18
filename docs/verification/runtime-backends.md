@@ -729,7 +729,8 @@ launcher returned in 142 ms
 
 The launcher returns immediately because the daemon is started with explicit file-backed stdio.
 The naive `stdio: 'ignore'` recipe leaks an ancestor pipe handle into the grandchild and blocks the launching pipeline for the grandchild's whole life; the spike measured that at two full minutes.
-A fresh, unrelated process read the session and drove the agent after the launcher had exited, and the spike additionally proved the control surface is not node-specific by driving a live agent from PowerShell 5.1.
+A fresh, unrelated process read the session and drove the agent after the launcher had exited.
+The same was reconfirmed against this implementation from PowerShell 5.1 with no node involved, so the reattach path does not depend on the client being the program that started the session.
 
 Liveness, with identity validated by name and process start time:
 
@@ -760,6 +761,7 @@ The spike's stale-cache defect was reproduced (a read served a 230 s-old process
 | --- | --- | --- |
 | Create | `spawn --id <scoped> --cmd <bash> --arg -i --cwd <dir>` | Detached daemon bound its pipe; launcher exited in 142 ms. |
 | Reattach | any later process, `health --id <scoped>` | `live`, answered with the session nonce, no pid consulted. |
+| Reattach, non-node | PowerShell 5.1 talking to the pipe directly | Pinged the identity oracle, read `agent-state`, wrote text, submitted it, and read the screen back. The control surface is not node-specific, which matters because Firstmate's backends are shell scripts. |
 | Duplicate refusal | second `spawn` on a live id | Refused; the pipe is also the mutex (`EADDRINUSE`). |
 | cwd before harness | OSC title from Git Bash | `/d/AI/winfm-backend/work/proj`, and it followed a `cd`. |
 | cwd after harness | same read once Claude owned the title | Title became `✳ <answer>`; the last shell-reported path was correctly retained. |
