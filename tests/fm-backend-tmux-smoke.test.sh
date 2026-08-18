@@ -219,7 +219,7 @@ tmux new-window -t "$SESSION" -n not-a-task-window \
 
 raw_list=$(tmux list-windows -a -F '#{session_name}:#{window_name}' 2>/dev/null | grep ':fm-' || true)
 adapter_list=$(fm_backend_tmux_list_live | cut -f1)
-dispatch_list=$(fm_backend_list_task_windows tmux)
+dispatch_list=$(fm_backend_list_task_windows tmux | cut -f1)
 
 [ "$adapter_list" = "$raw_list" ] \
   || fail "fm_backend_tmux_list_live's targets differ from the raw list-windows pipeline"$'\n'"--- raw ---"$'\n'"$raw_list"$'\n'"--- adapter ---"$'\n'"$adapter_list"
@@ -238,6 +238,16 @@ adapter_labels=$(fm_backend_tmux_list_live | cut -f2)
 [ "$adapter_labels" = "$WINDOW" ] \
   || fail "fm_backend_tmux_list_live's label column should be the bare window name, got '$adapter_labels'"
 pass "real tmux: fm_backend_tmux_list_live prints the shared '<target>\\t<label>' shape every other adapter's list_live prints"
+
+# The dispatcher passes BOTH columns through: the discovery caller matches a
+# task id on the label and addresses the endpoint with the target, so dropping
+# either column breaks the fallback on some backend.
+dispatch_labels=$(fm_backend_list_task_windows tmux | cut -f2)
+[ "$dispatch_labels" = "$adapter_labels" ] \
+  || fail "fm_backend_list_task_windows tmux dropped or altered the label column: adapter '$adapter_labels', dispatcher '$dispatch_labels'"
+[ "$(fm_backend_list_task_windows tmux)" = "$(fm_backend_tmux_list_live)" ] \
+  || fail "fm_backend_list_task_windows tmux is not the adapter's list_live verbatim"
+pass "real tmux: the fm_backend_list_task_windows dispatcher preserves the adapter's '<target>\\t<label>' pair verbatim"
 
 tmux kill-window -t "$SESSION:not-a-task-window" 2>/dev/null || true
 

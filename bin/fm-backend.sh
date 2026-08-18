@@ -938,19 +938,24 @@ fm_backend_leader_pid() {  # <backend> <target> -> pid, or failure
 }
 
 # fm_backend_list_task_windows: every LIVE endpoint on <backend> whose label
-# looks like a firstmate task window (fm-<id>), one target per line. The
-# no-metadata discovery fallback: a caller that has a task id but no recorded
-# `window=` (a torn or never-written meta) can still find the endpoint by
-# asking the backend what it is actually running.
+# looks like a firstmate task window (fm-<id>), one "<target>\t<label>" line
+# per endpoint. The no-metadata discovery fallback: a caller that has a task id
+# but no recorded `window=` (a torn or never-written meta) can still find the
+# endpoint by asking the backend what it is actually running.
 #
-# Each adapter already owns this inventory as its own list_live, printing
-# "<target>\t<label>"; this dispatcher projects that to the target column,
-# which is what a discovery caller needs. herdr and zellij scope their
+# Each adapter already owns this inventory as its own list_live and prints both
+# columns, which this dispatcher passes through unprojected. BOTH are load
+# bearing and neither substitutes for the other: <target> is the opaque handle
+# that addresses the endpoint, in whatever shape its backend addresses things
+# (tmux "<session>:fm-<id>", herdr/zellij "<session>:<pane-id>", cmux
+# "<workspace>:<surface>", conpty a bare session id), while <label> is the
+# uniform "fm-<id>" every adapter emits and is therefore the only column a
+# discovery caller can match a task id against. herdr and zellij scope their
 # inventory to a session, so <session> is passed through for them and each
 # adapter's own default is used when the caller has none. A backend with no
 # inventory lists nothing rather than failing, because "no endpoint found" is
 # exactly the answer a discovery fallback wants for an unsupported backend.
-fm_backend_list_task_windows() {  # <backend> [session] -> one target per line
+fm_backend_list_task_windows() {  # <backend> [session] -> "<target>\t<label>" per line
   local backend=$1 session=${2:-}
   fm_backend_source "$backend" || return 0
   case "$backend" in
@@ -960,7 +965,7 @@ fm_backend_list_task_windows() {  # <backend> [session] -> one target per line
     cmux) fm_backend_cmux_list_live ;;
     conpty) fm_backend_conpty_list_live ;;
     *) return 0 ;;
-  esac | cut -f1
+  esac
 }
 
 # fm_backend_agent_state: the single recovery-grade agent/endpoint state

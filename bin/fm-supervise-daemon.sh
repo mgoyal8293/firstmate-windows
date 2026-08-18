@@ -176,9 +176,11 @@ FM_HOME="${FM_HOME:-${FM_ROOT_OVERRIDE:-$FM_ROOT}}"
 . "$FM_DAEMON_DIR/fm-classify-lib.sh"
 
 # Supervisor-pane discovery (FM_SUPERVISOR_TARGET_DEFAULT,
-# FM_SUPERVISOR_BACKEND_DEFAULT, discover_supervisor_target,
-# discover_supervisor_backend). Shared with the script-owned away launcher
-# (bin/fm-afk-launch.sh) so the captain-pane resolution has exactly one owner.
+# FM_SUPERVISOR_BACKEND_DEFAULT, fm_supervisor_default_backend,
+# discover_supervisor_target, discover_supervisor_backend). Shared with the
+# script-owned away launcher (bin/fm-afk-launch.sh) so the captain-pane
+# resolution has exactly one owner. That owner also documents which of the two
+# backend defaults a loaded caller is meant to read.
 # shellcheck source=bin/fm-supervisor-target-lib.sh
 . "$FM_DAEMON_DIR/fm-supervisor-target-lib.sh"
 
@@ -1084,6 +1086,24 @@ housekeeping() {  # <state>
   fi
 }
 
+# The home's own session-provider backend, resolved at most once per daemon
+# run. It cannot change while the daemon is alive, and the read is not free:
+# with neither FM_BACKEND nor config/backend set, fm_backend_name reaches the
+# cmux app-ancestry fallback, which forks per ancestor hop. Every window_for_task
+# call site is a command substitution, so fm_super_main primes this in the
+# daemon's own shell; an unprimed caller (a unit test sourcing this file)
+# resolves on demand instead.
+_FM_HOME_BACKEND=""
+_home_backend() {
+  if [ -z "$_FM_HOME_BACKEND" ]; then
+    # 2>/dev/null: fm_backend_name's herdr/cmux auto-detect NOTICE is spawn-time
+    # advice, not a diagnostic this read-only lookup should log every cycle.
+    _FM_HOME_BACKEND=$(fm_backend_name 2>/dev/null) || _FM_HOME_BACKEND=""
+    [ -n "$_FM_HOME_BACKEND" ] || _FM_HOME_BACKEND=tmux
+  fi
+  printf '%s' "$_FM_HOME_BACKEND"
+}
+
 # Find a recorded or live window target whose task id matches the marker key.
 #
 # The metadata loop answers in the normal case. The second loop is the
@@ -1093,8 +1113,14 @@ housekeeping() {  # <state>
 # nothing). It now asks the home's OWN backend through
 # fm_backend_list_task_windows (bin/fm-backend.sh), whose tmux arm runs the
 # byte-identical pipeline: on a tmux home the candidate list is unchanged.
+#
+# The match is on the inventory's LABEL column, which every adapter emits as a
+# uniform "fm-<id>". The target column is opaque and backend-shaped, so a task
+# id cannot be recovered from it on anything but tmux; the label carries the id
+# on every backend, and the target is what the caller gets back to address the
+# endpoint with.
 window_for_task() {  # <task-key> [state]
-  local key=$1 state=${2:-$(_state_root)} meta task w t backend
+  local key=$1 state=${2:-$(_state_root)} meta task w label
   for meta in "$state"/*.meta; do
     [ -e "$meta" ] || continue
     task=$(basename "$meta"); task=${task%.meta}
@@ -1102,15 +1128,10 @@ window_for_task() {  # <task-key> [state]
     w=$(fm_backend_target_of_meta "$meta")
     [ -n "$w" ] && { printf '%s' "$w"; return 0; }
   done
-  # 2>/dev/null: fm_backend_name's herdr/cmux auto-detect NOTICE is spawn-time
-  # advice, not a diagnostic this read-only lookup should log every cycle.
-  backend=$(fm_backend_name 2>/dev/null) || backend=tmux
-  [ -n "$backend" ] || backend=tmux
-  while IFS= read -r w; do
-    [ -n "$w" ] || continue
-    t=$(window_to_task "$w" "$state")
-    [ "$(_stale_key "$t")" = "$key" ] && { printf '%s' "$w"; return 0; }
-  done < <(fm_backend_list_task_windows "$backend" 2>/dev/null)
+  while IFS=$'\t' read -r w label; do
+    [ -n "$w" ] && [ -n "$label" ] || continue
+    [ "$(_stale_key "${label#fm-}")" = "$key" ] && { printf '%s' "$w"; return 0; }
+  done < <(fm_backend_list_task_windows "$(_home_backend)" 2>/dev/null)
   return 1
 }
 
@@ -1512,6 +1533,8 @@ fm_super_main() {
     "$WATCH" >"$CUR_TMP" 2>>"$WATCH_ERR" &
     WATCHER_PID=$!
   }
+
+  _home_backend >/dev/null
 
   local rc reason
   while true; do

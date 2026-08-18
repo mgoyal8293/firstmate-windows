@@ -1634,6 +1634,62 @@ test_fm_send_exits_nonzero_on_unproven_submit() {
 # for the duration of that one call only, so these tests are deterministic
 # regardless of what runtime backend is running this test suite itself.
 
+# window_for_task's no-metadata fallback asks the home's OWN backend for its
+# live inventory. Each adapter's list_live is faked here (the _FM_BACKEND_*_SOURCED
+# guard keeps the dispatcher from loading the real adapter), so the assertion is
+# about the dispatcher/consumer pair, not about any backend CLI: the inventory's
+# opaque target column is backend-shaped and carries no task id anywhere but
+# tmux, so the id has to be matched on the uniform "fm-<id>" label column and the
+# target returned as the endpoint handle.
+test_window_for_task_matches_live_endpoint_by_label_on_every_backend() {
+  local dir state out
+
+  dir=$(make_supercase window-for-task-label-match)
+  state="$dir/state"
+
+  # conpty: a colonless "fm-<home>-<id>" target - a task id derived from the
+  # target reads as "<home>-<id>" and can never match.
+  out=$(
+    _FM_BACKEND_CONPTY_SOURCED=1
+    fm_backend_conpty_list_live() { printf 'fm-acme-t7\tfm-t7\n'; }
+    FM_BACKEND=conpty window_for_task "$(_stale_key t7)" "$state"
+  ) || fail "window_for_task found no conpty endpoint for t7 although its inventory lists one"
+  [ "$out" = "fm-acme-t7" ] \
+    || fail "window_for_task should return the conpty endpoint's target, got '$out'"
+
+  # herdr/zellij: "<session>:<pane-id>" - the last colon segment is a pane id.
+  out=$(
+    _FM_BACKEND_HERDR_SOURCED=1
+    fm_backend_herdr_session() { printf 'firstmate'; }
+    fm_backend_herdr_list_live() { printf 'firstmate:%%3\tfm-t8\n'; }
+    FM_BACKEND=herdr window_for_task "$(_stale_key t8)" "$state"
+  ) || fail "window_for_task found no herdr endpoint for t8 although its inventory lists one"
+  [ "$out" = "firstmate:%3" ] \
+    || fail "window_for_task should return the herdr endpoint's pane target, got '$out'"
+
+  # tmux is unchanged: its label IS the window name, so the same label match
+  # selects exactly the window the target-derived id used to select.
+  out=$(
+    _FM_BACKEND_TMUX_SOURCED=1
+    fm_backend_tmux_list_live() { printf 'other:fm-t1\tfm-t1\nfirstmate:fm-t9\tfm-t9\n'; }
+    FM_BACKEND=tmux window_for_task "$(_stale_key t9)" "$state"
+  ) || fail "window_for_task found no tmux window for t9 although its inventory lists one"
+  [ "$out" = "firstmate:fm-t9" ] \
+    || fail "window_for_task should return the tmux window target for t9, got '$out'"
+
+  # A task with no live endpoint still reports "not found" rather than matching
+  # some other task's entry.
+  if out=$(
+    _FM_BACKEND_CONPTY_SOURCED=1
+    fm_backend_conpty_list_live() { printf 'fm-acme-t7\tfm-t7\n'; }
+    FM_BACKEND=conpty window_for_task "$(_stale_key t404)" "$state"
+  ); then
+    fail "window_for_task matched '$out' for a task absent from the inventory"
+  fi
+
+  pass "window_for_task: the no-metadata fallback matches the inventory's fm-<id> label and returns the backend's own target, on conpty and herdr as well as tmux"
+}
+
 test_discover_supervisor_backend_precedence() {
   local out
   out=$(FM_SUPERVISOR_BACKEND=herdr TMUX_PANE='%9' HERDR_ENV=1 HERDR_PANE_ID=w1:p1 discover_supervisor_backend)
@@ -1935,6 +1991,7 @@ test_inject_wedge_alarm_throttles_when_marker_cannot_be_written
 test_fm_send_exits_nonzero_on_confirmed_swallow
 test_fm_send_exits_nonzero_on_initial_send_failure
 test_fm_send_exits_nonzero_on_unproven_submit
+test_window_for_task_matches_live_endpoint_by_label_on_every_backend
 test_discover_supervisor_backend_precedence
 test_discover_supervisor_target_herdr
 test_pane_is_busy_herdr_native_busy_state
