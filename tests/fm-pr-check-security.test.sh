@@ -264,6 +264,20 @@ run_merge_entry() {
     "$PR_MERGE" "$@"
 }
 
+# Control-byte fixtures are built as scalar assignments and referenced quoted
+# rather than written directly into the array literal below. MSYS bash deletes
+# the CR of a $'...\r' element while parsing an array literal, so on Windows the
+# CR never reached fm_pr_url_parse, the CR-free URL was (correctly) accepted, and
+# the negative assertion failed. Measured on Windows: a=( $'x\ry' ) yields xy,
+# while s=$'x\ry'; a=( "$s" ) yields x\ry - the parser itself was always right.
+URL_TAB=$'https://github.com/o/r/pull/1\t'
+URL_CR=$'https://github.com/o/r/pull/1\r'
+URL_LF=$'https://github.com/o/r/pull/1\nnext'
+URL_CRLF=$'https://github.com/o/r/pull/1\r\nnext'
+URL_SOH=$'https://github.com/o/r/pull/1\001'
+URL_ESC=$'https://github.com/o/r/pull/1\033'
+URL_DEL=$'https://github.com/o/r/pull/1\177'
+
 # shellcheck disable=SC2016 # Literal rejected URL bytes are parser test data.
 INVALID_URLS=(
   'https://gitlab.com/single/-/merge_requests/1'
@@ -287,13 +301,13 @@ INVALID_URLS=(
   ' https://github.com/o/r/pull/1'
   'https://github.com/o/r/pull/1 '
   'https://github.com/o /r/pull/1'
-  $'https://github.com/o/r/pull/1\t'
-  $'https://github.com/o/r/pull/1\r'
-  $'https://github.com/o/r/pull/1\nnext'
-  $'https://github.com/o/r/pull/1\r\nnext'
-  $'https://github.com/o/r/pull/1\001'
-  $'https://github.com/o/r/pull/1\033'
-  $'https://github.com/o/r/pull/1\177'
+  "$URL_TAB"
+  "$URL_CR"
+  "$URL_LF"
+  "$URL_CRLF"
+  "$URL_SOH"
+  "$URL_ESC"
+  "$URL_DEL"
   'https://user@github.com/o/r/pull/1'
   'https://user:pass@github.com/o/r/pull/1'
   'https://github.com:443/o/r/pull/1'
