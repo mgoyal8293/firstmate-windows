@@ -84,7 +84,8 @@
 # reserved-key rule in bin/fm-classify-lib.sh.
 #
 # Sourced by bin/fm-send.sh, bin/fm-watch.sh, bin/fm-secondmate-report.sh, and
-# tests. No side effects on source. set -u / set -e safe.
+# tests. Writes no state on source; the only thing sourcing changes is the
+# environment normalisation bin/fm-proc-lib.sh owns. set -u / set -e safe.
 #
 # Tunables (env):
 #   FM_PENDING_REPLY_GRACE_SECS   default 120
@@ -93,7 +94,6 @@
 #                                 (tests); receives task_id and full message as args
 #   FM_PENDING_REPLY_NOW          optional fixed epoch for deterministic tests
 
-# shellcheck source=bin/fm-marker-lib.sh
 _FM_PENDING_REPLY_LIB_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd 2>/dev/null)" || _FM_PENDING_REPLY_LIB_DIR="."
 # Sourced at top level, unlike bin/fm-wake-lib.sh further down: fm-proc-lib.sh
 # assigns no FM_ROOT/FM_HOME/STATE of its own and creates no directories, so it
