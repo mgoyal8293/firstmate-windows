@@ -140,6 +140,14 @@ function newNonce() {
 
 const PS_ARGS = ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-Command'];
 
+// Every identity sweep is bounded. Without a timeout a wedged PowerShell or
+// tasklist would leave the daemon's refresh permanently in flight: the liveness
+// cache would never update again, and callers that (correctly) wait for a fresh
+// sweep rather than accept a stale one would wait forever. The failure the
+// timeout produces - an unreadable identity - is recoverable; a permanent wedge
+// in the probe that recovery depends on is not.
+const SWEEP_TIMEOUT_MS = 15000;
+
 // snapshotIdentities: one batched sweep of every process on the box, as
 // { pid: {name, startTicks} }. `startTicks` is 0 when the process's start time
 // is unreadable (protected/system processes deny it); callers must treat 0 as
@@ -150,7 +158,7 @@ function snapshotIdentities(cb) {
     '(Get-Process | ForEach-Object { ' +
     '"$($_.Id)`t$($_.ProcessName)`t$(try{$_.StartTime.Ticks}catch{0})" }) -join "`n"';
   execFile('powershell.exe', PS_ARGS.concat([script]),
-    { encoding: 'utf8', maxBuffer: 32 * 1024 * 1024, windowsHide: true },
+    { encoding: 'utf8', maxBuffer: 32 * 1024 * 1024, windowsHide: true, timeout: SWEEP_TIMEOUT_MS },
     (err, out) => {
       if (err) return cb(err, null);
       const map = Object.create(null);
@@ -177,7 +185,7 @@ function snapshotIdentities(cb) {
 // marked unvalidated rather than silently trusted.
 function snapshotNames(cb) {
   execFile('tasklist.exe', ['/FO', 'CSV', '/NH'],
-    { encoding: 'utf8', maxBuffer: 32 * 1024 * 1024, windowsHide: true },
+    { encoding: 'utf8', maxBuffer: 32 * 1024 * 1024, windowsHide: true, timeout: SWEEP_TIMEOUT_MS },
     (err, out) => {
       if (err) return cb(err, null);
       const map = Object.create(null);

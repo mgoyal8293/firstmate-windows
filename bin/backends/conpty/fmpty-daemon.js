@@ -606,7 +606,13 @@ function refreshProcList(done) {
     // loop stalls every pipe client, including a kill request, which is exactly
     // the bug that made the spike's first clean-termination attempt look like a
     // timeout on an operation that had actually succeeded.
-    resolveNames(pids, (list, source) => finish(list, source));
+    // A second bound on top of the sweeps' own timeouts: if name resolution
+    // somehow never calls back, the refresh must still settle, or `pending`
+    // stays true and every later liveness read waits on a sweep that will
+    // never finish.
+    const nameTo = setTimeout(() => finish(null, 'name-timeout'), 20000);
+    if (nameTo.unref) nameTo.unref();
+    resolveNames(pids, (list, source) => { clearTimeout(nameTo); finish(list, source); });
   });
 }
 
