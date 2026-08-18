@@ -69,14 +69,9 @@
 # An untagged value was written by that previous reader. No fm_pid_identity output
 # can equal one on a /proc runtime, so reading an untagged record as current would
 # report a live sender dead - the precise failure the tag exists to prevent.
-# The tag is what classifies a stored value, never a difference in shape between
-# the two readers: they differ in both the COLUMNS width pin the legacy reader
-# keeps and fm_pid_identity's stripping of the leading whitespace it preserves.
-# fm_pending_reply_sender_alive therefore reads an untagged record in its own
-# format, through bin/fm-proc-lib.sh's fm_pid_identity_legacy_ps, and never
-# rewrites it: a liveness read holds no lock, so it must not touch the record.
-# Every newly written identity is tagged, so the transition ends as the untagged
-# records reach a terminal phase rather than by upgrading them in place.
+# _fm_pending_reply_untagged_sender_alive below owns how such a record is read
+# back, why a liveness read never rewrites it, and why the transition drains as
+# those records resolve rather than by upgrading them in place.
 #
 # Escalation lifecycle: an escalation is not just a message, it OPENS a durable
 # keyed decision in the parent status log, and bin/fm-classify-lib.sh's fold is
