@@ -1,0 +1,7 @@
+# The Windows arm must still refuse an archive that does not match its pin.
+$ PATH=<stub curl serving a tampered zip> bin/fm-install-shellcheck.sh <destdir>
+fm-install-shellcheck.sh: checksum mismatch for shellcheck-v0.11.0.zip (expected 8a4e35ab0b331c85d73567b12f2a444df187f483e5079ceffa6bda1faa2e740e, got 5e81eeaa816953af55a418482e1ca31fb54ff5c822075f2cad160511b6454123)
+exit=1
+
+$ ls "$W/bin-tampered"  # nothing installed
+ls: cannot access '/tmp/fm-wininst.twsOyn/bin-tampered': No such file or directory

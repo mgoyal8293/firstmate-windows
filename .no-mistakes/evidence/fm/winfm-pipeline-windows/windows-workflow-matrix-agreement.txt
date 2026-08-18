@@ -1,0 +1,18 @@
+matrix.shard        : [1, 2, 3, 4]
+strategy.job-total  : 4
+lane names the jobs will run: ['windows-1of4', 'windows-2of4', 'windows-3of4', 'windows-4of4']
+timeout-minutes     : 40 | fail-fast: False
+shell for run steps : bash
+
+  windows-1of4: exit=0 scripts=6
+  windows-2of4: exit=0 scripts=8
+  windows-3of4: exit=0 scripts=13
+  windows-4of4: exit=0 scripts=13
+
+union of the four jobs      : 40 scripts
+declared windows lane       : 40 scripts
+scripts run by two jobs     : none
+in lane but no job runs it  : none
+run by a job but not in lane: none
+
+RESULT: matrix and runner agree - every lane script runs exactly once

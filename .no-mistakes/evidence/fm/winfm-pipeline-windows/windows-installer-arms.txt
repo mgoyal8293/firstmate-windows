@@ -1,0 +1,29 @@
+# Host is Linux/WSL2 with Windows binfmt interop enabled, so a Windows-form
+# uname makes the installers take their real Windows arm: real download from
+# GitHub, real sha256 pin check, real unzip, and the real Windows .exe is then
+# executed by the installer's own version step.
+
+$ uname -s   # under the simulated-Windows PATH
+MINGW64_NT-10.0-26200
+
+$ bin/fm-install-shellcheck.sh "$W/bin"
+ShellCheck - shell script analysis tool
+version: 0.11.0
+license: GNU General Public License, version 3
+website: https://www.shellcheck.net
+exit=0
+
+$ bin/fm-install-actionlint.sh "$W/bin"
+1.7.12
+installed by downloading from release page
+built with go1.26.1 compiler for windows/amd64
+exit=0
+
+$ ls -l "$W/bin"
+total 40248
+-rwxr-xr-x 1 johns johns  6432768 Aug 18 18:32 actionlint.exe
+-rwxr-xr-x 1 johns johns 34778624 Aug 18 18:32 shellcheck.exe
+
+$ file "$W"/bin/*.exe
+<destdir>/bin/actionlint.exe: PE32+ executable (console) x86-64, for MS Windows, 8 sections
+<destdir>/bin/shellcheck.exe: PE32+ executable (console) x86-64, for MS Windows, 9 sections

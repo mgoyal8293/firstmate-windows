@@ -1,0 +1,8 @@
+# The two fixed tests, run twice each: once as this Linux host (the arms that
+# existed before), once with uname reporting MINGW64 so the added Windows arms
+# are the code path taken. The DLL fault itself is Windows-only, but this shows
+# the Windows arms are live code that runs green, not dead branches.
+Linux (uname -s = Linux)                             tests/fm-crew-state.test.sh    exit=0  ok=49  not-ok=0
+Linux (uname -s = Linux)                             tests/fm-wake-queue.test.sh    exit=0  ok=19  not-ok=0
+simulated Windows (uname -s = MINGW64_NT-10.0-26200) tests/fm-crew-state.test.sh    exit=0  ok=49  not-ok=0
+simulated Windows (uname -s = MINGW64_NT-10.0-26200) tests/fm-wake-queue.test.sh    exit=0  ok=19  not-ok=0

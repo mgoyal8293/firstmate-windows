@@ -1,0 +1,25 @@
+# Are the two new Windows pins the real upstream assets, and do the archives
+# have the layout the new extract arms assume?
+
+pinned in bin/fm-install-shellcheck.sh : 8a4e35ab0b331c85d73567b12f2a444df187f483e5079ceffa6bda1faa2e740e
+pinned in bin/fm-install-actionlint.sh : 6e7241b51e6817ea6a047693d8e6fed13b31819c9a0dd6c5a726e1592d22f6e9
+
+$ curl -O <upstream release assets> && sha256sum *.zip
+6e7241b51e6817ea6a047693d8e6fed13b31819c9a0dd6c5a726e1592d22f6e9  ./actionlint_1.7.12_windows_amd64.zip
+8a4e35ab0b331c85d73567b12f2a444df187f483e5079ceffa6bda1faa2e740e  ./shellcheck-v0.11.0.zip
+
+$ unzip -l shellcheck-v0.11.0.zip
+Archive:  shellcheck-v0.11.0.zip
+  Length      Date    Time    Name
+---------  ---------- -----   ----
+    35149  2025-08-04 00:22   LICENSE.txt
+     2374  2025-08-04 00:22   README.txt
+ 34778624  2025-08-04 00:22   shellcheck.exe
+---------                     -------
+ 34816147                     3 files
+
+$ unzip -l actionlint_1.7.12_windows_amd64.zip | tail -4
+     7278  2026-03-30 17:47   man/actionlint.1
+  6432768  2026-03-30 17:48   actionlint.exe
+---------                     -------
+  6616129                     11 files

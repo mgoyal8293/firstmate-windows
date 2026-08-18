@@ -1,0 +1,18 @@
+# A CI matrix that disagrees with bin/fm-test-run.sh must fail loudly, not run part of the lane.
+$ bin/fm-test-run.sh --list --lane windows-1of5
+fm-test-run: lane 'windows-1of5' asks for 5 windows shards but this runner is configured for 4 (see --list-lanes)
+exit=2
+
+$ bin/fm-test-run.sh --list --lane windows-5of4
+fm-test-run: lane 'windows-5of4' shard index is outside 1..4 (see --list-lanes)
+exit=2
+
+$ bin/fm-test-run.sh --list --lane windows-1
+fm-test-run: unknown lane 'windows-1' (see --list-lanes)
+exit=2
+
+# Coverage guard: the Linux partition line is unchanged and a Windows line is added.
+$ bin/fm-test-run.sh --check-coverage
+FM_TEST_COVERAGE ok total=152 parallel=24 serial=116 serial_shards=4 herdr=12
+FM_TEST_COVERAGE_WINDOWS ok windows=40 windows_shards=4
+exit=0

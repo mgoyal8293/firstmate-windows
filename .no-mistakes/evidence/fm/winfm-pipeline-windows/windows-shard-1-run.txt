@@ -1,0 +1,89 @@
+FM_TEST_BEGIN 2026-08-18T18:36:41Z tests/fm-decision-hold-lifecycle.test.sh family=pure-contract-unit expected_gate_skip=none
+ok - report-only unresolved decision is reproduced and completion refuses before loss
+ok - non-forced scout teardown always requires durable inventory verification
+ok - a declined decision closes with a recorded answer and no routed work
+ok - a decision closed outside the script is repairable and then clears teardown
+ok - an unanswered decision still blocks completion and resists both unrouted close paths
+ok - captain holds are idempotent, distinct, teardown-safe, Bearings-visible, and durably routed before close
+ok - completion and verification validate origins before constructing paths
+ok - ended visual review follows the same decision-hold completion owner
+ok - resolved findings and decision-like prose do not create false holds
+ok - terminal single-owner stale status decisions do not block empty inventory
+ok - main-home and secondmate-home captain holds remain correctly routed
+ok - resolve matches first/middle/last in quoted blocked_by and rejects a genuinely absent id
+ok - a bound channel's captured answers close their captain holds at answer time
+ok - a channel source with no decision binding closes nothing
+ok - the answer path keeps every guard the unrouted close path already had
+ok - the chat channel feeds the same keyed-answer intake a captured review does
+FM_TEST_END 2026-08-18T18:37:36Z tests/fm-decision-hold-lifecycle.test.sh exit=0 duration_ms=55692 gate_skip=false
+FM_TEST_BEGIN 2026-08-18T18:37:36Z tests/fm-backend-conpty.test.sh family=conpty expected_gate_skip=none
+ok - session ids are scoped by firstmate home (the pipe namespace is machine-global)
+ok - target parsing accepts one atom and refuses anything that could address another pipe
+ok - host gate refuses a non-Windows host loudly instead of failing later in a pty error
+ok - key vocabulary normalizes the spellings callers vary on and passes the rest through
+ok - agent_state passes the daemon's full recovery vocabulary through unchanged
+ok - an unrecognized state word degrades to unreadable, never to a recovery-licensing verdict
+ok - with no state answer the durable record decides even though the client exits nonzero, and a contradictory live pipe stays unreadable
+ok - a malformed target is unreadable, never dead
+ok - the three-state view collapses only authoritative absence to dead
+ok - busy state is a direct output-age measurement with an explicit unknown
+ok - capability descriptor declares styled + true cursor (the first non-tmux backend able to)
+ok - composer verdicts come from the shared classifier, cursor-anchored
+ok - an unusable cursor row refuses loudly instead of classifying the wrong shape
+ok - the composer is read in ONE client call, so the row and screen cannot straddle a redraw
+ok - create_task refuses an existing live session before spawning anything
+ok - create_task spawns a home-scoped shell session and confirms it answers before reporting success
+ok - literal text is delivered by file, so no payload is exposed to Windows command-line quoting
+ok - send_key normalizes then forwards
+ok - capture forwards a numeric scrollback depth and sanitizes anything else
+ok - list_live is scoped to this firstmate home and confirmed by a live ping, never by a stored pid
+ok - a leftover session directory with no answering pipe is not reported live
+ok - kill is best-effort and never forwards a target it could not parse
+ok - a well-formed conpty endpoint validates and reports its backend and target
+ok - a window that disagrees with conpty_session is refused, preserving task state
+ok - an endpoint bound to another task is refused
+ok - a conpty record with no session identifier is refused
+ok - conpty is registered as a known, spawn-capable, explicitly-selected backend needing no JSON parser
+ok - conpty adapter unit tests complete
+FM_TEST_END 2026-08-18T18:37:37Z tests/fm-backend-conpty.test.sh exit=0 duration_ms=1084 gate_skip=false
+FM_TEST_BEGIN 2026-08-18T18:37:37Z tests/fm-gotmp.test.sh family=session-bootstrap expected_gate_skip=none
+ok - fm-teardown removes the dir pointed to by tasktmp= in meta
+ok - fm-teardown skips gracefully when tasktmp= is absent (backward compat)
+ok - fm-teardown skips gracefully when tasktmp= points to a nonexistent dir
+FM_TEST_END 2026-08-18T18:37:38Z tests/fm-gotmp.test.sh exit=0 duration_ms=819 gate_skip=false
+FM_TEST_BEGIN 2026-08-18T18:37:38Z tests/fm-supervision-events.test.sh family=watcher-wake-lock expected_gate_skip=none
+ok - handle_push_transition: a blocked crew enqueues a stale wake naming its window and wakes the supervisor
+ok - handle_push_transition: enqueue failure cannot commit the Herdr dedupe marker
+ok - handle_push_transition: a declared-pause crew is absorbed (no fast wake), left to the poll loop's long cadence
+ok - event_wait_or_sleep: herdr windows go on the event pane list, but kind=secondmate endpoints are excluded
+ok - event_wait_or_sleep: one cached capability probe owns validation across bounded waits
+ok - event_wait_or_sleep: a home with no push-capable window is inert (sleeps POLL, never touches the event path)
+ok - event_wait_or_sleep: consecutive event-path failures disable the fast-path and revert to pure polling (fail-closed)
+# fm-supervision-events.test.sh: all assertions passed
+FM_TEST_END 2026-08-18T18:37:39Z tests/fm-supervision-events.test.sh exit=0 duration_ms=507 gate_skip=false
+FM_TEST_BEGIN 2026-08-18T18:37:39Z tests/fm-transition-lib.test.sh family=pure-contract-unit expected_gate_skip=none
+ok - fm_transition_record builds a 5-field record and every accessor reads its field
+ok - fm_transition_record uses a single TAB between each of the five fields
+ok - fm_transition_record scrubs TAB/newline out of fields so the record stays exactly five columns
+ok - fm_transition_record tolerates empty workspace/from/agent fields
+ok - fm_transition_policy is the single-owner status->action table (blocked=actionable, working=absorb, idle/done=defer, else=fallback)
+# fm-transition-lib.test.sh: all assertions passed
+FM_TEST_END 2026-08-18T18:37:39Z tests/fm-transition-lib.test.sh exit=0 duration_ms=86 gate_skip=false
+FM_TEST_BEGIN 2026-08-18T18:37:39Z tests/fm-remote-entrypoint.test.sh family=unclassified expected_gate_skip=none
+ok - fm-remote-entrypoint.sh invoked via a PATH symlink resolves SCRIPT_DIR to the real bin/ directory
+ok - fm-remote-entrypoint.sh invoked directly still resolves SCRIPT_DIR correctly
+FM_TEST_END 2026-08-18T18:37:39Z tests/fm-remote-entrypoint.test.sh exit=0 duration_ms=127 gate_skip=false
+FM_TEST_SUMMARY total=6 failed=0 skipped_gate=0 duration_ms=58503
+FM_TEST_SUMMARY_FAMILY family=conpty count=1 duration_ms=1084 failed=0
+FM_TEST_SUMMARY_FAMILY family=pure-contract-unit count=2 duration_ms=55778 failed=0
+FM_TEST_SUMMARY_FAMILY family=session-bootstrap count=1 duration_ms=819 failed=0
+FM_TEST_SUMMARY_FAMILY family=unclassified count=1 duration_ms=127 failed=0
+FM_TEST_SUMMARY_FAMILY family=watcher-wake-lock count=1 duration_ms=507 failed=0
+FM_TEST_SLOWEST rank=1 script=tests/fm-decision-hold-lifecycle.test.sh duration_ms=55692
+FM_TEST_SLOWEST rank=2 script=tests/fm-backend-conpty.test.sh duration_ms=1084
+FM_TEST_SLOWEST rank=3 script=tests/fm-gotmp.test.sh duration_ms=819
+FM_TEST_SLOWEST rank=4 script=tests/fm-supervision-events.test.sh duration_ms=507
+FM_TEST_SLOWEST rank=5 script=tests/fm-remote-entrypoint.test.sh duration_ms=127
+FM_TEST_SLOWEST rank=6 script=tests/fm-transition-lib.test.sh duration_ms=86
+fm-test-run: wrote timing artifact: /tmp/no-mistakes-evidence/01M0ANTAZ2AT3PDABTHTZ85JCJ/fm-test-timing-windows-1.json
+exit=0

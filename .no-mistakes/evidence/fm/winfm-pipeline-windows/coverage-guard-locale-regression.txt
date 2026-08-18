@@ -1,0 +1,14 @@
+# Reproducing the Git Bash failure on Linux by giving the guard the same
+# non-C ambient locale Git Bash defaults to (en_US.UTF-8). Every comm input
+# is LC_ALL=C sorted, and comm validates order in the AMBIENT locale.
+
+$ LC_ALL=en_US.UTF-8 bin/fm-test-run.sh --check-coverage   # BEFORE (base 1baa477)
+comm: file 2 is not in sorted order
+comm: input is not in sorted order
+exit=1
+(rc of the same command, unfiltered: 1)
+
+$ LC_ALL=en_US.UTF-8 bin/fm-test-run.sh --check-coverage   # AFTER (a8b7f42)
+FM_TEST_COVERAGE ok total=152 parallel=24 serial=116 serial_shards=4 herdr=12
+FM_TEST_COVERAGE_WINDOWS ok windows=40 windows_shards=4
+exit=0

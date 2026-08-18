@@ -1,0 +1,66 @@
+$ bin/fm-test-run.sh --list-lanes
+portable-parallel-1
+portable-parallel-2
+portable-serial
+portable-serial-1of4
+portable-serial-2of4
+portable-serial-3of4
+portable-serial-4of4
+real-herdr-gated
+windows
+windows-1of4
+windows-2of4
+windows-3of4
+windows-4of4
+
+$ bin/fm-test-run.sh --list --lane windows | wc -l
+40
+
+$ bin/fm-test-run.sh --list --lane windows-1of4
+tests/fm-decision-hold-lifecycle.test.sh
+tests/fm-backend-conpty.test.sh
+tests/fm-gotmp.test.sh
+tests/fm-supervision-events.test.sh
+tests/fm-transition-lib.test.sh
+tests/fm-remote-entrypoint.test.sh
+
+$ bin/fm-test-run.sh --list --lane windows-2of4
+tests/fm-wake-queue.test.sh
+tests/fm-send-settle.test.sh
+tests/fm-classify-decision-key.test.sh
+tests/fm-test-fixture-cleanup.test.sh
+tests/fm-windows-portability.test.sh
+tests/fm-pr-private-file-mode.test.sh
+tests/fm-project-origin.test.sh
+tests/fm-pi-primary-types.test.sh
+
+$ bin/fm-test-run.sh --list --lane windows-3of4
+tests/fm-crew-state.test.sh
+tests/fm-claude-stop-autoarm.test.sh
+tests/fm-spawn-pool-base-freshen.test.sh
+tests/fm-send-strict.test.sh
+tests/fm-tangle-guard.test.sh
+tests/fm-review-diff.test.sh
+tests/fm-afk-return.test.sh
+tests/fm-task-delivery.test.sh
+tests/fm-tmux-submit-busy.test.sh
+tests/fm-upstream-sync.test.sh
+tests/fm-supervision-instructions.test.sh
+tests/fm-trace-context-lib.test.sh
+tests/fm-calm-pi-extension.test.sh
+
+$ bin/fm-test-run.sh --list --lane windows-4of4
+tests/fm-pr-merge.test.sh
+tests/fm-herdr-session-cleanup.test.sh
+tests/fm-composer-lib.test.sh
+tests/fm-gate-refuse.test.sh
+tests/fm-send-popup-settle.test.sh
+tests/fm-vendor-auth-probe.test.sh
+tests/fm-spawn-batch.test.sh
+tests/fm-composer-ghost.test.sh
+tests/fm-busy-state.test.sh
+tests/fm-brief.test.sh
+tests/fm-test-isolation-proof.test.sh
+tests/fm-ask-user-authority.test.sh
+tests/fm-gitignore-config.test.sh
+
