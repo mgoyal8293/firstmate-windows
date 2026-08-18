@@ -133,6 +133,7 @@ Regression safety for this adapter's own tests is in `tests/fm-backend-conpty.te
 - Sessions are not shared between firstmate homes, and a home's sessions become unreachable if the install is relocated (the hometag changes).
 - No native event push: the watcher uses its poll loop, the same permanent fallback tmux uses.
 - Secondmate spawns on this backend are not yet designed or verified.
+- **Away mode (`/afk`) is unavailable.** The away-mode daemon must inject into the pane firstmate *itself* runs in, and there is no ConPTY equivalent of `$TMUX_PANE` or `$HERDR_PANE_ID` for firstmate to identify that pane by; a Windows firstmate runs in Windows Terminal or Git Bash, not inside a session this adapter owns. Creating the daemon's own non-visible terminal is a second missing piece: `bin/fm-afk-launch.sh`'s create/close/exists primitives are per-backend, and this adapter's session creation is task-scoped. Both refuse cleanly today rather than degrading, and away mode is the only firstmate capability this costs.
 - Scrollback while a harness holds the alternate screen is zero by construction; deep history comes from the transcript, which is capped and rotated (one generation kept) so an overnight session cannot fill the disk.
 - Windows itself is not a firstmate CI platform, so this adapter's real-host evidence is a recorded manual pass, not a gate that reruns on every change.
 
