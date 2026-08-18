@@ -89,6 +89,19 @@ jq   -> /c/Users/<user>/AppData/Local/.../jq
 The lane builds `FM_TEST_BASE_PATH` from `command -v` at run time rather than
 from literal paths, so a runner-image change - a new Node directory, a relocated
 `gh` - cannot silently empty it again.
+
+Every candidate directory is converted to POSIX form with `cygpath -u` before it
+enters that string, at the single `add_dir` chokepoint. PATH is colon-separated,
+so a Windows-form entry splits at its drive-letter colon: `C:\npm\prefix` becomes
+a bare relative `C` plus a `\npm\prefix` that MSYS reads as root-relative and
+that does not exist. `npm prefix -g` prints exactly that form, because npm
+resolves through native node - so the npm global bin, the entry that exists
+because `npm install -g` puts `tasks-axi` there, was the one entry the step
+failed to add. `cygpath` is probed rather than assumed, and the step now prints
+every entry and fails on a surviving single-letter or backslash entry, so this
+cannot regress silently. The `windows-behavior` job installs no ShellCheck: no
+lane member runs it, and `windows-lint` already proves that installer on the
+runner.
 All 16 test files that build a restricted PATH honour `FM_TEST_BASE_PATH` as of
 `1baa477`, `tests/fm-remote-doctor.test.sh` among them, so nothing here needs an
 override added. Where such a test still fails on Windows the cause is the
@@ -107,7 +120,7 @@ Both Windows assets are zips holding a bare `.exe`, not `.tar.{xz,gz}` holding a
 versioned directory, and GNU tar cannot read zip - hence a separate extract arm
 rather than a different archive name.
 
-Measured: **rc=0 in 5m35s** for 304 shell files plus 4 workflow files, with
+Measured: **rc=0 in 5m35s** for 304 shell files plus 5 workflow files, with
 `fm-lint.sh` at its 2-worker cap.
 
 ## Lane composition
@@ -228,6 +241,26 @@ Fixed with the exec wrapper, not by copying DLLs: `git` is mingw64-linked and
 needs a different DLL set than the `/usr/bin` tools.
 Before: 38 ok / 1 failed. After: **rc=0, 49 ok** (the fix also unblocked 11
 assertions the abort had hidden).
+
+One wall-clock bound in that file then needed scaling, because the wrapper costs
+a second MSYS process per tool call. `test_no_timeout_uses_perl_bound` bounds the
+perl-bounded `no-mistakes` lookup, measured around exactly the command the
+assertion wraps with the bound neutralised so the run completes:
+
+| platform | run 1 | run 2 | run 3 | worst | bound | headroom |
+|---|---:|---:|---:|---:|---:|---:|
+| Linux | 1.246s | 1.258s | 1.264s | 1.264s | 5s | 4.0x |
+| Git Bash | 3.429s | 4.219s | 4.605s | 4.605s | 25s | 5.4x |
+
+The 5s bound failed on Windows by a hair rather than an order of magnitude: the
+assertion compares integer `$SECONDS`, so a true 4.605s reads as `elapsed=5` and
+`[ 5 -lt 5 ]` is false. That was the whole failure. 25s is deliberately more than
+parity headroom because the Windows figure is far less stable - a 34% spread
+across three runs against 1.4% on Linux - and a GitHub Windows runner is slower
+than the machine these came from. Scaled in a `MINGW*|MSYS*` arm so the Linux
+tripwire keeps its 5s sensitivity. With the bound neutralised the script is
+**rc=0, 49 ok / 0 not ok** on Git Bash, so this bound was the single remaining
+Windows failure in the file and the exec-wrapper fix holds.
 
 ### `fm-wake-queue.test.sh` - fork cost, measured
 

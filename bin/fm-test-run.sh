@@ -131,7 +131,8 @@ now_iso() {
   date -u +%Y-%m-%dT%H:%M:%SZ
 }
 
-# Resolve a Python that actually runs, echoing its command name.
+# Resolve a Python 3 that actually runs, recording it in FM_TEST_PYTHON3_CACHE
+# and returning status only - callers read the variable, never `$(...)`.
 #
 # `command -v python3` is not evidence a Python exists. Windows ships Microsoft
 # Store "app execution aliases" for python and python3: they resolve on PATH,

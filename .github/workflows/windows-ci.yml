@@ -33,7 +33,7 @@ jobs:
     name: Lint (Windows)
     runs-on: windows-latest
     # Measured at 5m35s on a warm developer machine for 304 shell files plus
-    # 4 workflows, with fm-lint.sh capped at 2 workers. This is a hang
+    # 5 workflows, with fm-lint.sh capped at 2 workers. This is a hang
     # tripwire with roughly 3x margin, not the expected end of the job.
     timeout-minutes: 18
     steps:
@@ -117,11 +117,6 @@ jobs:
             exit 1
           fi
           echo "working tree is LF"
-      - name: Install pinned ShellCheck
-        run: |
-          set -eu
-          bin/fm-install-shellcheck.sh "$RUNNER_TEMP/bin"
-          echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
       - name: Install tasks-axi for backlog-handoff delegation
         run: |
           set -eu
@@ -139,11 +134,25 @@ jobs:
         # silently empty the PATH again.
         run: |
           set -eu
-          base="/mingw64/bin:/usr/bin:/bin:/usr/local/bin:$RUNNER_TEMP/bin"
+          base="/mingw64/bin:/usr/bin:/bin:/usr/local/bin"
+          # PATH is colon-separated, so a Windows-form directory splits at its
+          # drive-letter colon: "C:\npm\prefix" becomes a bare relative entry
+          # "C" plus a "\npm\prefix" that MSYS reads as root-relative and that
+          # does not exist. `npm prefix -g` prints that form because npm resolves
+          # through native node. Convert at the single chokepoint every candidate
+          # passes through, so a future source cannot reintroduce it. cygpath is
+          # probed rather than assumed; where it is absent the value is unchanged,
+          # which keeps this identical on a non-Windows host.
+          cygpath_bin=$(command -v cygpath 2>/dev/null || true)
+          posix_dir() {
+            [ -n "$cygpath_bin" ] || { printf '%s\n' "$1"; return 0; }
+            "$cygpath_bin" -u "$1" 2>/dev/null || printf '%s\n' "$1"
+          }
           add_dir() {
+            dir=$(posix_dir "$1")
             case ":$base:" in
-              *":$1:"*) ;;
-              *) base="$base:$1" ;;
+              *":$dir:"*) ;;
+              *) base="$base:$dir" ;;
             esac
           }
           for tool in git node npm npx gh jq perl curl openssl tar; do
@@ -159,6 +168,15 @@ jobs:
           [ -z "$npm_bin" ] || add_dir "$npm_bin"
           echo "FM_TEST_BASE_PATH=$base" >> "$GITHUB_ENV"
           echo "harness PATH: $base"
+          echo "--- harness PATH entries, one per line ---"
+          printf '%s\n' "$base" | tr ':' '\n' | sed 's/^/  /'
+          # A surviving Windows-form entry shows up here as a single-letter
+          # directory or one holding a backslash. Fail rather than run the lane
+          # with a PATH that silently lost the entry it was built to add.
+          if printf '%s\n' "$base" | tr ':' '\n' | grep -qE '^[A-Za-z]$|\\'; then
+            echo "::error::harness PATH holds a Windows-form entry; cygpath conversion did not take"
+            exit 1
+          fi
           echo "--- reachability of the tools the suite asserts on ---"
           for tool in git node gh jq perl; do
             printf '%-8s %s\n' "$tool" "$(PATH="$base" command -v "$tool" || echo UNREACHABLE)"

@@ -36,6 +36,25 @@ CREW_STATE="$ROOT/bin/fm-crew-state.sh"
 TMP_ROOT=$(fm_test_tmproot fm-crew-state)
 fm_git_identity fmtest fmtest@example.invalid
 
+# Wall-clock bound for the perl-bounded no-mistakes lookup in
+# test_no_timeout_uses_perl_bound. Measured around exactly the command the
+# assertion wraps, with the bound neutralised so the run completes, three runs
+# per platform:
+#
+#   Linux     1.246s 1.258s 1.264s  worst 1.264s  under 5s   = 4.0x headroom
+#   Git Bash  3.429s 4.219s 4.605s  worst 4.605s  under 25s  = 5.4x headroom
+#
+# The 5s bound fails on Windows by a hair, not by an order of magnitude: the
+# assertion compares integer $SECONDS, so a true 4.605s reads as elapsed=5 and
+# `[ 5 -lt 5 ]` is false. 25s is deliberately more than parity headroom because
+# the Windows figure is far less stable - a 34% spread across three runs against
+# 1.4% on Linux - and a GitHub Windows runner is slower than the machine these
+# came from. Scaled in a Windows arm so the Linux tripwire keeps its sensitivity.
+NM_TIMEOUT_WALL_LIMIT=5
+case "$(uname -s)" in
+  MINGW*|MSYS*) NM_TIMEOUT_WALL_LIMIT=25 ;;
+esac
+
 # A real git repo checked out on <branch>, so the helper's branch attribution
 # (git symbolic-ref) resolves like it would for a live crew worktree.
 make_repo_on_branch() {  # <dir> <branch>
@@ -1127,7 +1146,8 @@ SH
   elapsed=$((SECONDS - start))
   assert_contains "$out" "state: working" "timed-out no-mistakes falls back to pane"
   assert_contains "$out" "source: pane" "timed-out no-mistakes -> pane source"
-  [ "$elapsed" -lt 5 ] || fail "perl timeout did not bound no-mistakes calls (elapsed ${elapsed}s)"
+  [ "$elapsed" -lt "$NM_TIMEOUT_WALL_LIMIT" ] \
+    || fail "perl timeout did not bound no-mistakes calls (elapsed ${elapsed}s, bound ${NM_TIMEOUT_WALL_LIMIT}s)"
   calls=$(awk 'END { print NR + 0 }' "$calls_file" 2>/dev/null || echo 0)
   [ "$calls" -eq 1 ] || fail "empty no-mistakes status triggered extra lookups ($calls calls)"
   pass "no timeout command uses perl bound"

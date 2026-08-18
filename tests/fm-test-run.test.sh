@@ -529,6 +529,45 @@ test_portable_serial_shard_lane_refusals() {
   pass "portable serial shard lanes refuse mismatched, out-of-range, and countless names"
 }
 
+test_windows_shard_lane_refusals() {
+  local tmp count rc other
+  tmp=$(mktemp -d "${TMPDIR:-/tmp}/fm-test-run-windows-lane.XXXXXX")
+  count=$("$RUNNER" --list-lanes | grep -c '^windows-[0-9]*of[0-9]*$')
+  other=$((count + 1))
+
+  # .github/workflows/windows-ci.yml builds the lane name from
+  # ${{ strategy.job-total }} precisely so a matrix that disagrees with
+  # WINDOWS_SHARDS fails loudly instead of running part of the lane.
+  set +e
+  "$RUNNER" --list --lane "windows-1of${other}" >"$tmp/out" 2>"$tmp/err"
+  rc=$?
+  set -e
+  [ "$rc" -eq 2 ] || fail "mismatched windows shard count must refuse (exit 2), got $rc"
+  [ ! -s "$tmp/out" ] || fail "mismatched windows shard count must not list tests"
+  grep -Fq "configured for $count" "$tmp/err" \
+    || fail "windows mismatch refusal must name the configured count: $(cat "$tmp/err")"
+
+  set +e
+  "$RUNNER" --list --lane "windows-${other}of${count}" >"$tmp/out2" 2>"$tmp/err2"
+  rc=$?
+  set -e
+  [ "$rc" -eq 2 ] || fail "out-of-range windows shard index must refuse (exit 2), got $rc"
+  [ ! -s "$tmp/out2" ] || fail "out-of-range windows shard index must not list tests"
+  grep -Fq "outside 1..$count" "$tmp/err2" \
+    || fail "windows range refusal message missing: $(cat "$tmp/err2")"
+
+  set +e
+  "$RUNNER" --list --lane windows-1 >"$tmp/out3" 2>"$tmp/err3"
+  rc=$?
+  set -e
+  [ "$rc" -eq 2 ] || fail "windows shard lane without a count must refuse (exit 2), got $rc"
+  [ ! -s "$tmp/out3" ] || fail "countless windows shard lane must not list tests"
+  grep -Fq "unknown lane 'windows-1'" "$tmp/err3" \
+    || fail "countless windows lane refusal message missing: $(cat "$tmp/err3")"
+  rm -rf "$tmp"
+  pass "windows shard lanes refuse mismatched, out-of-range, and countless names"
+}
+
 test_jobs_requires_proven_isolated() {
   local tmp rc shard_lane
   tmp=$(mktemp -d "${TMPDIR:-/tmp}/fm-test-run-jobs.XXXXXX")
@@ -781,6 +820,7 @@ test_portable_shard_union_and_coverage_guard
 test_portable_serial_shards_partition_the_serial_lane
 test_unmeasured_serial_report_names_the_unhinted_script
 test_portable_serial_shard_lane_refusals
+test_windows_shard_lane_refusals
 test_jobs_requires_proven_isolated
 test_jobs_parallel_scheduler_and_failure_propagation
 test_herdr_ci_family_run_has_a_step_timeout
