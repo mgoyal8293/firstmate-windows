@@ -20,7 +20,8 @@
 #  11. Backend busy/idle observation works through the shared busy abstraction
 #      used by Pi/Claude secondmate backends (no conversation scrape)
 #  12. Sender liveness survives a `ps` that rejects -o (the MSYS case), and a
-#      record written by the previous reader's format is still verified correctly
+#      record written by the previous reader's format is still verified correctly,
+#      in that format, without the liveness read rewriting the record
 set -u
 
 # shellcheck source=tests/lib.sh
@@ -1174,7 +1175,7 @@ test_sender_liveness_survives_a_ps_that_rejects_o() {
   pass "sender liveness works where ps rejects -o, so the one recovery is sent and reconciled"
 }
 
-test_previous_format_sender_identity_is_verified_and_upgraded() {
+test_previous_format_sender_identity_is_verified() {
   local home state corr rec legacy fb saved_path
   home=$(setup_parent legacy-identity)
   state="$home/state"
@@ -1197,16 +1198,13 @@ test_previous_format_sender_identity_is_verified_and_upgraded() {
     fm_pending_reply_tick_one "$state" "$corr" unknown || fail "tick over a legacy record failed"
     [ "$(phase_of "$state" "$corr")" = recovery_sending ] \
       || fail "a legacy record's live sender must not be reconciled as interrupted, got $(phase_of "$state" "$corr")"
-    # Verified once, it is rewritten in the current format and never takes the
-    # transition path again.
-    case "$(fm_pending_reply_get "$rec" recovery_sender_identity)" in
-      "$FM_PENDING_REPLY_IDENTITY_FORMAT "*) : ;;
-      *) fail "a verified legacy record should have been rewritten in the current format" ;;
-    esac
-    [ "$(fm_pending_reply_get "$rec" recovery_sender_identity)" = "$(fm_pending_reply_tagged_identity "$$")" ] \
-      || fail "the rewritten identity should equal a fresh read of the same process"
+    # Reading liveness must never write: the record keeps its own format, so a
+    # concurrent resolver holding the per-correlation lock cannot lose a field to
+    # an unlocked rewrite from this path.
+    [ "$(fm_pending_reply_get "$rec" recovery_sender_identity)" = "$legacy" ] \
+      || fail "a liveness read must leave the stored identity byte-identical"
     fm_pending_reply_sender_alive "$rec" \
-      || fail "the rewritten record must still read as alive"
+      || fail "a second read of the same legacy record must still read as alive"
 
     # The negative half: a legacy identity belonging to some other process is a
     # dead or reused sender and must still reconcile as an interrupted attempt.
@@ -1215,7 +1213,7 @@ test_previous_format_sender_identity_is_verified_and_upgraded() {
     fm_pending_reply_set "$rec" phase recovery_sending || fail "could not restage recovery_sending"
     fm_pending_reply_sender_alive "$rec" \
       && fail "a legacy identity that does not match the running process must not read as alive"
-    pass "a record in the previous identity format is verified against that format and then upgraded"
+    pass "a record in the previous identity format is verified against that format without being rewritten"
   else
     pass "previous-format verification skipped: this platform's ps cannot produce that form"
   fi
@@ -1268,6 +1266,6 @@ test_correlations_reuse_only_for_matching_open_task
 test_tick_end_to_end_missed_then_escalate
 test_failed_send_discards_undelivered_expectation
 test_sender_liveness_survives_a_ps_that_rejects_o
-test_previous_format_sender_identity_is_verified_and_upgraded
+test_previous_format_sender_identity_is_verified
 
 printf 'ok - all pending-reply tests passed\n'

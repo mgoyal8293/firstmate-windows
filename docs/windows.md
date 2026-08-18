@@ -146,6 +146,22 @@ Before `bin/fm-claude-sessionend-release.sh` existed, that restart case was
 measured as REFUSED a minute after the first session had exited, which would
 have left a Windows home read-only for four hours after every ordinary quit.
 
+#### The process-identity read
+
+Git for Windows bash 5.2.37(1)-release on MINGW64_NT-10.0-26200, and Linux 6.18 for the unchanged-behaviour half:
+
+| Case | Result |
+|---|---|
+| `COLUMNS=10000 LC_ALL=C ps -p $$ -o lstart= -o command=` on MSYS | rejected, exit 1, `ps: unknown option -- o` |
+| `/proc/<pid>/stat` and `/proc/<pid>/cmdline` on the same host | both readable |
+| Before this change, sender identity | unreadable, the function returns 1 |
+| Before this change, one recovery attempt | refused, nothing sent, the record stays at `awaiting_report`, and a live sender reads as dead |
+| After this change, sender identity | `fm-pid-identity.v1 proc-starttime=237978196 cmdline-hex=62617368002e2f7665726966792e7368002d2d64656d6f2d6f6e6c7900` |
+| After this change, one recovery attempt | delivered, the record reaches `recovery_sent`, a live sender reads as alive, and a gone pid reads as dead |
+| An untagged record on that host | defers on a live pid, the record stays at `recovery_sending` across a poll, and concludes dead on a gone pid |
+| Suites on that host | `tests/fm-windows-portability.test.sh` exit 0, `tests/fm-pending-reply.test.sh` exit 0, with the previous-format verification case reporting its guarded skip because that platform's ps cannot produce the old form |
+| Off Windows, the identity is byte-identical across the move | `linux-starttime=9894240 cmdline-hex=736c6565700033303000` from both `bin/fm-wake-lib.sh` and `bin/fm-proc-lib.sh`, and `tests/fm-pending-reply.test.sh` passes at origin/main and on this branch |
+
 ### A second wedge in the same layer: symlink target spelling
 
 Native symlinks made `ln -s` a real link, but MSYS resolves the stored Windows

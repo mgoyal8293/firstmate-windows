@@ -69,7 +69,11 @@
 # An untagged value was written by that previous reader. No fm_pid_identity output
 # can equal one on a /proc runtime, so reading an untagged record as current would
 # report a live sender dead - the precise failure the tag exists to prevent.
-# fm_pending_reply_sender_alive owns that transition and drains it per record.
+# fm_pending_reply_sender_alive therefore reads an untagged record in its own
+# format, through bin/fm-proc-lib.sh's fm_pid_identity_legacy_ps, and never
+# rewrites it: a liveness read holds no lock, so it must not touch the record.
+# Every newly written identity is tagged, so the transition ends as the untagged
+# records reach a terminal phase rather than by upgrading them in place.
 #
 # Escalation lifecycle: an escalation is not just a message, it OPENS a durable
 # keyed decision in the parent status log, and bin/fm-classify-lib.sh's fold is
@@ -814,7 +818,7 @@ fm_pending_reply_sender_alive() {  # <record-path>
   case "$expected" in
     "$FM_PENDING_REPLY_IDENTITY_FORMAT "*) ;;
     *)
-      _fm_pending_reply_untagged_sender_alive "$rec" "$pid" "$expected"
+      _fm_pending_reply_untagged_sender_alive "$pid" "$expected"
       return $?
       ;;
   esac
@@ -829,19 +833,23 @@ fm_pending_reply_sender_alive() {  # <record-path>
 # it, COLUMNS pin included: fm_pid_identity's own ps fallback differs from it in
 # both that pin and in leading-whitespace handling, so the two are not
 # interchangeable even on a runtime with no /proc, and sniffing the stored string
-# for its shape would be a guess about vendor date output. So verify it the way it
-# was written, then rewrite the record in the current format with one atomic field
-# write, and the transition drains itself one record at a time.
-_fm_pending_reply_untagged_sender_alive() {  # <record-path> <pid> <stored-identity>
-  local rec=$1 pid=$2 expected=$3 legacy current
+# for its shape would be a guess about vendor date output. So read it back through
+# bin/fm-proc-lib.sh's fm_pid_identity_legacy_ps, which is that exact command and
+# is kept there for this one purpose.
+#
+# This is a liveness READ and never writes: the record keeps its own format until
+# it resolves. The comparison is deterministic, so re-running it costs one `ps`
+# and answers the same on every poll, whereas rewriting the field here would
+# read-modify-rewrite the whole record outside the per-correlation lock that a
+# concurrent resolver holds. Every newly written record is tagged, so the
+# transition ends as the untagged records complete, not by upgrading them in place.
+_fm_pending_reply_untagged_sender_alive() {  # <pid> <stored-identity>
+  local pid=$1 expected=$2 legacy
   case "$pid" in ''|*[!0-9]*) return 1 ;; esac
-  legacy=$(COLUMNS=10000 LC_ALL=C ps -p "$pid" -o lstart= -o command= 2>/dev/null)
+  legacy=$(fm_pid_identity_legacy_ps "$pid") || legacy=''
   if [ -n "$legacy" ]; then
-    [ "$legacy" = "$expected" ] || return 1
-    if current=$(fm_pending_reply_tagged_identity "$pid"); then
-      fm_pending_reply_set "$rec" recovery_sender_identity "$current" || true
-    fi
-    return 0
+    [ "$legacy" = "$expected" ]
+    return $?
   fi
   # This runtime's ps cannot answer that form at all - the MSYS case - so an
   # untagged identity can never be matched here. Use the one identity owner purely

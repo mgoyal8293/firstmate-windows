@@ -182,7 +182,7 @@ fm_pid_identity() {  # <pid>
   case "$pid" in
     ''|*[!0-9]*) return 1 ;;
   esac
-  proc_root=$(fm_proc_root)
+  proc_root=${FM_PROC_ROOT_OVERRIDE:-/proc}
   if [ -r "$proc_root/$pid/stat" ] && [ -r "$proc_root/$pid/cmdline" ]; then
     stat_line=$(cat "$proc_root/$pid/stat" 2>/dev/null) || return 1
     # After the final comm delimiter, array index 19 is proc stat field 22.
@@ -205,6 +205,25 @@ fm_pid_identity() {  # <pid>
   out=$(LC_ALL=C ps -p "$pid" -o lstart= -o command= 2>/dev/null) || return 1
   [ -n "$out" ] || return 1
   printf '%s\n' "$out" | sed 's/^[[:space:]]*//'
+}
+
+# fm_pid_identity_legacy_ps <pid>
+#
+# TRANSITIONAL. The identity read exactly as the release before fm_pid_identity
+# owned it wrote it, COLUMNS pin and leading whitespace included, because
+# reproducing the bytes that release stored is this function's entire purpose:
+# fm_pid_identity's own ps fallback differs from it in both the width pin and in
+# whitespace handling, so the two are not interchangeable.
+#
+# Call it ONLY to read an identity an older release already wrote into a record.
+# Never call it to describe a live process for a new record - fm_pid_identity is
+# the one owner of that. Delete this function once no untagged records remain.
+fm_pid_identity_legacy_ps() {  # <pid>
+  local pid=$1
+  case "$pid" in
+    ''|*[!0-9]*) return 1 ;;
+  esac
+  COLUMNS=10000 LC_ALL=C ps -p "$pid" -o lstart= -o command= 2>/dev/null
 }
 
 # Current working directory of pid $1, or non-zero when it cannot be read.
