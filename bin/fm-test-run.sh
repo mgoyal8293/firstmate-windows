@@ -223,6 +223,9 @@ family_for_basename() {
     fm-backend-orca.test.sh)
       printf '%s\n' orca
       ;;
+    fm-backend-conpty.test.sh)
+      printf '%s\n' conpty
+      ;;
     *)
       printf '%s\n' unclassified
       ;;
@@ -254,6 +257,7 @@ snapshot-bearings
 cmux
 zellij
 orca
+conpty
 unclassified
 EOF
 }
@@ -878,6 +882,10 @@ families_for_changed_path() {
     bin/backends/orca*|bin/backends/tmux.sh)
       printf '%s\n' backend-dispatch
       printf '%s\n' orca
+      ;;
+    bin/backends/conpty*)
+      printf '%s\n' conpty
+      printf '%s\n' backend-dispatch
       ;;
     bin/fm-backend.sh|bin/fm-backend-hometag-lib.sh)
       printf '%s\n' backend-dispatch

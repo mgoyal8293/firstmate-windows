@@ -66,8 +66,14 @@ FM_BACKEND_CONFIG_DIR="${FM_CONFIG_OVERRIDE:-$FM_HOME/config}"
 # cmux is EXPERIMENTAL and spawn-capable, session-provider-only like
 # herdr/zellij - verified against the real 0.64.17 binary (docs/cmux-backend.md).
 # codex-app remains deliberately absent; see docs/codex-app-backend.md.
-FM_BACKEND_KNOWN="tmux herdr zellij orca cmux"
-FM_BACKEND_SPAWN="tmux herdr zellij orca cmux"
+# conpty is EXPERIMENTAL and spawn-capable, session-provider-only like
+# herdr/zellij/cmux - the Windows answer to "tmux does not exist here". It is
+# never auto-detected (there is no ambient session to detect: each task's daemon
+# is its own container), so it is selected explicitly; see docs/conpty-backend.md
+# for its empirical basis, verified against real claude 2.1.220 on
+# Windows 10.0.26200 with node-pty 1.1.0.
+FM_BACKEND_KNOWN="tmux herdr zellij orca cmux conpty"
+FM_BACKEND_SPAWN="tmux herdr zellij orca cmux conpty"
 
 # fm_backend_list_contains: whitespace-delimited membership without relying on
 # shell word splitting. fm-backend.sh is normally sourced by bash scripts, but
@@ -315,6 +321,11 @@ fm_backend_required_tools() {  # <backend>
     zellij) printf '%s' 'zellij jq treehouse' ;;
     cmux)   printf '%s' 'cmux jq treehouse' ;;
     orca)   printf '%s' 'orca' ;;
+    # conpty needs no backend CLI and no jq: its session daemon ships in
+    # bin/backends/conpty/ and its client projects every answer this adapter
+    # reads to a plain scalar. `node` is already in bootstrap's COMMON list, so
+    # the genuine backend-specific delta is only the worktree provider.
+    conpty) printf '%s' 'treehouse' ;;
     *) return 1 ;;
   esac
 }
@@ -509,6 +520,18 @@ fm_backend_validate_task_endpoint() {  # <meta-file> <task-id>
       fi
       window=$terminal
       ;;
+    conpty)
+      [ "$binding" = "$id" ] || {
+        echo "REFUSED: conpty endpoint metadata for task $id lacks an exact task binding; preserving task state." >&2
+        return 1
+      }
+      recorded_session=$(fm_backend_meta_exact_value "$meta" conpty_session) || recorded_session=
+      if [ -z "$recorded_session" ] || [ "$window" != "$recorded_session" ] \
+        || ! fm_backend_endpoint_atom_valid "$recorded_session"; then
+        echo "REFUSED: conpty endpoint metadata for task $id is malformed or inconsistent; preserving task state." >&2
+        return 1
+      fi
+      ;;
     cmux)
       [ "$binding" = "$id" ] || {
         echo "REFUSED: legacy cmux endpoint metadata for task $id lacks an exact task binding; preserving task state." >&2
@@ -631,6 +654,13 @@ fm_backend_source() {  # <name>
         _FM_BACKEND_CMUX_SOURCED=1
       fi
       ;;
+    conpty)
+      if [ -z "${_FM_BACKEND_CONPTY_SOURCED:-}" ]; then
+        # shellcheck source=/dev/null
+        . "$FM_BACKEND_LIB_DIR/backends/conpty.sh" || return 1
+        _FM_BACKEND_CONPTY_SOURCED=1
+      fi
+      ;;
   esac
 }
 
@@ -702,6 +732,7 @@ fm_backend_capture() {  # <backend> <target> <lines> [expected-label]
     zellij) fm_backend_zellij_capture "$@" ;;
     orca) fm_backend_orca_capture "$@" ;;
     cmux) fm_backend_cmux_capture "$@" ;;
+    conpty) fm_backend_conpty_capture "$@" ;;
     *) echo "error: no capture implementation for backend '$backend'" >&2; return 1 ;;
   esac
 }
@@ -717,6 +748,7 @@ fm_backend_send_key() {  # <backend> <target> <key> [expected-label]
     zellij) fm_backend_zellij_send_key "$@" ;;
     orca) fm_backend_orca_send_key "$@" ;;
     cmux) fm_backend_cmux_send_key "$@" ;;
+    conpty) fm_backend_conpty_send_key "$@" ;;
     *) echo "error: no send-key implementation for backend '$backend'" >&2; return 1 ;;
   esac
 }
@@ -734,6 +766,7 @@ fm_backend_send_text_submit() {  # <backend> <target> <text> <retries> <enter-sl
     zellij) fm_backend_zellij_send_text_submit "$@" ;;
     orca) fm_backend_orca_send_text_submit "$@" ;;
     cmux) fm_backend_cmux_send_text_submit "$@" ;;
+    conpty) fm_backend_conpty_send_text_submit "$@" ;;
     *) echo "error: no send-text implementation for backend '$backend'" >&2; return 1 ;;
   esac
 }
@@ -752,6 +785,7 @@ fm_backend_kill() {  # <backend> <target>
     zellij) fm_backend_zellij_kill "$@" ;;
     orca) fm_backend_orca_kill "$@" ;;
     cmux) fm_backend_cmux_kill "$@" ;;
+    conpty) fm_backend_conpty_kill "$@" ;;
     *) echo "error: no kill implementation for backend '$backend'" >&2; return 1 ;;
   esac
 }
@@ -789,6 +823,7 @@ fm_backend_busy_state() {  # <backend> <target>
   fm_backend_source "$backend" || { printf 'unknown'; return 0; }
   case "$backend" in
     herdr) fm_backend_herdr_busy_state "$@" ;;
+    conpty) fm_backend_conpty_busy_state "$@" ;;
     *) printf 'unknown' ;;
   esac
 }
@@ -815,6 +850,7 @@ fm_backend_composer_state() {  # <backend> <target> [expected-label] -> empty|pe
     orca) fm_backend_orca_composer_state "$@" ;;
     cmux) fm_backend_cmux_composer_state "$@" ;;
     zellij) fm_backend_zellij_composer_state "$@" ;;
+    conpty) fm_backend_conpty_composer_state "$@" ;;
     *) printf 'unknown' ;;
   esac
 }
@@ -864,6 +900,10 @@ fm_backend_target_exists() {  # <backend> <target> [expected-label]
       fm_backend_source cmux || return 1
       fm_backend_cmux_target_ready "$target" "$expected_label"
       ;;
+    conpty)
+      fm_backend_source conpty || return 1
+      fm_backend_conpty_target_ready "$target" "$expected_label"
+      ;;
     *)
       return 1
       ;;
@@ -891,6 +931,7 @@ fm_backend_agent_state() {  # <backend> <target>
   case "$backend" in
     tmux) fm_backend_tmux_agent_state "$target" ;;
     herdr) fm_backend_herdr_agent_state "$target" ;;
+    conpty) fm_backend_conpty_agent_state "$target" ;;
     *) printf 'unverified' ;;
   esac
 }

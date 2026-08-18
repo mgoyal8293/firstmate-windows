@@ -648,6 +648,7 @@ BACKEND=
 ORCA_ABORT_CLEANUP=0
 ORCA_WORKTREE_ID=
 ORCA_TERMINAL=
+CONPTY_SESSION=
 HERDR_PROJECTION_ABORT_CLEANUP=0
 HERDR_PROJECTION_ABORT_SESSION=
 HERDR_PROJECTION_ABORT_TASK_PANE=
@@ -1857,6 +1858,11 @@ if [ "$RELAUNCH" -eq 1 ]; then
   [ "$KIND" = secondmate ] || WT=$RELAUNCH_WT
   WT_TARGET=$T
   SES=${T%%:*}
+  # A conpty endpoint IS its scoped session id, so the adopted target restores
+  # the value the create-task branch below would otherwise have set. Without
+  # this, a relaunch skips that branch and the meta writer would reference an
+  # unset variable under `set -u`.
+  [ "$BACKEND" != conpty ] || CONPTY_SESSION=$T
 else
 case "$BACKEND" in
   tmux)
@@ -2062,6 +2068,21 @@ EOF
     fi
     T="$CMUX_WORKSPACE_ID:$CMUX_SURFACE_ID"
     ;;
+  conpty)
+    # No container to stand up: unlike tmux/herdr/zellij there is no shared
+    # server, because each task's ConPTY daemon IS its own container and the
+    # named pipe addressing it is created by that daemon. container_ensure is
+    # therefore a pure host preflight (Windows, node, installed dependencies),
+    # and it deliberately runs BEFORE anything is created so an unusable host
+    # refuses without leaving a half-made session behind.
+    fm_backend_conpty_container_ensure || exit 1
+    CONPTY_SESSION=$(fm_backend_conpty_create_task "$W" "$PROJ_ABS") || exit 1
+    if [ -z "$CONPTY_SESSION" ]; then
+      echo "error: conpty did not return a session id for $W" >&2
+      exit 1
+    fi
+    T="$CONPTY_SESSION"
+    ;;
   orca)
     set +e
     ORCA_WT_RAW=$(fm_backend_orca_worktree_create "$PROJ_ABS" "$W")
@@ -2107,6 +2128,7 @@ spawn_send_text_line() {  # <target> <text>
     zellij) fm_backend_zellij_send_text_line "$1" "$2" "$W" ;;
     orca) fm_backend_orca_send_text_line "$1" "$2" ;;
     cmux) fm_backend_cmux_send_text_line "$1" "$2" "$W" ;;
+    conpty) fm_backend_conpty_send_text_line "$1" "$2" "$W" ;;
   esac
 }
 spawn_current_path() {  # <target>
@@ -2115,6 +2137,7 @@ spawn_current_path() {  # <target>
     herdr) fm_backend_herdr_current_path "$1" ;;
     zellij) fm_backend_zellij_current_path "$1" "$W" ;;
     cmux) fm_backend_cmux_current_path "$1" "$W" ;;
+    conpty) fm_backend_conpty_current_path "$1" "$W" ;;
   esac
 }
 spawn_send_literal() {  # <target> <text>
@@ -2124,6 +2147,7 @@ spawn_send_literal() {  # <target> <text>
     zellij) fm_backend_zellij_send_literal "$1" "$2" "$W" ;;
     orca) fm_backend_orca_send_literal "$1" "$2" ;;
     cmux) fm_backend_cmux_send_literal "$1" "$2" "$W" ;;
+    conpty) fm_backend_conpty_send_literal "$1" "$2" "$W" ;;
   esac
 }
 spawn_send_key() {  # <target> <key>
@@ -2133,6 +2157,7 @@ spawn_send_key() {  # <target> <key>
     zellij) fm_backend_zellij_send_key "$1" "$2" "$W" ;;
     orca) fm_backend_orca_send_key "$1" "$2" ;;
     cmux) fm_backend_cmux_send_key "$1" "$2" "$W" ;;
+    conpty) fm_backend_conpty_send_key "$1" "$2" "$W" ;;
   esac
 }
 
@@ -2632,7 +2657,7 @@ fi
 preserve_relaunch_meta() {
   awk -F= '
     BEGIN {
-      split("window endpoint_task_id worktree project harness kind mode yolo tasktmp model effort busy_gen spawn_gen traceparent backend herdr_session herdr_workspace_id herdr_tab_id herdr_pane_id zellij_session zellij_tab_id zellij_pane_id orca_worktree_id terminal cmux_workspace_id cmux_surface_id home projects control_relaunch_tx", keys, " ")
+      split("window endpoint_task_id worktree project harness kind mode yolo tasktmp model effort busy_gen spawn_gen traceparent backend herdr_session herdr_workspace_id herdr_tab_id herdr_pane_id zellij_session zellij_tab_id zellij_pane_id orca_worktree_id terminal cmux_workspace_id cmux_surface_id conpty_session home projects control_relaunch_tx", keys, " ")
       for (i in keys) owned[keys[i]] = 1
     }
     !($1 in owned)
@@ -2675,6 +2700,11 @@ preserve_relaunch_meta() {
   if [ "$BACKEND" = cmux ]; then
     echo "cmux_workspace_id=$CMUX_WORKSPACE_ID"
     echo "cmux_surface_id=$CMUX_SURFACE_ID"
+  fi
+  if [ "$BACKEND" = conpty ]; then
+    # One atom, not a composite: a conpty endpoint IS its scoped session id, and
+    # that id is also the pipe name, so there is no second identifier to record.
+    echo "conpty_session=$CONPTY_SESSION"
   fi
   if [ "$KIND" = secondmate ]; then
     echo "home=$PROJ_ABS"

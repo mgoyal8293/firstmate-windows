@@ -1,0 +1,15 @@
+{
+  "name": "fm-conpty",
+  "private": true,
+  "version": "1.0.0",
+  "description": "firstmate ConPTY session-provider daemon: pinned runtime dependencies. Install with `npm install --omit=dev` in this directory; see docs/conpty-backend.md.",
+  "license": "MIT",
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "@xterm/addon-serialize": "0.14.0",
+    "@xterm/headless": "6.0.0",
+    "node-pty": "1.1.0"
+  }
+}
