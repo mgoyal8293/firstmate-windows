@@ -83,27 +83,34 @@ Both lanes *additionally* set `core.autocrlf=false` and `core.eol=lf` *before*
 `actions/checkout`. That belt-and-braces pin stays: it keeps the lane honest even
 against a tree whose `.gitattributes` was changed.
 
-Those pins only govern a checkout the job performs itself, so the lane does not
-stake its ability to run on them. A "Restore the working tree as LF" step runs
-straight after checkout and *makes* the invariant true: it pins the two config
-keys locally, scans `bin` and `tests` for CR, and repairs whatever it finds. The
-scan is what matters - once a CRLF tree has been written, the index holds the stat
-of those CRLF files, so git calls the tree clean and re-pinning the config on its
-own repairs nothing.
+Those pins plus the root `.gitattributes` are the whole of the invariant. The
+lane verifies it and does not try to repair it: an `Assert the working tree is LF`
+step runs straight after checkout, and a tree it condemns is a tree the lane
+refuses to run on rather than one it rewrites.
 
-The repair writes the committed bytes back, one flagged path at a time, with
-`git cat-file blob HEAD:<path>`. That is deliberately *not* a checkout: no
-`eol`/`autocrlf`/attribute conversion sits between the object store and the file,
-so it cannot itself produce the line endings it is repairing. It replaced an
-earlier `git rm --cached -r .` + `git reset --hard` refresh plus a
-`sed 's/\r$//'` fallback that went through a conversion path on both halves,
-which the committed bytes do not need.
+A `Restore the working tree as LF` repair step existed here for three runs and was
+removed. It was built on the premise that the runner's tree lands as CRLF, and
+that premise is false: `perl -0777` and `tr -dc '\r' | wc -c` both report **zero**
+CR bytes across all 306 tracked shell files on the runner. Its own output is the
+clearest proof - it restored all 306 files byte-for-byte from the object store,
+then stripped CR from all 306 with `tr -d '\r'`, and the scan still reported 306.
+A tree that has just had every CR byte removed cannot contain CR, so what the step
+measured was never the tree.
 
-The measurement that condemned that pair on windows-latest (runner image
-20260810.198.2, git 2.55.0.windows.3) - **all 306** tracked shell files reported
-as carrying CR, on a merge commit whose blobs are provably LF, with the `sed`
-pass removing none of them - turned out to be measuring the scan rather than the
-repair. See the next section: the tree was LF the whole time.
+The pin is what does the work, measured against this branch on real Windows with
+Git for Windows' own default `core.autocrlf=true`:
+
+| clone | `.gitattributes` | CR-carrying shell files | ShellCheck |
+|---|---|---|---|
+| shipped | present | **0** | clean |
+| control | removed | **306** | `bin/fm-lint.sh` exits 2 with **32,273** SC1017 findings |
+
+The control landing 306 CRLF files is what makes it a real control, and the 32,273
+findings are the actual consequence of losing the pin: the lint gate fails on line
+1 of everything and says nothing about the code. It is *not* that scripts stop
+running - the shebang lands as `#!/usr/bin/env bash` plus a CR and still executes,
+because MSYS tolerates it.
+
 
 ### The CR detector itself was the bug
 
