@@ -55,7 +55,8 @@
 #   codex-app is not a known backend yet; docs/codex-app-backend.md owns that
 #   blocked backend contract. Default tmux spawns do not write backend= to meta;
 #   absent backend= means tmux - except on Windows, where backend= is always
-#   written because no tmux exists there for the default to name. cmux does not support --secondmate spawns yet.
+#   written because no tmux exists there for the default to name. cmux does
+#   not support --secondmate spawns yet.
 #   A backend spawn refusal (missing dependency, version gate, unauthenticated
 #   socket, or unsupported secondmate mode) is terminal for that selected backend;
 #   callers must surface it instead of silently retrying another backend.

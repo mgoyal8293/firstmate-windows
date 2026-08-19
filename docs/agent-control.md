@@ -108,6 +108,7 @@ Backend capability comes from each adapter's real surface, not from a policy cho
 | --- | --- | --- | --- | --- | --- |
 | tmux | yes | yes | yes | yes | yes |
 | herdr | yes | yes | yes | yes | yes |
+| conpty | yes | yes | yes | yes | yes |
 | zellij | yes | yes | yes | yes | no |
 | cmux | yes | yes | yes | yes | no |
 | orca | no | yes | yes | no | no |

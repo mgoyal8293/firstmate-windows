@@ -71,6 +71,7 @@ A cmux spawn additionally version-gates against the installed `cmux` binary's ve
 A conpty spawn additionally requires a Windows host, `node`, and the daemon's pinned dependencies installed under `bin/backends/conpty` (`npm install --omit=dev`), refusing loudly before creating a session or worktree; it needs no JSON parser, because its session client projects every answer the adapter reads to a plain scalar.
 A backend spawn refusal from a missing dependency, version gate, or unauthenticated socket is terminal for that selected backend; firstmate surfaces it as a blocker instead of silently retrying another backend.
 Task meta records `backend=` only for a non-default backend; an absent `backend=` means `tmux`, preserving existing default-path meta files.
+On Windows there is no tmux for that absent value to name, so a Windows spawn always records `backend=` explicitly and no record written there depends on the default; the default itself is unchanged, so every meta already on disk still reads back exactly as it did.
 Every new task records `endpoint_task_id=` as the cleanup binding between the metadata filename and its opaque runtime endpoint.
 A herdr task additionally records `herdr_session=`, `herdr_workspace_id=`, `herdr_tab_id=`, and `herdr_pane_id=`.
 A zellij task additionally records `zellij_session=`, `zellij_tab_id=`, and `zellij_pane_id=`.
@@ -108,7 +109,7 @@ Set `FM_SUPERVISOR_BACKEND=tmux|herdr` and `FM_SUPERVISOR_TARGET=<target>` to ov
 Without overrides, backend detection uses `$TMUX_PANE` first, then `HERDR_ENV=1` with `HERDR_PANE_ID`, then falls back to the home's own resolved backend (`fm_supervisor_default_backend` defers to `fm_backend_name`, and only names the literal `tmux` when `bin/fm-backend.sh` is not loaded).
 That keeps a tmux pane nested inside herdr on the tmux transport, matching the runtime backend's innermost-first rule.
 Target detection uses `FM_SUPERVISOR_TARGET`, then `$TMUX_PANE`, then `"${HERDR_SESSION:-default}:${HERDR_PANE_ID}"` under herdr, then the legacy `firstmate:0` tmux fallback with a warning.
-Any other supervisor backend, including `zellij`, `orca`, or `cmux`, refuses at daemon startup instead of trying tmux injection primitives against a non-tmux pane.
+Any other supervisor backend, including `zellij`, `orca`, `cmux`, or `conpty`, refuses at daemon startup instead of trying tmux injection primitives against a non-tmux pane.
 On such a home that refusal is reached without any explicit selection, because the bare fallback resolves to the home's own backend.
 
 ## Away-mode wedge alarm channels (config/wedge-alarm)

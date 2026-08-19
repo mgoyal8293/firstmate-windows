@@ -78,10 +78,15 @@
 #                                   resolves the runtime firstmate itself is
 #                                   executing inside - $TMUX_PANE selects tmux,
 #                                   $HERDR_ENV=1 selects herdr - falling back to
-#                                   tmux). zellij, orca, and cmux are not yet
-#                                   supported as supervisor backends; the daemon
-#                                   refuses loudly at startup rather than trying
-#                                   tmux primitives against a non-tmux pane.
+#                                   the home's own resolved backend, which is
+#                                   tmux on a tmux home and its own name
+#                                   elsewhere). zellij, orca, cmux, and conpty
+#                                   are not yet supported as supervisor
+#                                   backends; the daemon refuses loudly at
+#                                   startup rather than trying tmux primitives
+#                                   against a non-tmux pane, and on such a home
+#                                   that refusal is reached without any explicit
+#                                   selection.
 #          FM_INJECT_SKIP           |-prefixes force-self-handle bypassing
 #                                   classification (default "heartbeat"); empty
 #                                   disables. Use sparingly: it overrides the
@@ -191,8 +196,11 @@ FM_HOME="${FM_HOME:-${FM_ROOT_OVERRIDE:-$FM_ROOT}}"
 
 # --- tunables ---------------------------------------------------------------
 # Supervisor backends this daemon knows how to inject into today. zellij, orca,
-# and cmux are real backends elsewhere in firstmate (bin/fm-backend.sh) but this
-# daemon has no verified composer/busy primitives wired up for them yet - see
+# cmux, and conpty are real backends elsewhere in firstmate (bin/fm-backend.sh)
+# but this daemon has no verified composer/busy primitives wired up for them
+# yet. For conpty the gap sits above the primitives: there is no ConPTY analogue
+# of $TMUX_PANE, so firstmate cannot name the pane it is ITSELF running in
+# (docs/conpty-backend.md's away-mode limit owns that). See
 # docs/herdr-backend.md and AGENTS.md section 4's
 # harness-verification discipline. Selecting one refuses loudly at startup
 # instead of silently running tmux primitives against a pane that is not a tmux
@@ -1420,7 +1428,8 @@ fm_super_main() {
 
   # --- auto-discover the supervisor BACKEND (tmux vs herdr) first -----------
   # Priority: FM_SUPERVISOR_BACKEND override > $TMUX_PANE (tmux) > $HERDR_ENV=1
-  # (herdr) > tmux fallback. Resolved before the target below, since target
+  # (herdr) > fm_supervisor_default_backend, the home's own resolved backend.
+  # Resolved before the target below, since target
   # discovery composes a herdr "<session>:<pane-id>" string using the same
   # $HERDR_PANE_ID/$HERDR_SESSION markers this checks. Exporting the result
   # into FM_SUPERVISOR_BACKEND makes inject_msg/pane_is_busy/pane_input_pending
