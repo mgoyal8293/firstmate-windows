@@ -201,7 +201,7 @@ The run needed no code change of its own: what it produced is this record and th
 
 ### What the run turned up
 
-Only one of these is a defect, and none were fixed in this run.
+Most of these are correct behaviour rather than defects, and none were fixed in this run.
 A Windows operator meets them in this order.
 
 - **The ConPTY daemon needs one dependency install per checkout.**
@@ -225,20 +225,13 @@ A Windows operator meets them in this order.
   The prune targeted the ref that survived: `bin/fm-merge-local.sh` resolved `fm/winfm-e2e-typo` in the project's own ref store and fast-forwarded `main` to `e255fd7`, so the pooled worktree and the project share refs, and the only other pooled worktree sat at a detached `b6dcc30`, which rules out a checked-out-elsewhere refusal.
   A control test on the same Windows host, in the same project and pool root, ran teardown's two commands unsilenced with nothing holding the worktree and both succeeded, ending in `Deleted branch fm/prunetest (was e255fd7)`.
   So the prune ran against a ref it should have removed and the ref survived, which is a real defect, observed on Windows, whose platform-specificity is not established.
-  The failure belongs to this run's context, a worktree whose processes had just been force-killed and needed a second reap pass, and nothing here rules out the same failure in the same context off Windows.
+  The failure was observed only in this run's context, a worktree whose processes had just been force-killed and needed a second reap pass, and nothing here rules out the same failure in the same context off Windows.
   Which of the two commands failed remains unobserved, because the detach discards its stderr and the delete discards both its output and its exit status.
-  The cause is not established, and the teardown-lock-race that `bin/fm-teardown.sh:62-89` already names is one candidate rather than a conclusion: a crew process killed mid-git-operation leaves `.git/worktrees/<wt>/index.lock`, and git then fails with `Unable to create '...index.lock': File exists`.
-  The prune at `bin/fm-teardown.sh:2464-2467` runs a bare `git checkout --detach -q 2>/dev/null` with no lock tolerance, while `teardown_treehouse_return` and `cleanup_stale_lock_for_safety_check` at `bin/fm-teardown.sh:1038-1044` both tolerate that lock, one by matching the error text and one by detecting the lock file, retrying first and removing only a provably stale lock.
-  The error-text path gates on `treehouse_return_is_index_lock_error` (`bin/fm-teardown.sh:1004`, gating the retry at `:1075`), and the header at `:73-75` records that those retries key off the error text rather than whether the lock file still exists.
-  The file-detection path resolves the lock through `worktree_git_lock_path` and never inspects an error string, and after retries exhaust both paths remove the lock when `fm_lock_is_provably_stale` proves it stale (`:1112-1115`).
-  A failed detach silently skips `git branch -D`, which would reproduce the observed outcome.
-  This run's own evidence argues against that candidate rather than for it: `teardown_treehouse_return` runs on the same worktree at `bin/fm-teardown.sh:2481`, only the hook `rm -f` after the prune, deliberately captures stdout and stderr (`:1069-1070`), matches the same lock signature, and prints a loud retry line on a hit (`:1091`).
-  That return succeeded here with no retry line, and the run did capture other teardown stderr, including the reaper's leaked-process messages at `:1498` and `:1525`, so a lock would have been visible.
-  For the failed-detach-on-index.lock story to hold, the lock would have had to appear and clear inside the sub-second gap between `:2467` and `:2481`.
-  Two other silent-skip paths in the same block are not excluded either: the `|| echo HEAD` fallback at `:2464`, which skips the prune outright when the branch cannot be resolved, and the fully discarded `git branch -D` exit status at `:2467`.
+  The cause is not established, and this record deliberately does not argue one.
+  `winfm-merged-branch-prune` owns establishing it.
   What is established is that the prune path applied, its precondition was met, the ref survived, and the same two commands succeeded unsilenced in the control test on the same host, so the defect itself stands.
   The leftover ref is harmless in itself because it is fully merged.
-  Tracked as `winfm-merged-branch-prune` (queued, firstmate-windows), which owns the fix.
+  Tracked as `winfm-merged-branch-prune` (queued, firstmate-windows), which owns both establishing the cause and the fix.
 - **`fm-remote-job-reap-orphans` cannot scan this account's processes** and says so during teardown.
   No remote work was involved, and the remote-job scripts are already out of scope below, so the line is benign here rather than a missed reap.
 - **Teardown left the ConPTY session directory behind.**
