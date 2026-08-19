@@ -8,6 +8,11 @@ Every number here was measured under Git for Windows MINGW64 bash
 (`MINGW64_NT-10.0-26200`, bash 5.2.37, git 2.50.1.windows.1, ShellCheck 0.11.0),
 from a frozen checkout, with `MSYS=winsymlinks:nativestrict`.
 
+The repository has grown since: `portable-serial` is now 116 scripts and the
+canonical lint set 306 shell files. Every figure below is deliberately left as
+measured rather than restated to the live count; a one-script difference changes
+neither the lane arithmetic nor any conclusion drawn from it.
+
 ## Why this lane is not the Linux lane with more shards
 
 Git Bash pays 14-18x more per process than Linux, because every `fork` is an
