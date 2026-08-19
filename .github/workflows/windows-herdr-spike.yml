@@ -12,7 +12,7 @@ defaults:
 
 jobs:
   probe:
-    name: LF detector probe
+    name: LF detector probe 2
     runs-on: windows-latest
     timeout-minutes: 10
     steps:
@@ -25,117 +25,107 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Environment
+      - name: argv bytes for each pattern form
         run: |
           set +e
-          echo "MSYSTEM=${MSYSTEM:-unset}"
-          echo "bash: $BASH_VERSION"
-          echo "BASH: $BASH"
-          echo "which grep: $(command -v grep)"
-          grep --version | head -1
-          echo "which perl: $(command -v perl)"
-          echo "which tr:   $(command -v tr)"
-          echo "--- locale ---"
-          locale
-          echo "LANG=${LANG:-unset} LC_ALL=${LC_ALL:-unset}"
-          echo "--- git ---"
-          git --version
-          echo "--- PATH ---"
-          printf '%s\n' "$PATH" | tr ':' '\n'
-          echo "--- this step script's own line endings ---"
-          echo "script arg0=$0"
-          od -c "$0" | head -3
-          crcount=$(perl -0777 -ne 'my $n = () = /\r/g; print $n' < "$0")
-          echo "CR bytes in this step script file: $crcount"
-
-      - name: Pattern bytes
-        run: |
-          set +e
-          printf '%s' $'\r' | od -c
-          echo "length of \$'\\r' = ${#BASH_REMATCH}"
+          dump="$RUNNER_TEMP/argvdump.sh"
+          printf '#!/bin/sh\nn=0\nfor a in "$@"; do n=$((n+1)); printf "  argv[%%s]=" "$n"; printf "%%s" "$a" | od -An -c | tr -d "\\n"; printf "\\n"; done\n' > "$dump"
+          chmod +x "$dump"
+          echo "--- form A: inline \$'\\r' unquoted ---"
+          "$dump" -rlU $'\r' bin tests --include='*.sh'
+          echo "--- form H: variable, double-quoted ---"
           p=$'\r'
-          echo "len p = ${#p}"
-          printf '%s' "$p" | od -c
+          echo "   len p = ${#p}"
+          "$dump" -rlU "$p" bin tests --include='*.sh'
+          echo "--- form I: -e inline ---"
+          "$dump" -rlU -e $'\r' bin tests --include='*.sh'
+          echo "--- form G: \$'\\015' ---"
+          "$dump" -rlU $'\015' bin tests --include='*.sh'
+          echo "--- printf-substitution form ---"
+          q=$(printf '\r')
+          echo "   len q = ${#q}"
+          "$dump" -rlU "$q" bin tests --include='*.sh'
 
-      - name: Ground truth on the checked-out tree
+      - name: same detectors, single file, no -r
         run: |
           set +e
-          total=$(find bin tests -name '*.sh' | wc -l | tr -d ' ')
-          echo "tracked *.sh under bin+tests: $total"
-          echo "--- perl ground truth: files containing CR ---"
-          perlhits=$(find bin tests -name '*.sh' -print0 | xargs -0 perl -0777 -ne 'print $ARGV, "\n" if /\r/' | wc -l | tr -d ' ')
-          echo "perl CR-carrying files: $perlhits"
-          echo "--- tr ground truth: total CR bytes across all of them ---"
-          trbytes=$(find bin tests -name '*.sh' -exec cat {} + | tr -dc '\r' | wc -c | tr -d ' ')
-          echo "total CR bytes (tr): $trbytes"
+          f=bin/fm-lint.sh
+          echo "CR bytes in $f (perl): $(perl -0777 -ne 'my $n = () = /\r/g; print $n' < "$f")"
+          echo "first 32 bytes:"; od -c "$f" | head -2
+          echo
+          echo "A-single) grep -lU \$'\\r' $f"; grep -lU $'\r' "$f"; echo "   rc=$?"
+          echo "H-single) p=\$'\\r'; grep -lU \"\$p\" $f"; p=$'\r'; grep -lU "$p" "$f"; echo "   rc=$?"
+          echo "count A-single: $(grep -cU $'\r' "$f")"
+          echo "count H-single: $(grep -cU "$p" "$f")"
+          echo "count empty:    $(grep -c '' "$f")"
 
-      - name: Detectors on the checked-out tree
+      - name: A and H in BOTH directories
         run: |
           set +e
-          echo "A) grep -rlU \$'\\r' bin tests --include='*.sh'"
-          a=$(grep -rlU $'\r' bin tests --include='*.sh'); arc=$?
-          echo "   rc=$arc count=$(printf '%s' "$a" | grep -c . )"
-          printf '%s\n' "$a" | head -3 | sed 's/^/   /'
-          echo
-          echo "B) grep -rl '' bin tests --include='*.sh'   [empty-pattern CONTROL]"
-          b=$(grep -rl '' bin tests --include='*.sh'); brc=$?
-          echo "   rc=$brc count=$(printf '%s' "$b" | grep -c . )"
-          echo
-          echo "C) LC_ALL=C grep -rlU \$'\\r' ..."
-          c=$(LC_ALL=C grep -rlU $'\r' bin tests --include='*.sh'); crc=$?
-          echo "   rc=$crc count=$(printf '%s' "$c" | grep -c . )"
-          echo
-          echo "D) grep -rlUP '\\r' ..."
-          d=$(grep -rlUP '\r' bin tests --include='*.sh' 2>&1); drc=$?
-          echo "   rc=$drc count=$(printf '%s' "$d" | grep -c . )"
-          printf '%s\n' "$d" | head -2 | sed 's/^/   /'
-          echo
-          echo "E) grep -rlU --binary-files=text \$'\\r' ..."
-          e=$(grep -rlU --binary-files=text $'\r' bin tests --include='*.sh'); erc=$?
-          echo "   rc=$erc count=$(printf '%s' "$e" | grep -c . )"
-          echo
-          echo "F) perl detector"
-          f=$(find bin tests -name '*.sh' -print0 | xargs -0 perl -0777 -ne 'print $ARGV, "\n" if /\r/')
-          echo "   count=$(printf '%s' "$f" | grep -c . )"
-          echo
-          echo "G) grep -rlU \$'\\015' ..."
-          g=$(grep -rlU $'\015' bin tests --include='*.sh'); grc=$?
-          echo "   rc=$grc count=$(printf '%s' "$g" | grep -c . )"
-          echo
-          echo "H) pattern via variable: p=\$'\\r'; grep -rlU \"\$p\" ..."
-          p=$'\r'
-          h=$(grep -rlU "$p" bin tests --include='*.sh'); hrc=$?
-          echo "   rc=$hrc count=$(printf '%s' "$h" | grep -c . )"
-          echo
-          echo "I) grep -rlU -e \$'\\r' ..."
-          i=$(grep -rlU -e $'\r' bin tests --include='*.sh'); irc=$?
-          echo "   rc=$irc count=$(printf '%s' "$i" | grep -c . )"
-
-      - name: Discrimination fixture - one LF file, one CRLF file
-        run: |
-          set +e
-          d="$RUNNER_TEMP/lfprobe"
+          run_forms() {
+            echo "  A inline : count=$(grep -rlU $'\r' bin tests --include='*.sh' | wc -l | tr -d ' ') rc=$?"
+            local p=$'\r'
+            echo "  H varquot: count=$(grep -rlU "$p" bin tests --include='*.sh' | wc -l | tr -d ' ')"
+            echo "  perl     : count=$(find bin tests -name '*.sh' -print0 | xargs -0 perl -0777 -ne 'print $ARGV,"\n" if /\r/' | wc -l | tr -d ' ')"
+            echo "  empty ctl: count=$(grep -rl '' bin tests --include='*.sh' | wc -l | tr -d ' ')"
+          }
+          echo "=== REPO tree ($PWD) - ground truth 0 CR ==="
+          run_forms
+          d="$RUNNER_TEMP/lfprobe2"
           rm -rf "$d"; mkdir -p "$d/bin" "$d/tests"
-          printf 'echo lf-one\necho lf-two\n'     > "$d/bin/clean.sh"
-          printf 'echo lf-three\n'                > "$d/tests/clean.test.sh"
-          printf 'echo crlf-one\r\necho crlf\r\n' > "$d/bin/dirty.sh"
-          cd "$d" || exit 1
-          echo "ground truth per file:"
-          for f in bin/clean.sh tests/clean.test.sh bin/dirty.sh; do
-            echo "  $f CR=$(tr -dc '\r' < "$f" | wc -c | tr -d ' ')"
-          done
+          printf 'echo lf\n' > "$d/bin/clean.sh"
+          printf 'echo lf2\n' > "$d/tests/clean.test.sh"
+          printf 'echo crlf\r\n' > "$d/bin/dirty.sh"
           echo
-          echo "A) grep -rlU \$'\\r'  [must list ONLY bin/dirty.sh]"
-          grep -rlU $'\r' bin tests --include='*.sh' | sed 's/^/   /'
+          echo "=== FIXTURE tree ($d) - ground truth 1 of 3 has CR ==="
+          ( cd "$d" && run_forms )
           echo
-          echo "B) grep -rl '' [CONTROL, lists all 3]"
-          grep -rl '' bin tests --include='*.sh' | sed 's/^/   /'
+          echo "=== REPO tree with ONE deliberate CRLF file added ==="
+          printf 'echo deliberate\r\n' > tests/zz-crlf-probe.test.sh
+          run_forms
+          rm -f tests/zz-crlf-probe.test.sh
+
+      - name: does the repo tree contain anything grep calls binary
+        run: |
+          set +e
+          echo "files with NUL bytes under bin/tests *.sh:"
+          find bin tests -name '*.sh' -print0 | xargs -0 perl -0777 -ne 'print $ARGV, "\n" if /\0/' | head
+          echo "(blank = none)"
+          echo "grep -rlU \$'\\r' but only bin:  $(grep -rlU $'\r' bin --include='*.sh' | wc -l | tr -d ' ')"
+          echo "grep -rlU \$'\\r' but only tests: $(grep -rlU $'\r' tests --include='*.sh' | wc -l | tr -d ' ')"
+          echo "grep -rlU with --include BEFORE paths: $(grep -rlU --include='*.sh' $'\r' bin tests | wc -l | tr -d ' ')"
+          echo "grep -rlU no --include at all on bin: $(grep -rlU $'\r' bin | wc -l | tr -d ' ')"
+
+      - name: candidate replacements, BOTH directions, on the runner
+        run: |
+          set +e
+          # A tree that is provably LF, and the same tree with one real CRLF file.
+          d="$RUNNER_TEMP/lfcand"
+          rm -rf "$d"; mkdir -p "$d/bin" "$d/tests"
+          printf 'echo one\necho two\n' > "$d/bin/a.sh"
+          printf 'echo three\n'         > "$d/tests/b.test.sh"
+          cand_perl() { find bin tests -name '*.sh' -print0 | xargs -0 perl -0777 -ne 'print $ARGV, "\n" if /\r/'; }
+          cand_grepP() { grep -rlUP '\r' bin tests --include='*.sh'; }
+          cand_awk()  { find bin tests -name '*.sh' -exec awk '/\r/ { print FILENAME; nextfile }' {} + ; }
+          report() {
+            echo "  perl  -> [$(cand_perl | tr '\n' ' ')]"
+            echo "  grepP -> [$(cand_grepP | tr '\n' ' ')]"
+            echo "  awk   -> [$(cand_awk | tr '\n' ' ')]"
+          }
+          echo "=== CLEAN fixture: every candidate must report NOTHING ==="
+          ( cd "$d" && report )
+          printf 'echo crlf\r\necho more\r\n' > "$d/bin/dirty.sh"
           echo
-          echo "F) perl  [must list ONLY bin/dirty.sh]"
-          find bin tests -name '*.sh' -print0 | xargs -0 perl -0777 -ne 'print $ARGV, "\n" if /\r/' | sed 's/^/   /'
+          echo "=== SAME fixture + one real CRLF file: every candidate must report ONLY bin/dirty.sh ==="
+          ( cd "$d" && report )
           echo
-          echo "and after tr -d: perl must list NOTHING"
-          for f in bin/dirty.sh; do tr -d '\r' < "$f" > "$f.tmp" && cat "$f.tmp" > "$f" && rm -f "$f.tmp"; done
-          echo "A after strip:"; grep -rlU $'\r' bin tests --include='*.sh' | sed 's/^/   /'
-          echo "F after strip:"; find bin tests -name '*.sh' -print0 | xargs -0 perl -0777 -ne 'print $ARGV, "\n" if /\r/' | sed 's/^/   /'
-          echo "(both blank = correct)"
+          echo "=== REAL REPO tree (provably 0 CR): every candidate must report NOTHING ==="
+          report
+          echo
+          echo "=== REAL REPO tree + one deliberate CRLF file: must report ONLY that file ==="
+          printf 'echo deliberate\r\n' > tests/zz-crlf-probe.test.sh
+          report
+          rm -f tests/zz-crlf-probe.test.sh
+          echo
+          echo "perl exit status when nothing found (perl always exits 0 - the caller must judge output):"
+          ( cd "$d" && cand_perl >/dev/null; echo "  rc=$?" )
