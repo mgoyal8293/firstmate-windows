@@ -8,47 +8,35 @@ permissions:
 jobs:
   diag:
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@v6
       - name: Runner shape
         run: |
-          nproc; free -m; cat /proc/loadavg; node --version; bash --version | head -1
-          echo "--- profile.d ---"; ls -la /etc/profile.d/ || true
-          echo "--- bash -lc true x20 ---"
-          time (for i in $(seq 1 20); do bash -lc true; done)
-      - name: Spawn-to-row latency distribution
-        run: node .diag/instrument.mjs 300
-      - name: Repeat the failing case 80x with node stderr surfaced
+          nproc; free -m; cat /proc/loadavg
+      - name: Load-sensitivity curve for child process start
+        run: node .diag/loadcurve.mjs
+      - name: Failing case 150x under representative load
         run: |
           set +e
+          for i in 1 2 3 4; do bash -c 'while :; do :; done' & done
+          sleep 1
           fails=0
-          for i in $(seq 1 80); do
+          for i in $(seq 1 150); do
             out=$(bash .diag/one.sh test_pi_hung_successor_falls_back_to_typed_wake 2>&1)
-            if [ $? -ne 0 ]; then
-              fails=$((fails+1))
-              echo "### FAIL run $i"; echo "$out"
-            fi
+            if [ $? -ne 0 ]; then fails=$((fails+1)); echo "### FAIL run $i"; echo "$out"; fi
           done
-          echo "PI_HUNG_SUCCESSOR_FAILS=$fails/80"
-      - name: Repeat the OpenCode external-healthy case 80x
+          kill %1 %2 %3 %4 2>/dev/null
+          echo "PI_HUNG_LOADED_FAILS=$fails/150"
+      - name: Whole file 10x under representative load
         run: |
           set +e
+          for i in 1 2 3 4; do bash -c 'while :; do :; done' & done
+          sleep 1
           fails=0
-          for i in $(seq 1 80); do
-            out=$(bash .diag/one.sh test_opencode_healthy_arm_output_does_not_suppress_guard 2>&1)
-            if [ $? -ne 0 ]; then
-              fails=$((fails+1))
-              echo "### FAIL run $i"; echo "$out"
-            fi
-          done
-          echo "OPENCODE_EXTERNAL_HEALTHY_FAILS=$fails/80"
-      - name: Whole file 12x
-        run: |
-          set +e
-          fails=0
-          for i in $(seq 1 12); do
+          for i in $(seq 1 10); do
             out=$(bash tests/fm-pi-watch-extension.test.sh 2>&1)
-            if [ $? -ne 0 ]; then fails=$((fails+1)); echo "### FILE FAIL $i"; echo "$out" | tail -20; fi
+            if [ $? -ne 0 ]; then fails=$((fails+1)); echo "### FILE FAIL $i"; echo "$out" | grep -E "not ok|NODEERR" ; fi
           done
-          echo "WHOLE_FILE_FAILS=$fails/12"
+          kill %1 %2 %3 %4 2>/dev/null
+          echo "WHOLE_FILE_LOADED_FAILS=$fails/10"
