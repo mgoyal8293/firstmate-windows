@@ -372,6 +372,14 @@ test_portable_shard_union_and_coverage_guard() {
     || fail "herdr family must include smoke"
   out=$("$RUNNER" --check-coverage)
   assert_contains "$out" "FM_TEST_COVERAGE ok" "coverage guard success marker"
+  # The guard also reports how many serial scripts are packed at the default
+  # weight because nothing has measured them. That count is what an operator
+  # reads to decide whether the shard balance can be trusted: an unmeasured
+  # script is packed as if it were average, and enough of them silently push
+  # one shard past its job cap, where it is cancelled with no verdict at all
+  # rather than merely running slow. Pinned so the field cannot quietly vanish.
+  printf '%s\n' "$out" | grep -Eq 'FM_TEST_COVERAGE ok .* unmeasured_serial=[0-9]+$' \
+    || fail "coverage guard must report an unmeasured serial count: $out"
   all_count=$("$RUNNER" --list --all | wc -l | tr -d ' ')
   union_count=$(printf '%s\n' "$s1" "$s2" "$serial" "$herdr" | LC_ALL=C sort -u | wc -l | tr -d ' ')
   [ "$union_count" = "$all_count" ] \
