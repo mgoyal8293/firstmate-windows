@@ -80,17 +80,34 @@ the experience the port exists to prevent.
 `text=auto` content sniffing; it is the only non-text tracked blob.
 
 Both lanes *additionally* set `core.autocrlf=false` and `core.eol=lf` *before*
-`actions/checkout`, then assert the working tree really is LF and fail loudly if
-it is not. That belt-and-braces pin stays: it keeps the lane honest even against
-a tree whose `.gitattributes` was changed.
+`actions/checkout`. That belt-and-braces pin stays: it keeps the lane honest even
+against a tree whose `.gitattributes` was changed.
 
-The assertion captures the scan and then judges it, rather than piping the
+Those pins only govern a checkout the job performs itself, so the lane does not
+stake its ability to run on them. A "Restore the working tree as LF" step runs
+straight after checkout and *makes* the invariant true: it pins the two config
+keys locally, then refreshes the tree with git's own recipe for a line-ending
+rule change - `git rm --cached -r .` followed by `git reset --hard` - which
+rewrites every tracked path out of the object store through
+`* text=auto eol=lf`. The refresh is the part that matters: once a CRLF tree has
+been written, the index holds the stat of those CRLF files, so git calls the tree
+clean and re-pinning the config on its own repairs nothing. On an already-LF tree
+the step writes the same bytes back, so it runs unconditionally.
+A CR that survives that is in the committed blob (or there was no object store to
+restore from); the step strips it from the working tree so the lane can run and
+emits a `::warning::` naming the files, because a working tree patched in place
+is not a repo that is fixed - that needs a committed `git add --renormalize .`.
+
+The assertion after the restore then *verifies* the invariant and fails loudly if
+it does not hold. It captures the scan and then judges it, rather than piping the
 recursive `grep` into `head`. GitHub runs `shell: bash` steps with
 `-o pipefail`, so the pipeline form let `head` close the pipe, kill `grep` with
 SIGPIPE, and turn the guard's own non-zero status into a reported
 "working tree is LF" - on a CRLF tree. A scan that does not complete is now an
-error too. `tests/fm-test-run.test.sh` executes the step's real script against
-LF, CRLF and unscannable fixtures to hold that.
+error too. `tests/fm-test-run.test.sh` executes both steps' real scripts against
+fixture trees to hold this: the assertion against LF, CRLF and unscannable trees,
+and the restore against a CRLF-but-clean checkout, a tree whose blobs carry the
+CR, a tree with no object store, and an already-LF tree.
 
 ## The harness PATH
 

@@ -876,6 +876,149 @@ print scripts.first
   pass "windows-ci LF guard detects CRLF at any scale and refuses to certify an unfinished scan"
 }
 
+# A bin/ + tests/ tree whose shell files carry CRLF, built the way <mode> says the
+# CRLF got there:
+#   checkout - the real Windows case. The blobs are LF; core.autocrlf=true wrote
+#              the working tree, so the index records those CRLF files as clean
+#              and re-pinning the config alone repairs nothing.
+#   blobs    - the pathological case: the CR is in the committed object, so no
+#              checkout config can undo it.
+#   nogit    - a tree materialized with no object store to restore from.
+lfrestore_tree() {  # <dir> <mode>
+  local dir=$1 mode=$2
+  mkdir -p "$dir/bin" "$dir/tests"
+  if [ "$mode" = nogit ]; then
+    printf 'echo one\r\n' > "$dir/bin/ok.sh"
+    printf 'echo two\r\n' > "$dir/tests/ok.test.sh"
+    return 0
+  fi
+  git -C "$dir" init -q
+  git -C "$dir" config core.autocrlf false
+  case "$mode" in
+    checkout) printf 'echo one\n' > "$dir/bin/ok.sh"
+              printf 'echo two\n' > "$dir/tests/ok.test.sh" ;;
+    blobs)    printf 'echo one\r\n' > "$dir/bin/ok.sh"
+              printf 'echo two\r\n' > "$dir/tests/ok.test.sh" ;;
+    *)        fail "unknown lfrestore_tree mode: $mode" ;;
+  esac
+  git -C "$dir" add -A
+  git -C "$dir" -c user.name='Firstmate Tests' -c user.email='tests@example.invalid' \
+    commit -qm init
+  if [ "$mode" = checkout ]; then
+    # Git for Windows' default, applied after the commit: the checkout writes
+    # CRLF and the index then records the stat of those CRLF files.
+    git -C "$dir" config core.autocrlf true
+    rm -f "$dir/bin/ok.sh" "$dir/tests/ok.test.sh"
+    git -C "$dir" checkout -q -- .
+  fi
+}
+
+# The shell files under <dir> that carry CR, scanned the way the lane scans them.
+lfrestore_crlf() {  # <dir>
+  ( cd "$1" && grep -rlU $'\r' bin tests --include='*.sh' ) || true
+}
+
+test_windows_ci_lf_restore_makes_a_crlf_tree_runnable() {
+  # .github/workflows/windows-ci.yml's "Restore the working tree as LF" step is
+  # what makes the lane runnable at all on a tree that landed as CRLF; the
+  # assertion step after it only verifies. Both steps' REAL scripts are executed
+  # here under GitHub's own invocation (`bash --noprofile --norc -eo pipefail`)
+  # from inside each fixture tree, so this pins behavior rather than file text.
+  command -v ruby >/dev/null 2>&1 \
+    || fail "ruby is required to parse .github/workflows/windows-ci.yml as YAML"
+  local tmp step guard out rc bash_bin mode
+  bash_bin=$(command -v bash) || fail "bash must be resolvable to run the extracted steps"
+  tmp=$(mktemp -d "${TMPDIR:-/tmp}/fm-test-run-lfrestore.XXXXXX")
+  step="$tmp/step.sh"
+  guard="$tmp/guard.sh"
+  workflow_step_script "$ROOT/.github/workflows/windows-ci.yml" \
+    "Restore the working tree as LF" "$step" \
+    || { rm -rf "$tmp"; fail "could not extract the LF restore step from windows-ci.yml"; }
+  workflow_step_script "$ROOT/.github/workflows/windows-ci.yml" \
+    "Assert the working tree is LF" "$guard" \
+    || { rm -rf "$tmp"; fail "could not extract the LF assertion step from windows-ci.yml"; }
+
+  # THE REGRESSION. core.autocrlf=true wrote the tree and the index calls those
+  # CRLF files clean, so the lane reached its assertion step with a CRLF tree it
+  # could neither lint nor run - five shard jobs red at the same step, with the
+  # LF pin already in place and no way for the lane to recover.
+  lfrestore_tree "$tmp/checkout" checkout
+  [ -n "$(lfrestore_crlf "$tmp/checkout")" ] \
+    || { rm -rf "$tmp"; fail "fixture precondition: the checkout-mode tree must start CRLF"; }
+  [ -z "$(git -C "$tmp/checkout" status --porcelain)" ] \
+    || { rm -rf "$tmp"; fail "fixture precondition: the CRLF tree must look clean to git"; }
+
+  # Every mode ends with an LF tree the assertion step then certifies.
+  for mode in checkout blobs nogit; do
+    [ "$mode" = checkout ] || lfrestore_tree "$tmp/$mode" "$mode"
+    [ -n "$(lfrestore_crlf "$tmp/$mode")" ] \
+      || { rm -rf "$tmp"; fail "fixture precondition: the $mode tree must start CRLF"; }
+    set +e
+    # The ceiling keeps the nogit case from discovering an enclosing repo and
+    # restoring from it: "no object store" has to mean no object store.
+    out=$(cd "$tmp/$mode" && GIT_CEILING_DIRECTORIES="$tmp" \
+      "$bash_bin" --noprofile --norc -eo pipefail "$step" 2>&1)
+    rc=$?
+    set -e
+    [ "$rc" -eq 0 ] \
+      || { rm -rf "$tmp"; fail "the restore step must succeed on the $mode tree, got exit $rc: $out"; }
+    [ -z "$(lfrestore_crlf "$tmp/$mode")" ] \
+      || { rm -rf "$tmp"; fail "the restore step left CRLF in the $mode tree: $(lfrestore_crlf "$tmp/$mode")"; }
+    # Content, not just line endings: the restore must not eat the file.
+    [ "$(cat "$tmp/$mode/bin/ok.sh")" = 'echo one' ] \
+      || { rm -rf "$tmp"; fail "the restore step changed more than the line endings in the $mode tree: $(cat "$tmp/$mode/bin/ok.sh")"; }
+    set +e
+    out=$(cd "$tmp/$mode" && GIT_CEILING_DIRECTORIES="$tmp" \
+      "$bash_bin" --noprofile --norc -eo pipefail "$guard" 2>&1)
+    rc=$?
+    set -e
+    [ "$rc" -eq 0 ] \
+      || { rm -rf "$tmp"; fail "the assertion step must pass on the restored $mode tree, got exit $rc: $out"; }
+    case "$out" in
+      *'working tree is LF'*) : ;;
+      *) rm -rf "$tmp"; fail "the restored $mode tree must be certified LF, got: $out" ;;
+    esac
+  done
+
+  # A CR the object store itself carries is not silently laundered: the step
+  # normalizes the tree so the lane can run, and says the repo needs fixing.
+  lfrestore_tree "$tmp/blobs-again" blobs
+  set +e
+  out=$(cd "$tmp/blobs-again" && "$bash_bin" --noprofile --norc -eo pipefail "$step" 2>&1)
+  rc=$?
+  set -e
+  [ "$rc" -eq 0 ] \
+    || { rm -rf "$tmp"; fail "committed CRLF must not fail the restore step, got exit $rc: $out"; }
+  case "$out" in
+    *'::warning::CRLF survived the restore'*) : ;;
+    *) rm -rf "$tmp"; fail "committed CRLF must be reported as such, got: $out" ;;
+  esac
+  case "$out" in
+    *'bin/ok.sh'*) : ;;
+    *) rm -rf "$tmp"; fail "the warning must name the offending files, got: $out" ;;
+  esac
+
+  # And an LF tree is left exactly as it is, so the step is safe to run always.
+  lfrestore_tree "$tmp/lf" checkout
+  git -C "$tmp/lf" config core.autocrlf false
+  git -C "$tmp/lf" checkout -q -- .
+  [ -z "$(lfrestore_crlf "$tmp/lf")" ] \
+    || { rm -rf "$tmp"; fail "fixture precondition: the lf tree must start LF"; }
+  set +e
+  out=$(cd "$tmp/lf" && "$bash_bin" --noprofile --norc -eo pipefail "$step" 2>&1)
+  rc=$?
+  set -e
+  [ "$rc" -eq 0 ] || { rm -rf "$tmp"; fail "an LF tree must pass the restore step, got exit $rc: $out"; }
+  case "$out" in
+    *'::warning::'*) rm -rf "$tmp"; fail "an LF tree must not warn, got: $out" ;;
+  esac
+  [ "$(cat "$tmp/lf/bin/ok.sh")" = 'echo one' ] \
+    || { rm -rf "$tmp"; fail "an LF tree must come out unchanged, got: $(cat "$tmp/lf/bin/ok.sh")"; }
+
+  rm -rf "$tmp"
+  pass "windows-ci restores a CRLF working tree to LF before the lane runs, however the CRLF got there"
+}
+
 # Extract the `run` script of the step named <step> from <workflow>, requiring
 # that every job carrying it spells it identically, and write it to <out>.
 workflow_step_script() {  # <workflow> <step-name> <out>
@@ -1056,5 +1199,6 @@ test_jobs_requires_proven_isolated
 test_jobs_parallel_scheduler_and_failure_propagation
 test_herdr_ci_family_run_has_a_step_timeout
 test_windows_ci_lf_guard_never_reports_lf_without_a_clean_scan
+test_windows_ci_lf_restore_makes_a_crlf_tree_runnable
 test_windows_ci_harness_path_fails_on_an_unreachable_tool
 test_aggregate_json

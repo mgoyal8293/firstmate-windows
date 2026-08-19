@@ -52,6 +52,55 @@ jobs:
       - uses: actions/checkout@v6
         with:
           fetch-depth: 0
+      - name: Restore the working tree as LF
+        # The assertion below is a tripwire, not a repair, and a lane that cannot
+        # read its own shell files has nothing to run. This step MAKES the LF
+        # invariant true, so the assertion is left to verify it.
+        #
+        # The pre-checkout core.autocrlf/core.eol pins - and the root
+        # .gitattributes - only govern a checkout this job performs itself. A tree
+        # materialized any other way (Git for Windows' core.autocrlf=true default
+        # winning from a config this job never saw, a pre-populated or cached
+        # workspace, a self-hosted runner) lands as CRLF, and re-pinning the
+        # config afterwards changes nothing on its own: the index already holds
+        # the stat of the CRLF files, so git calls the tree clean.
+        #
+        # `git rm --cached -r .` + `git reset --hard` is git's own recipe for
+        # refreshing a tree after the line-ending rules change: it drops the
+        # cached stat and rewrites every tracked path from the object store
+        # through `* text=auto eol=lf`, which is the authority on what the tree
+        # should be. It discards uncommitted changes, which is exactly right
+        # directly after checkout, and on an already-LF tree it writes the same
+        # bytes back - so it is safe to run unconditionally.
+        run: |
+          set -eu
+          if git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+            git config core.autocrlf false
+            git config core.eol lf
+            git rm --cached -rq .
+            git reset --hard -q
+          else
+            echo "note: not a git work tree; there is no object store to restore from"
+          fi
+          # A CR that survives the restore is in the committed blob itself (or
+          # there was nothing to restore from), which no checkout config can
+          # undo. Strip it from the working tree so ShellCheck sees shell rather
+          # than SC1017 on line 1 of everything, and say so loudly - a working
+          # tree patched in place is not a repo that is fixed.
+          scan=0
+          crlf=$(grep -rlU $'\r' bin tests --include='*.sh') || scan=$?
+          if [ "$scan" -gt 1 ]; then
+            echo "::error::the CRLF scan did not complete (grep exit $scan); refusing to report the tree as restored"
+            exit 1
+          fi
+          if [ -n "$crlf" ]; then
+            echo "::warning::CRLF survived the restore - the committed blobs carry it, or there was no object store to restore from; normalizing the working tree in place. The repo-side fix is a committed \`git add --renormalize .\`"
+            sed 's/^/  /' <<<"$crlf"
+            # One sed for the whole list rather than one per file: a Git Bash
+            # fork costs 14-18x what it does on Linux.
+            tr '\n' '\0' <<<"$crlf" | xargs -0 sed -i $'s/\r$//'
+          fi
+          echo "working tree restored as LF"
       - name: Assert the working tree is LF
         # Fail loudly rather than discovering CRLF as 300 bogus SC1017 errors, or
         # as a test comparing against a string that silently grew a \r.
@@ -123,6 +172,55 @@ jobs:
       - uses: actions/checkout@v6
         with:
           fetch-depth: 0
+      - name: Restore the working tree as LF
+        # The assertion below is a tripwire, not a repair, and a lane that cannot
+        # read its own shell files has nothing to run. This step MAKES the LF
+        # invariant true, so the assertion is left to verify it.
+        #
+        # The pre-checkout core.autocrlf/core.eol pins - and the root
+        # .gitattributes - only govern a checkout this job performs itself. A tree
+        # materialized any other way (Git for Windows' core.autocrlf=true default
+        # winning from a config this job never saw, a pre-populated or cached
+        # workspace, a self-hosted runner) lands as CRLF, and re-pinning the
+        # config afterwards changes nothing on its own: the index already holds
+        # the stat of the CRLF files, so git calls the tree clean.
+        #
+        # `git rm --cached -r .` + `git reset --hard` is git's own recipe for
+        # refreshing a tree after the line-ending rules change: it drops the
+        # cached stat and rewrites every tracked path from the object store
+        # through `* text=auto eol=lf`, which is the authority on what the tree
+        # should be. It discards uncommitted changes, which is exactly right
+        # directly after checkout, and on an already-LF tree it writes the same
+        # bytes back - so it is safe to run unconditionally.
+        run: |
+          set -eu
+          if git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+            git config core.autocrlf false
+            git config core.eol lf
+            git rm --cached -rq .
+            git reset --hard -q
+          else
+            echo "note: not a git work tree; there is no object store to restore from"
+          fi
+          # A CR that survives the restore is in the committed blob itself (or
+          # there was nothing to restore from), which no checkout config can
+          # undo. Strip it from the working tree so ShellCheck sees shell rather
+          # than SC1017 on line 1 of everything, and say so loudly - a working
+          # tree patched in place is not a repo that is fixed.
+          scan=0
+          crlf=$(grep -rlU $'\r' bin tests --include='*.sh') || scan=$?
+          if [ "$scan" -gt 1 ]; then
+            echo "::error::the CRLF scan did not complete (grep exit $scan); refusing to report the tree as restored"
+            exit 1
+          fi
+          if [ -n "$crlf" ]; then
+            echo "::warning::CRLF survived the restore - the committed blobs carry it, or there was no object store to restore from; normalizing the working tree in place. The repo-side fix is a committed \`git add --renormalize .\`"
+            sed 's/^/  /' <<<"$crlf"
+            # One sed for the whole list rather than one per file: a Git Bash
+            # fork costs 14-18x what it does on Linux.
+            tr '\n' '\0' <<<"$crlf" | xargs -0 sed -i $'s/\r$//'
+          fi
+          echo "working tree restored as LF"
       - name: Assert the working tree is LF
         # Fail loudly rather than discovering CRLF as 300 bogus SC1017 errors, or
         # as a test comparing against a string that silently grew a \r.
