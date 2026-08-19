@@ -166,6 +166,25 @@ When a test bound is derived from a measurement, every bound coupled to it must 
 Fixing one side of a two-sided constraint moves the failure; it does not remove it.
 A derived bound must also print what it derived, which is the only reason this was diagnosable from a CI log instead of a fourth reproduction.
 
+Applied to the whole file rather than only the cases that failed: every window in `tests/fm-pi-watch-extension.test.sh` that waits on a chain of cold arm children now sizes itself as `<chained child starts> * FM_TEST_ARM_START_BUDGET_MS + FM_TEST_OBSERVE_SLACK_MS`, counting every start in its chain rather than assuming the first lands before the window opens.
+The tightest of those was the retry-limit pair, which allowed a literal 250 x 10ms for three chained starts and therefore crossed near 830ms.
+
+Counterfactual on a workstation, with `bash` shimmed so every arm child pays a runner's fork cost, both trees scored on the same shim:
+
+```console
+# arm child start 817ms measured, readiness budget 4085ms
+$ bash tests/fm-pi-watch-extension.test.sh          # literal windows
+not ok - OpenCode established clean closes must honor the continuity retry limit
+Error: retry exhaustion was not surfaced:
+
+# arm child start 813ms measured, readiness budget 4065ms
+$ bash tests/fm-pi-watch-extension.test.sh          # derived windows
+ok - Pi established clean closes stop at the configured retry limit
+ok - OpenCode established clean closes stop at the configured retry limit
+```
+
+The negative windows moved too - the ones that watch for an arm that must not appear. A 100ms settle cannot observe an unwanted child that needs 300ms to record itself, so those windows were widest exactly where they were least able to catch anything; each is now one start budget. That costs about three seconds of wall clock per run of this file on a workstation, which the shard weights pick up at their next refresh.
+
 ## Why the guard plugins guard their stdin write
 
 `tests/fm-pi-watch-extension.test.sh` also failed intermittently inside the OpenCode turn-end guard, with a different signature that turned out to be a defect in tracked plugin code rather than in the test.
@@ -222,7 +241,8 @@ not ok - OpenCode turn-end guard let a refused stdin write escape: node:events:4
 Error: write EPIPE
 ```
 
-The OpenCode external-healthy case in the same file still exercises both sites end to end on the real path that was crashing.
+The OpenCode external-healthy case in the same file exercises two of the three sites end to end on the real path that was crashing: `.opencode/plugins/fm-primary-turnend-guard.js` and, through the prompt it builds, `.opencode/plugins/lib/fm-operational-input.js`.
+It never loads `.pi/extensions/fm-primary-turnend-guard.ts`, so the Pi site has no end-to-end coverage here and rests entirely on its deterministic case above.
 
 ## Refreshing this evidence
 

@@ -147,7 +147,7 @@ Portable shards, each portable serial shard, and the Herdr lane upload runner-ge
 | Lane | Bound | Rationale |
 |---|---|---|
 | portable parallel 1/2 | job `timeout-minutes: 10` | The measured shard sums are about three minutes and the timeout is a hang tripwire. |
-| portable serial 1-4 | job `timeout-minutes: 15` | Each balanced shard is about 10.6 minutes against measured weights, so the cap is a hang tripwire with roughly 1.4x margin. Refresh the weights, or split the lane further, before that margin is spent. |
+| portable serial 1-4 | job `timeout-minutes: 15` | The measured worst shard on run [32259417831](https://github.com/mgoyal8293/firstmate-windows/actions/runs/32259417831) was 11.67 minutes of script time, so the cap is a hang tripwire with about 1.3x margin - and the job wall clock adds runner setup and checkout on top of that, which is what tipped the cancelled job over. Refresh the weights, or split the lane further, before that margin is spent. |
 | Herdr | family-run step `timeout-minutes: 20`; job `timeout-minutes: 75` backstop | Healthy runs finish around 7 minutes, so the step bound is the hang tripwire (cleanup and timing artifacts still upload) while the job cap stays a last-resort backstop. |
 
 Timeouts are hang tripwires rather than expected healthy durations.
