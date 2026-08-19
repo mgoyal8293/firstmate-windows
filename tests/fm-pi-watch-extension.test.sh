@@ -38,7 +38,7 @@ export NODE_NO_WARNINGS=1
 fm_measure_arm_child_start_ms() {
   node --input-type=module <<'MEASURE'
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, writeFileSync } from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -52,6 +52,7 @@ for (let i = 0; i < 5; i += 1) {
   const elapsed = Number(process.hrtime.bigint() - started) / 1e6;
   if (elapsed > worst) worst = elapsed;
 }
+rmSync(dir, { recursive: true, force: true });
 console.log(Math.ceil(worst));
 MEASURE
 }
@@ -588,7 +589,7 @@ import { pathToFileURL } from "node:url";
 
 let tool = null;
 let prompt = "";
-let rowsAtPrompt = 0;
+let rowsAtPrompt = -1;
 const pi = {
   on() {},
   registerCommand() {},
@@ -614,7 +615,9 @@ const rows = existsSync(process.env.FM_ARM_LOG)
   ? readFileSync(process.env.FM_ARM_LOG, "utf8").trim().split("\n")
   : [];
 if (rows.length !== 2) throw new Error(`unretired arm overlapped a retry: ${rows.join(" | ")}`);
-if (rowsAtPrompt !== 2) throw new Error(`wake arrived after an overlapping retry (${rowsAtPrompt} arm rows)`);
+if (rowsAtPrompt !== 2) throw new Error(rowsAtPrompt < 0
+  ? `no wake delivery was observed at all; arm log holds ${rows.length} rows`
+  : `wake arrived after an overlapping retry (${rowsAtPrompt} arm rows)`);
 if (!prompt.includes("signal: synthetic wake")) throw new Error(`original wake was lost: ${prompt}`);
 if (!prompt.includes("unready successor arm did not exit within 20ms")) throw new Error(`missing unretired-arm failure: ${prompt}`);
 writeFileSync(process.env.FM_RELEASE_FILE, "release\n");
@@ -1767,7 +1770,7 @@ import { pathToFileURL } from "node:url";
 
 const mod = await import(pathToFileURL(process.env.PLUGIN).href);
 let prompt = "";
-let rowsAtPrompt = 0;
+let rowsAtPrompt = -1;
 const client = {
   session: {
     promptAsync: async (request) => {
@@ -1793,7 +1796,9 @@ const rows = existsSync(process.env.FM_ARM_LOG)
   ? readFileSync(process.env.FM_ARM_LOG, "utf8").trim().split("\n")
   : [];
 if (rows.length !== 2) throw new Error(`unretired arm overlapped a retry: ${rows.join(" | ")}`);
-if (rowsAtPrompt !== 2) throw new Error(`wake arrived after an overlapping retry (${rowsAtPrompt} arm rows)`);
+if (rowsAtPrompt !== 2) throw new Error(rowsAtPrompt < 0
+  ? `no wake delivery was observed at all; arm log holds ${rows.length} rows`
+  : `wake arrived after an overlapping retry (${rowsAtPrompt} arm rows)`);
 if (!prompt.includes("signal: synthetic wake")) throw new Error(`original wake was lost: ${prompt}`);
 if (!prompt.includes("unready successor arm did not exit within 20ms")) throw new Error(`missing unretired-arm failure: ${prompt}`);
 writeFileSync(process.env.FM_RELEASE_FILE, "release\n");

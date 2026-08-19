@@ -394,6 +394,42 @@ test_portable_shard_union_and_coverage_guard() {
   pass "portable shard union, disjointness, and coverage guard hold"
 }
 
+test_unmeasured_serial_report_names_the_unhinted_script() {
+  local sandbox out err rc f count
+  # The production tree is fully hinted, so the report the guard added is only
+  # exercised against a lane that actually contains an unmeasured script. A
+  # sandbox root gives it one: the runner resolves its own root from its
+  # location and derives the serial lane from tests/*.test.sh, so a copy beside
+  # a mirrored inventory plus one new script drives the real guard.
+  sandbox=$(fm_test_tmproot fm-test-run-unmeasured) || fail "could not create sandbox root"
+  mkdir -p "$sandbox/bin" "$sandbox/tests"
+  cp "$RUNNER" "$sandbox/bin/fm-test-run.sh"
+  cp "$ROOT/bin/fm-test-isolation-proof.sh" "$sandbox/bin/fm-test-isolation-proof.sh"
+  for f in "$ROOT"/tests/*.test.sh; do
+    : > "$sandbox/tests/$(basename "$f")"
+  done
+  : > "$sandbox/tests/fm-zzz-unmeasured-probe.test.sh"
+
+  out=$("$sandbox/bin/fm-test-run.sh" --check-coverage 2>"$sandbox/err.txt")
+  rc=$?
+  err=$(cat "$sandbox/err.txt")
+  # Reported, never refused: an unmeasured script must not fail the guard.
+  [ "$rc" = 0 ] || fail "unmeasured serial script must not fail the coverage guard: $out $err"
+  assert_contains "$out" "FM_TEST_COVERAGE ok" "coverage guard success marker in sandbox"
+  # The count must be the real difference, not a constant: swapped comm
+  # operands or a divergent sort order report 0 here for a lane that has one.
+  count=$(printf '%s\n' "$out" | sed -n 's/.*unmeasured_serial=\([0-9]*\).*/\1/p')
+  [ "$count" = 1 ] \
+    || fail "guard must count the one unhinted serial script, reported unmeasured_serial=$count: $out"
+  printf '%s\n' "$err" | grep -Fq 'tests/fm-zzz-unmeasured-probe.test.sh' \
+    || fail "guard must name the unhinted serial script on stderr: $err"
+  # And a hinted script must not be swept in with it.
+  printf '%s\n' "$err" | grep -Fq 'tests/fm-pr-check-security.test.sh' \
+    && fail "guard named a measured script as unmeasured: $err"
+  rm -rf "$sandbox"
+  pass "coverage guard counts and names serial scripts with no measured duration"
+}
+
 test_portable_serial_shards_partition_the_serial_lane() {
   local lanes count serial shard listed union dups shard_lane total cap
   lanes=$("$RUNNER" --list-lanes)
@@ -724,6 +760,7 @@ test_fail_on_gate_skip_token
 test_exclude_family
 test_portable_shard_union_and_coverage_guard
 test_portable_serial_shards_partition_the_serial_lane
+test_unmeasured_serial_report_names_the_unhinted_script
 test_portable_serial_shard_lane_refusals
 test_jobs_requires_proven_isolated
 test_jobs_parallel_scheduler_and_failure_propagation

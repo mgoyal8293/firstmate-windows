@@ -378,9 +378,15 @@ list_portable_serial() {
 
 # Measured portable-serial script durations in milliseconds, from the CI timing
 # artifact recorded in docs/fm-test-portable-shards.md. These are balance hints
-# only: the shard partition stays complete and disjoint whatever they say, so a
-# stale hint costs balance rather than coverage. That doc owns the refresh
-# procedure.
+# only: the shard partition stays complete and disjoint whatever they say.
+#
+# Past the job cap, though, balance is coverage. A shard whose packed weight has
+# drifted below its real runtime overruns `timeout-minutes` and is cancelled, so
+# it reports no verdict at all rather than merely finishing late - a required
+# check in that state can never turn green, and it is indistinguishable from a
+# hang. Refresh these from a green run's timing artifacts whenever the lane has
+# grown or `--check-coverage` reports a non-zero `unmeasured_serial`; that doc
+# owns the refresh procedure.
 portable_serial_weight_hints() {
   cat <<'EOF'
 tests/fm-afk-inject-e2e.test.sh 35004

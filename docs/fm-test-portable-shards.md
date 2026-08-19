@@ -70,7 +70,7 @@ A script with no hint gets the conservative `PORTABLE_SERIAL_DEFAULT_WEIGHT_MS` 
 Hints affect balance, not coverage: the coverage guard keeps the partition complete and disjoint whatever they say.
 Past the job cap, however, a stale hint stops being merely a slower shard.
 A shard that overruns `timeout-minutes` is cancelled and reports no verdict at all, which a required check can never turn green and which is indistinguishable from a hang.
-That is what happened on 2026-08-19: the table still described a 69-script lane while the lane had grown to 116 scripts and 43 minutes, 46 of the selected scripts had no hint and were packed at the flat default - including the longest script in the lane at 185 s - and packing believed all four shards were 8.5 minutes while the measured spread was 7.7 to 14.7 minutes.
+That is what happened on 2026-08-19: the table still described a 69-script lane while the lane had grown to 116 scripts and about 42 minutes, 45 of the selected scripts had no hint and were packed at the flat default - including `tests/fm-remote-secondmate-lifecycle-e2e.test.sh` at 157171 ms, the longest of the unhinted scripts - and packing believed all four shards were 8.5 minutes while the measured spread was 7.7 to 14.7 minutes.
 `bin/fm-test-run.sh --check-coverage` therefore reports `unmeasured_serial=<n>` and names any selected serial script still packed at the default, so the drift is visible in every CI run instead of only surfacing as a cancelled job.
 
 | Lane | Script count | Estimated duration |
@@ -81,7 +81,13 @@ That is what happened on 2026-08-19: the table still described a 69-script lane 
 | `portable-serial-4of4` | 26 | 634917 ms (~10.58 min) |
 | imbalance | | 14 ms |
 
-The single longest script, `tests/fm-pr-check-security.test.sh` at 236511 ms, is the floor for any shard count.
+Those four numbers are the packer's own arithmetic over the table above, not a measurement.
+
+Measured on green run [32259417831](https://github.com/mgoyal8293/firstmate-windows/actions/runs/32259417831), the first real lane run with the refreshed hints: all four shards passed, the worst shard fell from 13.43 min to 11.67 min, and the spread roughly halved.
+The overflow was removed rather than relocated - no other shard took up the time the worst one gave back.
+
+The single longest script in the lane, `tests/fm-pr-check-security.test.sh` at 236511 ms, is the floor for any shard count.
+It was already hinted before the 2026-08-19 refresh, so it was never part of the unhinted set above.
 
 Refresh the hints by downloading the per-shard timing artifacts from a green CI run, replacing the `portable_serial_weight_hints` table in `bin/fm-test-run.sh` with the measured `path`/`duration_ms` pairs, and updating the table above:
 

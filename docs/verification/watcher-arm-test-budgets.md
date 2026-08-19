@@ -129,12 +129,17 @@ These are upper bounds on waiting rather than sleeps: every driver stops the mom
 
 ### Result
 
-On `ubuntu-latest` under the same four background spinners that failed the case 92 times in 150:
+On `ubuntu-latest` under four background spinners, run [32255813826](https://github.com/mgoyal8293/firstmate-windows/actions/runs/32255813826), which scored the same load against both trees:
 
 ```console
+BASELINE_PI_HUNG=116/150
+BASELINE_OC_HUNG=150/150
 FIXED_PI_HUNG=0/150
 FIXED_OC_HUNG=0/150
+FIXED_WHOLE_FILE=0/25
 ```
+
+Counters read from the run log, not inferred from step colour.
 
 On a workstation, from frozen snapshots, across four fork-cost levels between 10ms and 621ms of child start: 150 consecutive runs of the fixed tree with no failures, against 70 consecutive baseline runs with no passes at 415ms and above.
 
