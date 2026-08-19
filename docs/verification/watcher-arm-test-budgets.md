@@ -4,6 +4,11 @@ Repeatable evidence for the two timing guarantees the tracked watcher arm suites
 Current behavior of the Pi extension and the OpenCode plugins is owned by their own sources; this page records evidence only.
 
 Date: 2026-08-19.
+Status: work in progress. The readiness-budget and stdin-write findings below are
+closed and independently verified. The session-lock finding is closed against its
+counterfactual but its loaded-runner pass count is still being measured (run
+32224627637), so no runner row is recorded for it yet. One failure remains
+unisolated; see "Known residual".
 Node: v22.23.2 on both machines.
 Comparison base: `main` at `1baa477`.
 
@@ -60,6 +65,36 @@ OPERATIONAL_INPUT  pass=25 fail=0 of 25
 
 The calibration was stable across those runs, reading 12ms to 17ms and resolving to the 500ms floor every time.
 A workstation cannot falsify this defect on its own, because the pre-fix suite also passed 232 consecutive runs here, including under single-CPU contention; the runner rows above are the evidence that matters.
+
+## Why the session-lock case settles its refusal instead of pausing
+
+The same suite failed a second way, on the same underlying quantity.
+
+`test_opencode_primary_watch_plugin_requires_session_lock` fires two `session.idle` events, the first with a lock this session does not own and the second with one it does.
+The plugin's event hook starts the arm decision without awaiting it, and refusing an unowned lock walks the parent-pid chain in `sessionOwnsLock`, spawning `ps` up to eight times.
+Each of those spawns costs what a whole child start costs, so on a loaded runner the refusal was still in flight when the case rewrote the lock 120ms later.
+`ensureArm`'s single-flight guard then handed the second event the first evaluation's `read-only` result rather than re-deciding, the arm never ran, and the case reported `watch arm did not run after the session lock matched`.
+
+The 120ms pause was the whole dependency: it is longer than eight local spawns and shorter than eight loaded ones.
+
+Counterfactual, with `ps` slowed to 200ms to stand in for what load does to a spawn:
+
+```console
+$ PATH=<slow-ps>:$PATH bash <case>          # baseline 1baa477
+not ok - OpenCode watch plugin must arm only when this session owns the fleet lock
+
+$ PATH=<slow-ps>:$PATH bash <case>          # fixed
+ok - OpenCode watcher plugin requires session lock ownership
+```
+
+The case now settles the decision through the coordinator, which coalesces onto the same in-flight evaluation and resolves when it does, so the owned-lock event starts from a finished verdict.
+It also asserts the refusal itself, which the pause only implied.
+
+## Known residual
+
+One failure in this suite is recorded but not isolated: a wake delivered before any arm had recorded a row, three times in 150 runs at a load level that makes the runner roughly three times slower than the real serial shard.
+It did not reproduce in 168 workstation runs at 14-way concurrency, so no cause is claimed here.
+The assertion now distinguishes an unobserved delivery from a delivery that saw an empty arm log and prints the arm log with it, so the next occurrence carries its own evidence instead of a count.
 
 ## Why the guard plugins guard their stdin write
 
