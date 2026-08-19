@@ -1,0 +1,5 @@
+# docs/windows.md: "bin/fm-send.sh refuses the first steer until the home is named ... its documented fail-closed contract rather than a fault"
+
+--- $ env -u FM_HOME bin/fm-send.sh t1 "please rerun the check"
+error: FM_HOME is not set; fm-send refuses to resolve targets without an explicit firstmate home
+[exit code 1]

@@ -1,0 +1,24 @@
+--- the crewmate commit dff530e is on fm/task-x1 only
+dff530e fix the typo
+
+--- $ fm-teardown.sh task-x1   (work not landed)
+REFUSED: local-only worktree /tmp/tmp.56OQLBkJdV/wt has work not yet merged into main and not on any remote.
+commits not yet on main:
+dff530e fix the typo
+Merge the branch into local main first (bin/fm-merge-local.sh after the captain approves), or push to a fork/remote, or get the captain's explicit OK to discard, then --force.
+[exit code 1]
+state/task-x1.* :task-x1.meta 
+state/conpty/   : fmhome1-fm-task-x1 fmhome1-fm-task-x1/session.json fmhome1-fm-task-x1/transcript.log 
+project branches : fm/task-x1 main 
+
+--- $ git merge --ff-only fm/task-x1   (the approved local landing)
+ 1 file changed, 1 insertion(+)
+ create mode 100644 note.txt
+
+--- $ fm-teardown.sh task-x1   (after landing)
+teardown task-x1 complete (window fmhome1-fm-task-x1, worktree /tmp/tmp.56OQLBkJdV/wt)
+Backlog: task-x1 just finished. Update data/backlog.md - move task-x1 to Done, keep Done to the 10 most recent, then re-scan Queued and dispatch only work whose blockers are gone and date is due.
+[exit code 0]
+state/task-x1.* : (none - retired)
+state/conpty/   : fmhome1-fm-task-x1 fmhome1-fm-task-x1/session.json fmhome1-fm-task-x1/transcript.log 
+project branches : main 

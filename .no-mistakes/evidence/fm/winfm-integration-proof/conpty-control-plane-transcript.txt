@@ -1,0 +1,19 @@
+
+--- $ fm-control.sh t1 exit          (backend=conpty)
+error: task t1 runs on the conpty backend, which has no recovery-grade agent-state classifier, so 'exit' cannot prove the agent actually stopped; refusing rather than reporting an unproven transition as done
+[exit code 1]
+
+--- $ fm-control.sh t1 relaunch --note "resume the port check"
+error: task t1 runs on the conpty backend, which has no recovery-grade agent-state classifier, so 'relaunch' cannot prove the agent actually stopped; refusing rather than reporting an unproven transition as done
+[exit code 1]
+
+--- $ fm-control.sh t1 interrupt     (agent classified alive by the conpty daemon)
+error: harness claude interrupts with Escape, which the conpty backend cannot deliver; refusing to send a different key
+[exit code 1]
+client calls made while interrupting: state 
+keys delivered to the session: 0
+
+--- the same adapter, exercised directly: it DOES classify and DOES send Escape
+fm_backend_agent_state conpty fmhome1-fm-t1 -> alive
+fm_backend_send_key conpty fmhome1-fm-t1 Escape -> delivered
+client call for that key: key \\wsl.localhost\Ubuntu-24.04\home\johns\.no-mistakes\worktrees\72b1fa50e799\01M0AVP3NWV3X17F3RXMTHM1JR\bin\backends\conpty\fmpty.js key --id fm-firstmate-cabf44b0-t1 --key Escape --state \\wsl.localhost\Ubuntu-24.04\tmp\tmp.mKb3Soa8fQ\home\state\conpty
