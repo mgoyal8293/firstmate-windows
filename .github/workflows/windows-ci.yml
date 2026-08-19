@@ -65,40 +65,89 @@ jobs:
         # config afterwards changes nothing on its own: the index already holds
         # the stat of the CRLF files, so git calls the tree clean.
         #
-        # `git rm --cached -r .` + `git reset --hard` is git's own recipe for
-        # refreshing a tree after the line-ending rules change: it drops the
-        # cached stat and rewrites every tracked path from the object store
-        # through `* text=auto eol=lf`, which is the authority on what the tree
-        # should be. It discards uncommitted changes, which is exactly right
-        # directly after checkout, and on an already-LF tree it writes the same
-        # bytes back - so it is safe to run unconditionally.
+        # MEASURED on windows-latest (runner image 20260810.198.2, git
+        # 2.55.0.windows.3): the earlier repair here - `git rm --cached -r .`
+        # followed by `git reset --hard` - left the runner with a tree in which
+        # ALL 306 tracked shell files carried CR, on a merge commit whose blobs
+        # are provably LF, and the `sed 's/\r$//'` fallback that ran next did not
+        # remove a single CR. Both halves of that repair went through a conversion
+        # path (git's own smudge, then a line-anchored substitution over
+        # whatever MSYS handed the tool), and both are unnecessary: the committed
+        # bytes are already LF, so the repair only has to WRITE THOSE BYTES.
+        # `git cat-file blob` emits them with no eol/autocrlf/attribute
+        # conversion in the way at all, which is why it is the primary repair
+        # here and why the index is left alone. The in-place `tr -d '\r'` - CR
+        # anywhere in the file, not just before a newline - remains for the one
+        # case the object store cannot answer: a CR the committed blob itself
+        # carries, or no object store at all.
+        #
+        # The repair is then RE-SCANNED before the step reports success. The
+        # previous shape printed "working tree restored as LF" over a tree it had
+        # failed to repair, and the failure surfaced one step later as an
+        # unexplained assertion - a repair that cannot say whether it took is
+        # worse than none.
         run: |
           set -eu
+          store=
           if git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+            # Pinned locally as well, so every later git call in this job - the
+            # lane's own included - converts nothing.
             git config core.autocrlf false
             git config core.eol lf
-            git rm --cached -rq .
-            git reset --hard -q
+            store=1
           else
             echo "note: not a git work tree; there is no object store to restore from"
           fi
-          # A CR that survives the restore is in the committed blob itself (or
-          # there was nothing to restore from), which no checkout config can
-          # undo. Strip it from the working tree so ShellCheck sees shell rather
-          # than SC1017 on line 1 of everything, and say so loudly - a working
-          # tree patched in place is not a repo that is fixed.
-          scan=0
-          crlf=$(grep -rlU $'\r' bin tests --include='*.sh') || scan=$?
-          if [ "$scan" -gt 1 ]; then
-            echo "::error::the CRLF scan did not complete (grep exit $scan); refusing to report the tree as restored"
-            exit 1
-          fi
+          # Captured whole and only then judged, three times over: `-o pipefail`
+          # would let a reader closing the pipe early turn a match into a pass,
+          # and a scan that did not complete is never a pass.
+          scan_crlf() {
+            local rc=0
+            crlf=$(grep -rlU $'\r' bin tests --include='*.sh') || rc=$?
+            if [ "$rc" -gt 1 ]; then
+              echo "::error::the CRLF scan did not complete (grep exit $rc); refusing to report the tree as restored"
+              exit 1
+            fi
+          }
+          scan_crlf
           if [ -n "$crlf" ]; then
-            echo "::warning::CRLF survived the restore - the committed blobs carry it, or there was no object store to restore from; normalizing the working tree in place. The repo-side fix is a committed \`git add --renormalize .\`"
+            echo "::warning::working tree carries CRLF shell files; restoring the committed bytes before the lane runs"
             sed 's/^/  /' <<<"$crlf"
-            # One sed for the whole list rather than one per file: a Git Bash
-            # fork costs 14-18x what it does on Linux.
-            tr '\n' '\0' <<<"$crlf" | xargs -0 sed -i $'s/\r$//'
+            tmp=$(mktemp)
+            if [ -n "$store" ]; then
+              restored=0
+              while IFS= read -r path; do
+                [ -n "$path" ] || continue
+                # Staged through a temp file: a `git cat-file` that cannot answer
+                # for this path must not leave a truncated file behind. Writing
+                # back with `cat` keeps the path's own mode and inode.
+                if git cat-file blob "HEAD:$path" >"$tmp" 2>/dev/null; then
+                  cat "$tmp" >"$path"
+                  restored=$((restored + 1))
+                fi
+              done <<<"$crlf"
+              echo "restored $restored file(s) byte-for-byte from the object store"
+            fi
+            scan_crlf
+            if [ -n "$crlf" ]; then
+              echo "::warning::CRLF survived the restore - the committed blobs carry it, or there was no object store to restore from; normalizing the working tree in place. The repo-side fix is a committed \`git add --renormalize .\`"
+              sed 's/^/  /' <<<"$crlf"
+              stripped=0
+              while IFS= read -r path; do
+                [ -n "$path" ] || continue
+                tr -d '\r' <"$path" >"$tmp"
+                cat "$tmp" >"$path"
+                stripped=$((stripped + 1))
+              done <<<"$crlf"
+              echo "stripped CR from $stripped file(s) in place"
+              scan_crlf
+            fi
+            rm -f "$tmp"
+            if [ -n "$crlf" ]; then
+              echo "::error::CRLF survived both the object-store restore and the in-place strip; the lane cannot read its own shell files"
+              sed 's/^/  /' <<<"$crlf"
+              exit 1
+            fi
           fi
           echo "working tree restored as LF"
       - name: Assert the working tree is LF
@@ -185,40 +234,89 @@ jobs:
         # config afterwards changes nothing on its own: the index already holds
         # the stat of the CRLF files, so git calls the tree clean.
         #
-        # `git rm --cached -r .` + `git reset --hard` is git's own recipe for
-        # refreshing a tree after the line-ending rules change: it drops the
-        # cached stat and rewrites every tracked path from the object store
-        # through `* text=auto eol=lf`, which is the authority on what the tree
-        # should be. It discards uncommitted changes, which is exactly right
-        # directly after checkout, and on an already-LF tree it writes the same
-        # bytes back - so it is safe to run unconditionally.
+        # MEASURED on windows-latest (runner image 20260810.198.2, git
+        # 2.55.0.windows.3): the earlier repair here - `git rm --cached -r .`
+        # followed by `git reset --hard` - left the runner with a tree in which
+        # ALL 306 tracked shell files carried CR, on a merge commit whose blobs
+        # are provably LF, and the `sed 's/\r$//'` fallback that ran next did not
+        # remove a single CR. Both halves of that repair went through a conversion
+        # path (git's own smudge, then a line-anchored substitution over
+        # whatever MSYS handed the tool), and both are unnecessary: the committed
+        # bytes are already LF, so the repair only has to WRITE THOSE BYTES.
+        # `git cat-file blob` emits them with no eol/autocrlf/attribute
+        # conversion in the way at all, which is why it is the primary repair
+        # here and why the index is left alone. The in-place `tr -d '\r'` - CR
+        # anywhere in the file, not just before a newline - remains for the one
+        # case the object store cannot answer: a CR the committed blob itself
+        # carries, or no object store at all.
+        #
+        # The repair is then RE-SCANNED before the step reports success. The
+        # previous shape printed "working tree restored as LF" over a tree it had
+        # failed to repair, and the failure surfaced one step later as an
+        # unexplained assertion - a repair that cannot say whether it took is
+        # worse than none.
         run: |
           set -eu
+          store=
           if git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+            # Pinned locally as well, so every later git call in this job - the
+            # lane's own included - converts nothing.
             git config core.autocrlf false
             git config core.eol lf
-            git rm --cached -rq .
-            git reset --hard -q
+            store=1
           else
             echo "note: not a git work tree; there is no object store to restore from"
           fi
-          # A CR that survives the restore is in the committed blob itself (or
-          # there was nothing to restore from), which no checkout config can
-          # undo. Strip it from the working tree so ShellCheck sees shell rather
-          # than SC1017 on line 1 of everything, and say so loudly - a working
-          # tree patched in place is not a repo that is fixed.
-          scan=0
-          crlf=$(grep -rlU $'\r' bin tests --include='*.sh') || scan=$?
-          if [ "$scan" -gt 1 ]; then
-            echo "::error::the CRLF scan did not complete (grep exit $scan); refusing to report the tree as restored"
-            exit 1
-          fi
+          # Captured whole and only then judged, three times over: `-o pipefail`
+          # would let a reader closing the pipe early turn a match into a pass,
+          # and a scan that did not complete is never a pass.
+          scan_crlf() {
+            local rc=0
+            crlf=$(grep -rlU $'\r' bin tests --include='*.sh') || rc=$?
+            if [ "$rc" -gt 1 ]; then
+              echo "::error::the CRLF scan did not complete (grep exit $rc); refusing to report the tree as restored"
+              exit 1
+            fi
+          }
+          scan_crlf
           if [ -n "$crlf" ]; then
-            echo "::warning::CRLF survived the restore - the committed blobs carry it, or there was no object store to restore from; normalizing the working tree in place. The repo-side fix is a committed \`git add --renormalize .\`"
+            echo "::warning::working tree carries CRLF shell files; restoring the committed bytes before the lane runs"
             sed 's/^/  /' <<<"$crlf"
-            # One sed for the whole list rather than one per file: a Git Bash
-            # fork costs 14-18x what it does on Linux.
-            tr '\n' '\0' <<<"$crlf" | xargs -0 sed -i $'s/\r$//'
+            tmp=$(mktemp)
+            if [ -n "$store" ]; then
+              restored=0
+              while IFS= read -r path; do
+                [ -n "$path" ] || continue
+                # Staged through a temp file: a `git cat-file` that cannot answer
+                # for this path must not leave a truncated file behind. Writing
+                # back with `cat` keeps the path's own mode and inode.
+                if git cat-file blob "HEAD:$path" >"$tmp" 2>/dev/null; then
+                  cat "$tmp" >"$path"
+                  restored=$((restored + 1))
+                fi
+              done <<<"$crlf"
+              echo "restored $restored file(s) byte-for-byte from the object store"
+            fi
+            scan_crlf
+            if [ -n "$crlf" ]; then
+              echo "::warning::CRLF survived the restore - the committed blobs carry it, or there was no object store to restore from; normalizing the working tree in place. The repo-side fix is a committed \`git add --renormalize .\`"
+              sed 's/^/  /' <<<"$crlf"
+              stripped=0
+              while IFS= read -r path; do
+                [ -n "$path" ] || continue
+                tr -d '\r' <"$path" >"$tmp"
+                cat "$tmp" >"$path"
+                stripped=$((stripped + 1))
+              done <<<"$crlf"
+              echo "stripped CR from $stripped file(s) in place"
+              scan_crlf
+            fi
+            rm -f "$tmp"
+            if [ -n "$crlf" ]; then
+              echo "::error::CRLF survived both the object-store restore and the in-place strip; the lane cannot read its own shell files"
+              sed 's/^/  /' <<<"$crlf"
+              exit 1
+            fi
           fi
           echo "working tree restored as LF"
       - name: Assert the working tree is LF

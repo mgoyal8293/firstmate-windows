@@ -967,6 +967,15 @@ test_windows_ci_lf_restore_makes_a_crlf_tree_runnable() {
     # Content, not just line endings: the restore must not eat the file.
     [ "$(cat "$tmp/$mode/bin/ok.sh")" = 'echo one' ] \
       || { rm -rf "$tmp"; fail "the restore step changed more than the line endings in the $mode tree: $(cat "$tmp/$mode/bin/ok.sh")"; }
+    # And where there IS an object store to answer for the path, the restored
+    # file is the committed bytes - not a conversion of them, and not a
+    # line-anchored edit of whatever the checkout left behind.
+    if [ "$mode" = checkout ]; then
+      git -C "$tmp/$mode" cat-file blob HEAD:bin/ok.sh > "$tmp/expected-blob" \
+        || { rm -rf "$tmp"; fail "could not read the committed blob for the $mode fixture"; }
+      cmp -s "$tmp/expected-blob" "$tmp/$mode/bin/ok.sh" \
+        || { rm -rf "$tmp"; fail "the restore step must write the committed bytes byte-for-byte in the $mode tree"; }
+    fi
     set +e
     out=$(cd "$tmp/$mode" && GIT_CEILING_DIRECTORIES="$tmp" \
       "$bash_bin" --noprofile --norc -eo pipefail "$guard" 2>&1)
@@ -979,6 +988,30 @@ test_windows_ci_lf_restore_makes_a_crlf_tree_runnable() {
       *) rm -rf "$tmp"; fail "the restored $mode tree must be certified LF, got: $out" ;;
     esac
   done
+
+  # THE SECOND HALF OF THE REGRESSION. The runner reached its assertion step
+  # with all 306 shell files still carrying CR after a restore that had printed
+  # "working tree restored as LF" - so the lane failed one step later with a
+  # verdict that named nothing. A repair that cannot say whether it took must
+  # fail, never certify. Write permission is taken away to make the repair
+  # impossible, and the same permission is the capability probe: a privileged
+  # runner writes anyway, and there this case has nothing to prove.
+  lfrestore_tree "$tmp/unrepairable" blobs
+  chmod 0444 "$tmp/unrepairable/bin/ok.sh"
+  if [ ! -w "$tmp/unrepairable/bin/ok.sh" ]; then
+    set +e
+    out=$(cd "$tmp/unrepairable" && "$bash_bin" --noprofile --norc -eo pipefail "$step" 2>&1)
+    rc=$?
+    set -e
+    [ "$rc" -ne 0 ] \
+      || { rm -rf "$tmp"; fail "the restore step must fail when it cannot repair the tree, got exit 0: $out"; }
+    case "$out" in
+      *'working tree restored as LF'*)
+        rm -rf "$tmp"
+        fail "the restore step reported success over a tree it could not repair: $out" ;;
+    esac
+  fi
+  chmod 0644 "$tmp/unrepairable/bin/ok.sh"
 
   # A CR the object store itself carries is not silently laundered: the step
   # normalizes the tree so the lane can run, and says the repo needs fixing.

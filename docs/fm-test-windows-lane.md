@@ -86,17 +86,33 @@ against a tree whose `.gitattributes` was changed.
 Those pins only govern a checkout the job performs itself, so the lane does not
 stake its ability to run on them. A "Restore the working tree as LF" step runs
 straight after checkout and *makes* the invariant true: it pins the two config
-keys locally, then refreshes the tree with git's own recipe for a line-ending
-rule change - `git rm --cached -r .` followed by `git reset --hard` - which
-rewrites every tracked path out of the object store through
-`* text=auto eol=lf`. The refresh is the part that matters: once a CRLF tree has
-been written, the index holds the stat of those CRLF files, so git calls the tree
-clean and re-pinning the config on its own repairs nothing. On an already-LF tree
-the step writes the same bytes back, so it runs unconditionally.
-A CR that survives that is in the committed blob (or there was no object store to
-restore from); the step strips it from the working tree so the lane can run and
-emits a `::warning::` naming the files, because a working tree patched in place
-is not a repo that is fixed - that needs a committed `git add --renormalize .`.
+keys locally, scans `bin` and `tests` for CR, and repairs whatever it finds. The
+scan is what matters - once a CRLF tree has been written, the index holds the stat
+of those CRLF files, so git calls the tree clean and re-pinning the config on its
+own repairs nothing.
+
+The repair writes the committed bytes back, one flagged path at a time, with
+`git cat-file blob HEAD:<path>`. That is deliberately *not* a checkout: no
+`eol`/`autocrlf`/attribute conversion sits between the object store and the file,
+so it cannot itself produce the line endings it is repairing. It replaced an
+earlier `git rm --cached -r .` + `git reset --hard` refresh plus a
+`sed 's/\r$//'` fallback, which is what the lane's own measurement condemned:
+on windows-latest (runner image 20260810.198.2, git 2.55.0.windows.3) that pair
+left the runner with **all 306** tracked shell files carrying CR - on a merge
+commit whose blobs are provably LF - and the `sed` pass removed none of them.
+Both halves ran through a conversion path; the committed bytes need none.
+
+A CR that survives the object-store restore is in the committed blob itself (or
+there was no object store to restore from). The step then strips CR in place with
+`tr -d '\r'` - CR anywhere in the file, not only before a newline - so the lane
+can run, and emits a `::warning::` naming the files, because a working tree
+patched in place is not a repo that is fixed; that needs a committed
+`git add --renormalize .`.
+
+The repair is re-scanned before the step reports success, and the step fails if
+CR survives both passes. The earlier shape printed "working tree restored as LF"
+over a tree it had not repaired, and the lane then went red one step later with a
+verdict that named nothing - five shard jobs at the same assertion.
 
 The assertion after the restore then *verifies* the invariant and fails loudly if
 it does not hold. It captures the scan and then judges it, rather than piping the
@@ -106,8 +122,10 @@ SIGPIPE, and turn the guard's own non-zero status into a reported
 "working tree is LF" - on a CRLF tree. A scan that does not complete is now an
 error too. `tests/fm-test-run.test.sh` executes both steps' real scripts against
 fixture trees to hold this: the assertion against LF, CRLF and unscannable trees,
-and the restore against a CRLF-but-clean checkout, a tree whose blobs carry the
-CR, a tree with no object store, and an already-LF tree.
+and the restore against a CRLF-but-clean checkout (byte-compared against the
+committed blob), a tree whose blobs carry the CR, a tree with no object store, an
+already-LF tree, and a tree it cannot repair at all - which it must fail on
+rather than certify.
 
 ## The harness PATH
 
