@@ -70,8 +70,22 @@ A script with no hint gets the conservative `PORTABLE_SERIAL_DEFAULT_WEIGHT_MS` 
 Hints affect balance, not coverage: the coverage guard keeps the partition complete and disjoint whatever they say.
 Past the job cap, however, a stale hint stops being merely a slower shard.
 A shard that overruns `timeout-minutes` is cancelled and reports no verdict at all, which a required check can never turn green and which is indistinguishable from a hang.
-That is what happened on 2026-08-19: the table still described a 69-script lane while the lane had grown to 116 scripts and about 42 minutes, 45 of the selected scripts had no hint and were packed at the flat default - including `tests/fm-remote-secondmate-lifecycle-e2e.test.sh` at 157171 ms, the longest of the unhinted scripts - and packing believed all four shards were 8.5 minutes while the measured spread on red run [32142691561](https://github.com/mgoyal8293/firstmate-windows/actions/runs/32142691561) on `main` the day before was 7.72 minutes for shard 2 to 14.68 minutes for shard 4.
-`bin/fm-test-run.sh --check-coverage` therefore reports `unmeasured_serial=<n>` and names any selected serial script still packed at the default, so the drift is visible in every CI run instead of only surfacing as a cancelled job.
+That is what happened on 2026-08-19, through two mechanisms that are easy to conflate and are not the same.
+
+The lane total was under-counted by stale values on scripts that already had hints.
+Those 71 scripts were packed at 1147781 ms against a real 1744890 ms, hiding 597 s: `tests/fm-session-start.test.sh` was hinted at 37289 ms and measures 152852 ms, `tests/fm-teardown.test.sh` at 23237 ms against 94337 ms, `tests/fm-sessionstart-nudge.test.sh` at 264 ms against 67672 ms.
+The 45 scripts with no hint were, in aggregate, packed slightly high rather than low: 45 x 20000 = 900000 ms against a real 794804 ms, 105 s of slack.
+So packing believed the lane was 2047781 ms (34.13 min, 8.53 min per shard) against a real 2539694 ms (42.33 min, 10.58 min per shard), and the whole 8.20-minute undercount came from stale values on already-hinted scripts, not from the unhinted set.
+
+Per-shard balance went wrong for the other reason.
+An unhinted script is packed at the flat default wherever its real duration sits, so `tests/fm-remote-secondmate-lifecycle-e2e.test.sh` went into a bin sized for 20 s carrying 157 s of work, misplacing 137 s into one shard.
+That is why shard 4 specifically overflowed while the lane total was under-counted at the same time.
+On red run [32142691561](https://github.com/mgoyal8293/firstmate-windows/actions/runs/32142691561) on `main` the day before, the measured spread was 7.72 minutes for shard 2 to 14.68 minutes for shard 4 against a packing that believed all four were 8.5 minutes.
+
+`bin/fm-test-run.sh --check-coverage` reports `unmeasured_serial=<n>` and names any selected serial script still packed at the flat default, so a missing measurement is visible in every CI run rather than surfacing later as an unbalanced shard.
+Read that counter for exactly what it says. It reports whether any selected serial script is packed at the default, so `unmeasured_serial=0` means no script is packed at the default - it does **not** mean the hints are current.
+An already-hinted script can quadruple while the count stays at zero, which is what happened here: the lane's script count was stable, the count was zero throughout, and most of the hidden time was in values the guard never looks at.
+Nothing currently detects a stale value on a script that already has a hint; `fm-test-weight-drift-detector` is the filed follow-up that will compare measured durations against the table.
 
 | Lane | Script count | Estimated duration |
 |---|---:|---:|
@@ -105,7 +119,8 @@ bin/fm-test-run.sh --check-coverage
 ```
 
 Refresh from a green run, because a lane that failed part-way records a truncated duration for the script that failed.
-Refresh whenever `--check-coverage` reports a non-zero `unmeasured_serial`, and whenever the lane's own growth has outpaced the table.
+Refresh whenever `--check-coverage` reports a non-zero `unmeasured_serial`, whenever the lane has grown, whenever a shard's measured duration approaches the job cap, and otherwise periodically.
+A zero `unmeasured_serial` is not an all-clear: it says only that no script is packed at the default, and nothing yet detects a stale value on a script that already has a hint (`fm-test-weight-drift-detector`).
 
 ## Coverage guard
 

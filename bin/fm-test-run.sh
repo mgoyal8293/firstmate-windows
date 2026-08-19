@@ -384,9 +384,16 @@ list_portable_serial() {
 # drifted below its real runtime overruns `timeout-minutes` and is cancelled, so
 # it reports no verdict at all rather than merely finishing late - a required
 # check in that state can never turn green, and it is indistinguishable from a
-# hang. Refresh these from a green run's timing artifacts whenever the lane has
-# grown or `--check-coverage` reports a non-zero `unmeasured_serial`; that doc
-# owns the refresh procedure.
+# hang.
+#
+# `--check-coverage` reports `unmeasured_serial=<n>`, which counts only the
+# selected serial scripts packed at the flat default. A zero is therefore not an
+# all-clear: an already-hinted script can quadruple while that count stays zero,
+# which is how most of this lane's hidden time accumulated. Refresh these from a
+# green run's timing artifacts when the lane has grown, when a shard approaches
+# the cap, and otherwise periodically, not only when the count is non-zero
+# (fm-test-weight-drift-detector is the filed follow-up that will compare
+# measured durations against this table). That doc owns the refresh procedure.
 portable_serial_weight_hints() {
   cat <<'EOF'
 tests/fm-afk-inject-e2e.test.sh 35004
@@ -753,6 +760,11 @@ run_coverage_guard() {
   # until it has run once. It is reported because an unmeasured script is what
   # unbalances a shard, and an unbalanced shard past the job cap is cancelled
   # with no verdict rather than merely slow.
+  #
+  # This counts only scripts packed at the default. A zero says no script is
+  # packed at the default, not that the hints are current - a stale value on a
+  # script that already has a hint is invisible here
+  # (docs/fm-test-portable-shards.md).
   portable_serial_weight_hints | cut -d' ' -f1 | LC_ALL=C sort -u >"$tmp/hinted"
   comm -23 "$tmp/serial" "$tmp/hinted" >"$tmp/unhinted"
 

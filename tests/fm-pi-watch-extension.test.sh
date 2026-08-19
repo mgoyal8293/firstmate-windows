@@ -2234,6 +2234,191 @@ EOF
   pass "OpenCode healthy arm output does not suppress the turn-end guard"
 }
 
+# Fault injection for the one stdin write each turn-end guard makes.
+#
+# Both guards hand their stop-hook payload to the child with
+# `child.stdin.end(...)`. A guard that exits before draining that pipe makes the
+# write fail with EPIPE, and the error arrives on the stdin stream rather than on
+# the ChildProcess, so `child.on("error")` never sees it and node escalates it to
+# an unhandled error that kills the host session.
+#
+# The payload is a fixed 26 bytes, which fits the pipe buffer, so the real race
+# cannot be lost on demand: the parent's first write attempt lands microseconds
+# after the fork and almost always beats the child's exit. Repeating the case
+# until it loses is what the workstation campaign did, at 7 failures in 200 runs
+# - too weak to protect a one-line listener.
+#
+# So the refusal is injected where the kernel would raise it. A loader hook
+# redirects `node:child_process` to a shim that spawns the real guard - real
+# argv, real exit code, real stderr - and replaces only that child's stdin with
+# a stream whose first write fails EPIPE. Everything the guard concludes still
+# travels the real path; the single question under test is what each site does
+# with a refused write.
+install_refused_stdin_write_shim() {
+  local dir=$1
+  mkdir -p "$dir"
+  cat > "$dir/cp-shim.mjs" <<'JS'
+export * from "node:child_process";
+import { spawn as spawnReal } from "node:child_process";
+import { Writable } from "node:stream";
+
+const target = process.env.FM_REFUSED_STDIN_TARGET || "";
+
+export function spawn(command, args, options) {
+  const child = spawnReal(command, args, options);
+  if (!target || !String(command).endsWith(target)) return child;
+  child.stdin?.destroy();
+  child.stdin = new Writable({
+    write(_chunk, _encoding, done) {
+      done(Object.assign(new Error("write EPIPE"), { code: "EPIPE", syscall: "write" }));
+    },
+  });
+  return child;
+}
+JS
+  cat > "$dir/cp-hooks.mjs" <<'JS'
+import { pathToFileURL } from "node:url";
+
+const shim = pathToFileURL(process.env.FM_CHILD_PROCESS_SHIM).href;
+
+export async function resolve(specifier, context, next) {
+  if (specifier === "node:child_process" && context.parentURL !== shim) {
+    return { url: shim, shortCircuit: true };
+  }
+  return next(specifier, context);
+}
+JS
+}
+
+test_opencode_turnend_guard_survives_a_refused_stdin_write() {
+  local guard_plugin repo home shim guard_log out status
+  guard_plugin="$ROOT/.opencode/plugins/fm-primary-turnend-guard.js"
+  repo="$TMP_ROOT/opencode-guard-refused-stdin-root"
+  home="$TMP_ROOT/opencode-guard-refused-stdin-home"
+  shim="$TMP_ROOT/opencode-guard-refused-stdin-shim"
+  guard_log="$TMP_ROOT/opencode-guard-refused-stdin.log"
+  mkdir -p "$repo/bin" "$home/state" "$home/config"
+  cp "$ROOT/bin/fm-operational-input.sh" "$repo/bin/fm-operational-input.sh"
+  chmod +x "$repo/bin/fm-operational-input.sh"
+  install_refused_stdin_write_shim "$shim"
+  cat > "$repo/bin/fm-turnend-guard.sh" <<'SH'
+#!/usr/bin/env bash
+printf 'guard\n' >> "${FM_GUARD_LOG:?}"
+printf 'supervision is off\n' >&2
+exit 2
+SH
+  chmod +x "$repo/bin/fm-turnend-guard.sh"
+  out=$(GUARD_PLUGIN="$guard_plugin" WORKTREE="$repo" FM_HOME="$home" FM_GUARD_LOG="$guard_log" \
+    FM_CHILD_PROCESS_SHIM="$shim/cp-shim.mjs" FM_CP_HOOKS="$shim/cp-hooks.mjs" \
+    FM_REFUSED_STDIN_TARGET=bin/fm-turnend-guard.sh \
+    node --input-type=module 2>&1 <<'EOF'
+import { register } from "node:module";
+import { existsSync } from "node:fs";
+import { pathToFileURL } from "node:url";
+
+register(pathToFileURL(process.env.FM_CP_HOOKS).href);
+const mod = await import(pathToFileURL(process.env.GUARD_PLUGIN).href);
+let promptBody = "";
+const client = {
+  session: {
+    promptAsync: async (request) => {
+      promptBody = request.body.parts[0].text;
+    },
+  },
+};
+const hooks = await mod.FmPrimaryTurnendGuard({
+  client,
+  directory: process.env.WORKTREE,
+  worktree: process.env.WORKTREE,
+});
+await hooks.event({ event: { type: "session.idle", properties: { sessionID: "session-test" } } });
+if (!existsSync(process.env.FM_GUARD_LOG)) {
+  throw new Error("the real guard never ran, so no stdin write was refused");
+}
+if (!promptBody.includes("TURN WOULD END BLIND")) {
+  throw new Error(`a refused stdin write lost the guard's blocking verdict: ${promptBody}`);
+}
+if (!promptBody.includes("supervision is off")) {
+  throw new Error(`a refused stdin write lost the guard's own stderr: ${promptBody}`);
+}
+EOF
+)
+  status=$?
+  # An unguarded write escapes as an unhandled stream error that takes the host
+  # session down, so the driver surviving at all is half the assertion.
+  case $out in
+    *EPIPE*|*"Unhandled 'error' event"*)
+      fail "OpenCode turn-end guard let a refused stdin write escape: $out" ;;
+  esac
+  expect_driver_ok "$status" "OpenCode turn-end guard must survive a refused stdin write and still deliver its verdict" "$out"
+  pass "OpenCode turn-end guard reports its verdict when the stdin write is refused"
+}
+
+test_pi_turnend_guard_survives_a_refused_stdin_write() {
+  local ext repo home shim guard_log out status
+  ext="$ROOT/.pi/extensions/fm-primary-turnend-guard.ts"
+  repo="$TMP_ROOT/pi-guard-refused-stdin-root"
+  home="$TMP_ROOT/pi-guard-refused-stdin-home"
+  shim="$TMP_ROOT/pi-guard-refused-stdin-shim"
+  guard_log="$TMP_ROOT/pi-guard-refused-stdin.log"
+  mkdir -p "$repo/.pi/extensions/lib" "$repo/bin" "$home/state" "$home/config"
+  cp "$ext" "$repo/.pi/extensions/fm-primary-turnend-guard.ts"
+  cp "$ROOT/.pi/extensions/lib/fm-operational-input.ts" "$repo/.pi/extensions/lib/fm-operational-input.ts"
+  cp "$ROOT/bin/fm-operational-input.sh" "$repo/bin/fm-operational-input.sh"
+  chmod +x "$repo/bin/fm-operational-input.sh"
+  install_refused_stdin_write_shim "$shim"
+  cat > "$repo/bin/fm-turnend-guard.sh" <<'SH'
+#!/usr/bin/env bash
+printf 'guard\n' >> "${FM_GUARD_LOG:?}"
+printf 'supervision is off\n' >&2
+exit 2
+SH
+  chmod +x "$repo/bin/fm-turnend-guard.sh"
+  out=$(EXTENSION="$repo/.pi/extensions/fm-primary-turnend-guard.ts" FM_HOME="$home" FM_GUARD_LOG="$guard_log" \
+    FM_CHILD_PROCESS_SHIM="$shim/cp-shim.mjs" FM_CP_HOOKS="$shim/cp-hooks.mjs" \
+    FM_REFUSED_STDIN_TARGET=bin/fm-turnend-guard.sh \
+    node --input-type=module 2>&1 <<'EOF'
+import { register } from "node:module";
+import { existsSync } from "node:fs";
+import { pathToFileURL } from "node:url";
+
+register(pathToFileURL(process.env.FM_CP_HOOKS).href);
+const mod = await import(pathToFileURL(process.env.EXTENSION).href);
+const handlers = new Map();
+let message = "";
+const pi = {
+  on(name, handler) {
+    handlers.set(name, handler);
+  },
+  sendMessage() {},
+  sendUserMessage: async (content) => {
+    message += content;
+  },
+};
+mod.default(pi);
+const settled = handlers.get("agent_settled");
+if (!settled) throw new Error("the extension registered no agent_settled handler");
+await settled({ type: "agent_settled" });
+if (!existsSync(process.env.FM_GUARD_LOG)) {
+  throw new Error("the real guard never ran, so no stdin write was refused");
+}
+if (!message.includes("TURN WOULD END BLIND")) {
+  throw new Error(`a refused stdin write lost the guard's blocking verdict: ${message}`);
+}
+if (!message.includes("supervision is off")) {
+  throw new Error(`a refused stdin write lost the guard's own stderr: ${message}`);
+}
+EOF
+)
+  status=$?
+  case $out in
+    *EPIPE*|*"Unhandled 'error' event"*)
+      fail "Pi turn-end guard let a refused stdin write escape: $out" ;;
+  esac
+  expect_driver_ok "$status" "Pi turn-end guard must survive a refused stdin write and still deliver its verdict" "$out"
+  pass "Pi turn-end guard reports its verdict when the stdin write is refused"
+}
+
 test_pi_extension_reports_external_healthy_watcher
 test_pi_tool_returns_agent_tool_result
 test_pi_redundant_tool_call_is_owned_noop
@@ -2264,3 +2449,5 @@ test_opencode_established_empty_close_honors_retry_limit
 test_opencode_actionable_close_rechecks_session_lock
 test_opencode_watch_arm_coordinates_with_turnend_guard
 test_opencode_healthy_arm_output_does_not_suppress_guard
+test_opencode_turnend_guard_survives_a_refused_stdin_write
+test_pi_turnend_guard_survives_a_refused_stdin_write

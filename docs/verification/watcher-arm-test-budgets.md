@@ -191,7 +191,26 @@ With the stdin listener removed, that assertion fails with the production crash 
 not ok - a refused encoder body killed the adapter's host: exit 1 - node:events:497
 ```
 
-The two turn-end guard sites carry the identical one-line guard and are exercised end to end by the OpenCode external-healthy case in `tests/fm-pi-watch-extension.test.sh`, which is the path that was crashing.
+The two turn-end guard sites carry the identical one-line guard, and both are pinned deterministically too, in `tests/fm-pi-watch-extension.test.sh`.
+Their payload is a fixed 26 bytes, which fits the pipe buffer, so the oversize-body trick does not port and the real race cannot be lost on demand - the parent's first write attempt lands microseconds after the fork and normally beats the child's exit, which is why the campaign above scored only 7 in 200.
+Those two cases instead inject the refusal where the kernel would raise it: a loader hook redirects `node:child_process` to a shim that spawns the real guard, with its real exit code and stderr, and replaces only that child's stdin with a stream whose first write fails `EPIPE`.
+Each case asserts that the host survives, that no `EPIPE` escapes, and that the guard's blocking verdict and its stderr still reach the caller.
+
+```console
+$ bash tests/fm-pi-watch-extension.test.sh | grep 'stdin write is refused'
+ok - OpenCode turn-end guard reports its verdict when the stdin write is refused
+ok - Pi turn-end guard reports its verdict when the stdin write is refused
+```
+
+With either site's stdin listener removed, its case fails with the production crash rather than a timing flake:
+
+```console
+not ok - OpenCode turn-end guard let a refused stdin write escape: node:events:497
+      throw er; // Unhandled 'error' event
+Error: write EPIPE
+```
+
+The OpenCode external-healthy case in the same file still exercises both sites end to end on the real path that was crashing.
 
 ## Refreshing this evidence
 
