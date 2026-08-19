@@ -300,6 +300,87 @@ STUB
 }
 
 
+# The same mount aliasing reaches /proc/<pid>/fd/N, and for a lock FILE the fd
+# links are the ONLY branch that can ever match - no process holds a regular file
+# as its cwd. fm_lock_proc_holder reads an empty result as "provably no holder",
+# which is what lets fm_lock_is_provably_stale delete a lock a live git process
+# still owns, so the fd compare has to widen exactly as the cwd compare does.
+test_proc_holder_scan_matches_a_mount_aliased_fd_target() {
+  local dir proc out
+  dir=$(fm_test_tmproot fm-proc-fd-alias) || fail "fd-alias: could not create a fixture root"
+  mkdir -p "$dir/mnt/wt" "$dir/long/wt" "$dir/stub"
+  : > "$dir/long/wt/index.lock" || fail "fd-alias: could not stage the lock file"
+  : > "$dir/long/wt/other.lock" || fail "fd-alias: could not stage the unrelated file"
+  proc="$dir/proc"
+  # 4242 holds the lock open under the aliased spelling; 4243 holds a different
+  # file and must never be claimed by the widening.
+  mkdir -p "$proc/4242/fd" "$proc/4243/fd"
+  ln -s "$dir/long/wt/index.lock" "$proc/4242/fd/3" \
+    || fail "fd-alias: could not stage the aliased fd link"
+  ln -s "$dir/long/wt/other.lock" "$proc/4243/fd/3" \
+    || fail "fd-alias: could not stage the unrelated fd link"
+
+  cat > "$dir/stub/cygpath" <<STUB
+#!/usr/bin/env bash
+# Stand-in for the MSYS mount table, same shape as the cwd case above.
+p=\${!#}
+case "\$1" in
+  -u)
+    case "\$p" in
+      X:/win/*) printf '%s/%s\n' '$dir/long' "\${p#X:/win/}" ;;
+      *) printf '%s\n' "\$p" ;;
+    esac
+    ;;
+  *)
+    case "\$p" in
+      '$dir/mnt'/*) printf 'X:/win/%s\n' "\${p#$dir/mnt/}" ;;
+      '$dir/long'/*) printf 'X:/win/%s\n' "\${p#$dir/long/}" ;;
+      *) printf '%s\n' "\$p" ;;
+    esac
+    ;;
+esac
+STUB
+  chmod +x "$dir/stub/cygpath"
+
+  # shellcheck disable=SC2034 # Read by bin/fm-proc-lib.sh fm_proc_root.
+  FM_PROC_ROOT_OVERRIDE=$proc
+  out=$(with_path "$dir/stub:$PATH" fm_proc_pids_holding_path "$dir/mnt/wt/index.lock") \
+    || fail "fd-alias: the scan must still report success when a resolver is present"
+  case $'\n'"$out"$'\n' in
+    *$'\n4242\n'*) : ;;
+    *) fail "fd-alias: a process whose /proc fd link uses the aliased spelling must be found, got '$out'" ;;
+  esac
+  case $'\n'"$out"$'\n' in
+    *$'\n4243\n'*) fail "fd-alias: SECURITY - a process holding a different file must never be claimed, got '$out'" ;;
+  esac
+
+  # Capability-gated exactly as the cwd widening is: no working resolver leaves
+  # the strict compare as the only verdict.
+  cat > "$dir/stub/cygpath" <<'STUB'
+#!/usr/bin/env bash
+exit 1
+STUB
+  chmod +x "$dir/stub/cygpath"
+  out=$(with_path "$dir/stub:$PATH" fm_proc_pids_holding_path "$dir/mnt/wt/index.lock") \
+    || fail "fd-alias: an unusable resolver must not turn a completed scan into a failed one"
+  [ -z "$out" ] \
+    || fail "fd-alias: with no working resolver the strict compare must be the only verdict, got '$out'"
+
+  # And the spelling /proc itself reports never needs the resolver.
+  out=$(with_path "$dir/stub:$PATH" fm_proc_pids_holding_path "$dir/long/wt/index.lock") \
+    || fail "fd-alias: scanning the /proc spelling itself must succeed"
+  case $'\n'"$out"$'\n' in
+    *$'\n4242\n'*) : ;;
+    *) fail "fd-alias: the strict compare must still match the spelling /proc reports, got '$out'" ;;
+  esac
+  case $'\n'"$out"$'\n' in
+    *$'\n4243\n'*) fail "fd-alias: the strict compare must not claim an unrelated holder, got '$out'" ;;
+  esac
+  unset FM_PROC_ROOT_OVERRIDE
+  pass "fm_proc_pids_holding_path: a mount-aliased /proc fd target still matches the caller's path"
+}
+
+
 # --- 4. symlink target spelling ---------------------------------------------
 
 # Stage real tool $2 inside directory $1 so it still runs when $1 is the ENTIRE
@@ -483,6 +564,7 @@ test_native_symlink_mode_is_set_and_preserves_operator_choice
 test_proc_cwd_scan_finds_processes_rooted_under_a_directory
 test_proc_cwd_scan_reports_scan_failure_distinctly
 test_proc_cwd_scan_matches_a_mount_aliased_cwd_spelling
+test_proc_holder_scan_matches_a_mount_aliased_fd_target
 test_lock_same_path_resolves_a_mount_alias_only_through_cygpath
 test_lock_points_to_owner_still_accepts_an_exact_readlink_answer
 test_pid_identity_is_served_by_this_file_from_proc

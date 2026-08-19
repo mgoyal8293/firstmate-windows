@@ -274,7 +274,8 @@ fm_proc_scan_available() {
   fm_proc_cwd "$$" >/dev/null 2>&1
 }
 
-# Print every POSIX spelling of directory $1 that a /proc cwd link may use, one
+# Print every POSIX spelling of path $1 that a /proc link - a cwd link or an
+# fd/N target, which are rendered through the same mount table - may use, one
 # per line, most authoritative first. The spelling the caller passed is always
 # printed and always wins; anything after it can only WIDEN a match.
 #
@@ -376,11 +377,19 @@ fm_proc_pids_holding_path() {  # <path>
     for fd in "$entry"/fd/*; do
       [ -L "$fd" ] || continue
       target=$(readlink -- "$fd" 2>/dev/null) || continue
-      if [ "$target" = "$path" ]; then
-        printf '%s\n' "$pid"
+      for prefix in ${prefixes[@]+"${prefixes[@]}"}; do
+        if [ "$target" = "$prefix" ]; then
+          held=1
+          break
+        fi
+      done
+      if [ -n "$held" ]; then
         break
       fi
     done
+    if [ -n "$held" ]; then
+      printf '%s\n' "$pid"
+    fi
   done
   [ "$scanned" -eq 1 ]
 }
