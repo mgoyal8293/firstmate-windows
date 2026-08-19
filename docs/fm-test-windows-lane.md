@@ -53,8 +53,7 @@ lane is a subset overlay of that inventory rather than another part of it.
 
 ## Checkout must be LF
 
-Git for Windows defaults `core.autocrlf=true`, and this repo has no
-`.gitattributes` to override it.
+Git for Windows defaults `core.autocrlf=true`.
 A CRLF working tree makes ShellCheck reject **every** shell file with SC1017
 ("Literal carriage return"), so the lint gate fails on line 1 of everything and
 reports nothing about the code.
@@ -66,9 +65,27 @@ Measured, on the same tree:
 | `core.autocrlf=true` (Git for Windows default) | fails - SC1017 on all 304 files |
 | `core.autocrlf=false`, `core.eol=lf` | **passes, rc=0** |
 
-Both lanes therefore set `core.autocrlf=false` and `core.eol=lf` *before*
+The root `.gitattributes` owns this invariant with `* text=auto eol=lf`, so a
+plain `git clone` on Windows lands as LF whatever the operator's `core.autocrlf`
+says - CI, a local clone, and an upstream sync checkout all get the same tree.
+That matters because this repo is published for other Windows users to clone,
+and a first run that emits SC1017 on all 304 files with no hint why is exactly
+the experience the port exists to prevent.
+`assets/banner.png` is pinned `binary` in the same file rather than left to
+`text=auto` content sniffing; it is the only non-text tracked blob.
+
+Both lanes *additionally* set `core.autocrlf=false` and `core.eol=lf` *before*
 `actions/checkout`, then assert the working tree really is LF and fail loudly if
-it is not.
+it is not. That belt-and-braces pin stays: it keeps the lane honest even against
+a tree whose `.gitattributes` was changed.
+
+The assertion captures the scan and then judges it, rather than piping the
+recursive `grep` into `head`. GitHub runs `shell: bash` steps with
+`-o pipefail`, so the pipeline form let `head` close the pipe, kill `grep` with
+SIGPIPE, and turn the guard's own non-zero status into a reported
+"working tree is LF" - on a CRLF tree. A scan that does not complete is now an
+error too. `tests/fm-test-run.test.sh` executes the step's real script against
+LF, CRLF and unscannable fixtures to hold that.
 
 ## The harness PATH
 

@@ -763,6 +763,119 @@ puts JSON.generate(
   pass "Herdr CI family-run step times out at 20 min under a 75 min job backstop"
 }
 
+# Build a bin/ + tests/ tree the LF guard can scan: <crlf-count> files under bin/
+# carry CRLF, everything else is LF. <name-pad> pads each CRLF filename so the
+# scan's own output can be made larger than a pipe buffer.
+lfguard_tree() {  # <dir> <crlf-count> <name-pad>
+  local dir=$1 count=$2 pad=$3 name i=0
+  mkdir -p "$dir/bin" "$dir/tests"
+  printf 'echo lf\n' > "$dir/bin/ok.sh"
+  printf 'echo lf\n' > "$dir/tests/ok.test.sh"
+  name=$(printf "%${pad}s" '' | tr ' ' 'n')
+  while [ "$i" -lt "$count" ]; do
+    printf 'echo crlf\r\n' > "$dir/bin/${name}${i}.sh"
+    i=$((i + 1))
+  done
+}
+
+# Run the extracted step script the way GitHub runs a `shell: bash` step, from
+# inside <dir>. Prints combined output; the caller reads the status separately.
+lfguard_run() {  # <guard-script> <dir>
+  ( cd "$2" && bash --noprofile --norc -eo pipefail "$1" 2>&1 )
+}
+
+test_windows_ci_lf_guard_never_reports_lf_without_a_clean_scan() {
+  # .github/workflows/windows-ci.yml's "Assert the working tree is LF" step is
+  # the tripwire that stops a CRLF checkout from surfacing as 300 bogus SC1017
+  # errors. Parse the workflow as YAML and execute the step's REAL script under
+  # GitHub's own invocation (`bash --noprofile --norc -eo pipefail`), so this
+  # pins the step's behavior rather than the text of the file.
+  command -v ruby >/dev/null 2>&1 \
+    || fail "ruby is required to parse .github/workflows/windows-ci.yml as YAML"
+  local tmp guard out rc
+  tmp=$(mktemp -d "${TMPDIR:-/tmp}/fm-test-run-lfguard.XXXXXX")
+  guard="$tmp/guard.sh"
+  ruby -ryaml -e '
+doc = YAML.load_file(ARGV[0])
+jobs = doc.fetch("jobs")
+scripts = jobs.map { |name, job|
+  step = job.fetch("steps").find { |s|
+    s.is_a?(Hash) && s["name"] == "Assert the working tree is LF"
+  }
+  raise "job #{name} has no LF assertion step" if step.nil?
+  step.fetch("run")
+}
+raise "every Windows job must carry the LF assertion" unless scripts.size == jobs.size
+raise "the LF assertion must be one spelling, not per-job variants" unless scripts.uniq.size == 1
+print scripts.first
+' "$ROOT/.github/workflows/windows-ci.yml" > "$guard" \
+    || { rm -rf "$tmp"; fail "could not extract the LF assertion step from windows-ci.yml"; }
+  [ -s "$guard" ] || { rm -rf "$tmp"; fail "the extracted LF assertion script is empty"; }
+
+  # An LF tree passes and says so.
+  lfguard_tree "$tmp/lf" 0 4
+  set +e
+  out=$(lfguard_run "$guard" "$tmp/lf"); rc=$?
+  set -e
+  [ "$rc" -eq 0 ] || { rm -rf "$tmp"; fail "LF tree must pass the guard, got exit $rc: $out"; }
+  case "$out" in
+    *'working tree is LF'*) : ;;
+    *) rm -rf "$tmp"; fail "LF tree must report the tree is LF, got: $out" ;;
+  esac
+
+  # A handful of CRLF files: small enough that even a naive pipeline sees them.
+  lfguard_tree "$tmp/small" 2 4
+  set +e
+  out=$(lfguard_run "$guard" "$tmp/small"); rc=$?
+  set -e
+  [ "$rc" -eq 1 ] || { rm -rf "$tmp"; fail "a CRLF tree must fail the guard, got exit $rc: $out"; }
+  case "$out" in
+    *'::error::working tree contains CRLF'*) : ;;
+    *) rm -rf "$tmp"; fail "a CRLF tree must emit the CRLF error annotation, got: $out" ;;
+  esac
+
+  # THE REGRESSION. 600 CRLF files with long names make the scan's own output
+  # ~118 KB, larger than a pipe buffer. Piping that scan into `head -5` lets head
+  # close the pipe, kills the scan with SIGPIPE, and `-o pipefail` promotes that
+  # to the pipeline's status - so the guard used to print five offending
+  # filenames and then declare "working tree is LF" and exit 0.
+  lfguard_tree "$tmp/big" 600 185
+  set +e
+  out=$(lfguard_run "$guard" "$tmp/big"); rc=$?
+  set -e
+  case "$out" in
+    *'working tree is LF'*)
+      rm -rf "$tmp"
+      fail "guard reported the tree is LF while 600 CRLF files were present (SIGPIPE fail-open)" ;;
+  esac
+  [ "$rc" -eq 1 ] || { rm -rf "$tmp"; fail "a large CRLF tree must fail the guard, got exit $rc"; }
+  case "$out" in
+    *'::error::working tree contains CRLF'*) : ;;
+    *) rm -rf "$tmp"; fail "a large CRLF tree must emit the CRLF error annotation, got: $out" ;;
+  esac
+
+  # A scan that could not complete is not a pass either: the guard must never
+  # certify a tree it failed to read.
+  lfguard_tree "$tmp/partial" 0 4
+  rm -rf "$tmp/partial/tests"
+  set +e
+  out=$(lfguard_run "$guard" "$tmp/partial"); rc=$?
+  set -e
+  case "$out" in
+    *'working tree is LF'*)
+      rm -rf "$tmp"
+      fail "guard certified the tree as LF although the scan could not read tests/: $out" ;;
+  esac
+  [ "$rc" -ne 0 ] || { rm -rf "$tmp"; fail "an unscannable tree must not exit 0"; }
+  case "$out" in
+    *'::error::the CRLF scan did not complete'*) : ;;
+    *) rm -rf "$tmp"; fail "an incomplete scan must say so, got: $out" ;;
+  esac
+
+  rm -rf "$tmp"
+  pass "windows-ci LF guard detects CRLF at any scale and refuses to certify an unfinished scan"
+}
+
 test_aggregate_json() {
   local tmp a b
   tmp=$(mktemp -d "${TMPDIR:-/tmp}/fm-test-run-aggjson.XXXXXX")
@@ -824,4 +937,5 @@ test_windows_shard_lane_refusals
 test_jobs_requires_proven_isolated
 test_jobs_parallel_scheduler_and_failure_propagation
 test_herdr_ci_family_run_has_a_step_timeout
+test_windows_ci_lf_guard_never_reports_lf_without_a_clean_scan
 test_aggregate_json

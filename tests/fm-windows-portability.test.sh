@@ -21,6 +21,11 @@
 #   5. fm_pid_identity is served from this same file, because a stored process
 #      identity is another `ps -o` read: a second copy elsewhere in bin/ answered
 #      nothing on MSYS while this one answers from /proc.
+#   6. The root .gitattributes pins an LF working tree for every clone, because
+#      Git for Windows defaults core.autocrlf=true and a CRLF checkout makes
+#      ShellCheck reject every shell file with SC1017 - the lint gate then says
+#      nothing about the code, and assertions compare against strings that grew
+#      a \r.
 #
 # The remaining blocker - the private-file mode assertion - is a security
 # boundary and has its own file: tests/fm-pr-private-file-mode.test.sh.
@@ -555,6 +560,89 @@ SH
   pass "fm_pid_identity: bin/fm-proc-lib.sh answers from /proc where ps rejects -o, and detects pid reuse"
 }
 
+# --- 6. line endings ---------------------------------------------------------
+
+# The invariant belongs to the REPO, not to the two Windows CI jobs: a Windows
+# contributor who clones this published repo with Git-for-Windows defaults and
+# runs bin/fm-lint.sh must not meet SC1017 on all 304 files with no hint why.
+#
+# Driven through git itself, with the SHIPPED .gitattributes copied into the
+# fixture, so this pins that file's meaning rather than re-spelling its rules.
+# The no-attributes arm is the control: it proves the fixture really exercises
+# core.autocrlf's conversion, so a passing result cannot be vacuous.
+test_gitattributes_pins_an_lf_working_tree_for_every_clone() {
+  local dir variant src clone attrs
+  assert_present "$ROOT/.gitattributes" "the repo must carry a root .gitattributes"
+  dir=$(fm_test_tmproot fm-gitattributes-lf) || fail "gitattributes: could not create a fixture root"
+
+  for variant in shipped text-only bare; do
+    src="$dir/src-$variant"
+    mkdir -p "$src/bin" "$src/assets"
+    case "$variant" in
+      shipped) cp "$ROOT/.gitattributes" "$src/.gitattributes" ;;
+      # The `* text=auto eol=lf` line alone, so the assertions below can tell
+      # which of the two shipped lines is doing the work.
+      text-only) printf '* text=auto eol=lf\n' > "$src/.gitattributes" ;;
+      bare) : ;;
+    esac
+    printf 'echo one\necho two\n' > "$src/bin/sample.sh"
+    # Bytes a content sniffer cannot tell from text - CRLF and no NUL - so
+    # `text=auto` alone would call this a text file and rewrite it. Pinning
+    # *.png binary is what keeps a real banner intact.
+    printf 'PNG-fixture\r\nrow\r\n' > "$src/assets/sample.png"
+    git -C "$src" -c init.defaultBranch=main init -q \
+      || fail "gitattributes: could not init the $variant fixture repo"
+    git -C "$src" -c core.autocrlf=true -c core.safecrlf=false add -A \
+      || fail "gitattributes: could not stage the $variant fixture"
+    git -C "$src" -c core.autocrlf=true -c core.safecrlf=false \
+      -c user.name='Firstmate Tests' \
+      -c user.email='tests@example.invalid' commit -qm fixture \
+      || fail "gitattributes: could not commit the $variant fixture"
+    # Git for Windows' default, which is the whole point: the clone must land as
+    # LF without the operator knowing to override anything.
+    git -c core.autocrlf=true clone -q "$src" "$dir/clone-$variant" \
+      || fail "gitattributes: could not clone the $variant fixture"
+  done
+
+  clone="$dir/clone-bare/bin/sample.sh"
+  grep -qU $'\r' "$clone" \
+    || fail "gitattributes: CONTROL FAILED - core.autocrlf=true did not produce a CRLF checkout here, so this fixture proves nothing"
+
+  clone="$dir/clone-shipped/bin/sample.sh"
+  grep -qU $'\r' "$clone" \
+    && fail "gitattributes: a shell file cloned with core.autocrlf=true must still land as LF"
+  cmp -s "$dir/src-shipped/bin/sample.sh" "$clone" \
+    || fail "gitattributes: the LF checkout must be byte-identical to the committed file"
+
+  clone="$dir/clone-shipped/assets/sample.png"
+  cmp -s "$dir/src-shipped/assets/sample.png" "$clone" \
+    || fail "gitattributes: *.png must survive the clone byte-for-byte, got a rewritten file"
+
+  clone="$dir/clone-text-only/assets/sample.png"
+  cmp -s "$dir/src-text-only/assets/sample.png" "$clone" \
+    && fail "gitattributes: CONTROL FAILED - text=auto alone left the fake png intact, so the *.png binary pin is untested"
+
+  # And the shipped file must keep saying so for the paths that actually exist.
+  attrs=$(git -C "$ROOT" check-attr text eol -- bin/fm-lint.sh) \
+    || fail "gitattributes: could not read the attributes git resolves for bin/fm-lint.sh"
+  case "$attrs" in
+    *'text: auto'*) : ;;
+    *) fail "gitattributes: bin/fm-lint.sh must resolve text=auto, got '$attrs'" ;;
+  esac
+  case "$attrs" in
+    *'eol: lf'*) : ;;
+    *) fail "gitattributes: bin/fm-lint.sh must resolve eol=lf, got '$attrs'" ;;
+  esac
+  attrs=$(git -C "$ROOT" check-attr text -- assets/banner.png) \
+    || fail "gitattributes: could not read the attributes git resolves for assets/banner.png"
+  case "$attrs" in
+    *'text: unset'*) : ;;
+    *) fail "gitattributes: assets/banner.png must resolve text unset (binary), got '$attrs'" ;;
+  esac
+
+  pass "root .gitattributes: a core.autocrlf=true clone still lands LF, and the one binary blob survives"
+}
+
 test_proc_field_reads_msys_layout
 test_proc_field_falls_back_to_ps_where_proc_is_absent
 test_proc_field_rejects_bad_input
@@ -568,3 +656,4 @@ test_proc_holder_scan_matches_a_mount_aliased_fd_target
 test_lock_same_path_resolves_a_mount_alias_only_through_cygpath
 test_lock_points_to_owner_still_accepts_an_exact_readlink_answer
 test_pid_identity_is_served_by_this_file_from_proc
+test_gitattributes_pins_an_lf_working_tree_for_every_clone

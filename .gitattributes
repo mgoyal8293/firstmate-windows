@@ -1,0 +1,19 @@
+# Line endings are a property of the REPO, so every clone gets them - not a
+# setting each consumer has to rediscover.
+#
+# Git for Windows defaults core.autocrlf=true. Without this file a Windows clone
+# lands as CRLF, and then ShellCheck rejects every shell file with SC1017
+# ("Literal carriage return"): bin/fm-lint.sh fails on line 1 of everything and
+# reports nothing at all about the code, and behavior assertions compare against
+# strings that silently grew a \r. This repo is published for other Windows users
+# to clone, and that first run is exactly the experience the Windows port exists
+# to prevent.
+#
+# .github/workflows/windows-ci.yml also pins core.autocrlf=false and core.eol=lf
+# before checkout. That stays as belt-and-braces; this file is the owner.
+* text=auto eol=lf
+
+# Pinned explicitly rather than left to text=auto's content sniffing, because a
+# misdetected binary is a corrupted binary. assets/banner.png is the only
+# non-text blob tracked here.
+*.png binary

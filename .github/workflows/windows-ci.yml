@@ -42,8 +42,9 @@ jobs:
         # never written as CRLF in the first place. Git for Windows defaults
         # core.autocrlf=true, and a CRLF checkout makes ShellCheck reject every
         # single file with SC1017 ("Literal carriage return") - the lint gate then
-        # fails on line 1 of everything and says nothing about the code. The repo
-        # has no .gitattributes to pin this, so the lane pins it.
+        # fails on line 1 of everything and says nothing about the code. The root
+        # .gitattributes owns this invariant for every clone; the lane pins it
+        # again here so a checkout can never depend on that file alone.
         run: |
           set -eu
           git config --global core.autocrlf false
@@ -54,9 +55,23 @@ jobs:
       - name: Assert the working tree is LF
         # Fail loudly rather than discovering CRLF as 300 bogus SC1017 errors, or
         # as a test comparing against a string that silently grew a \r.
+        #
+        # The scan is captured whole and only then judged, and a scan that did
+        # not complete is an error rather than a pass. Feeding the recursive grep
+        # into a pipeline instead lets `-o pipefail` - which GitHub sets for
+        # `shell: bash` - promote grep's SIGPIPE to the pipeline's status, and
+        # the guard then reports "working tree is LF" on a CRLF tree. A tripwire
+        # that goes quiet exactly when it should fire is worse than none.
         run: |
           set -eu
-          if grep -rlU $'\r' bin tests --include='*.sh' | head -5 | grep .; then
+          scan=0
+          crlf=$(grep -rlU $'\r' bin tests --include='*.sh') || scan=$?
+          if [ "$scan" -gt 1 ]; then
+            echo "::error::the CRLF scan did not complete (grep exit $scan); refusing to report the tree as LF"
+            exit 1
+          fi
+          if [ -n "$crlf" ]; then
+            head -5 <<<"$crlf"
             echo "::error::working tree contains CRLF shell files; the LF checkout config did not take"
             exit 1
           fi
@@ -98,8 +113,9 @@ jobs:
         # never written as CRLF in the first place. Git for Windows defaults
         # core.autocrlf=true, and a CRLF checkout makes ShellCheck reject every
         # single file with SC1017 ("Literal carriage return") - the lint gate then
-        # fails on line 1 of everything and says nothing about the code. The repo
-        # has no .gitattributes to pin this, so the lane pins it.
+        # fails on line 1 of everything and says nothing about the code. The root
+        # .gitattributes owns this invariant for every clone; the lane pins it
+        # again here so a checkout can never depend on that file alone.
         run: |
           set -eu
           git config --global core.autocrlf false
@@ -110,9 +126,23 @@ jobs:
       - name: Assert the working tree is LF
         # Fail loudly rather than discovering CRLF as 300 bogus SC1017 errors, or
         # as a test comparing against a string that silently grew a \r.
+        #
+        # The scan is captured whole and only then judged, and a scan that did
+        # not complete is an error rather than a pass. Feeding the recursive grep
+        # into a pipeline instead lets `-o pipefail` - which GitHub sets for
+        # `shell: bash` - promote grep's SIGPIPE to the pipeline's status, and
+        # the guard then reports "working tree is LF" on a CRLF tree. A tripwire
+        # that goes quiet exactly when it should fire is worse than none.
         run: |
           set -eu
-          if grep -rlU $'\r' bin tests --include='*.sh' | head -5 | grep .; then
+          scan=0
+          crlf=$(grep -rlU $'\r' bin tests --include='*.sh') || scan=$?
+          if [ "$scan" -gt 1 ]; then
+            echo "::error::the CRLF scan did not complete (grep exit $scan); refusing to report the tree as LF"
+            exit 1
+          fi
+          if [ -n "$crlf" ]; then
+            head -5 <<<"$crlf"
             echo "::error::working tree contains CRLF shell files; the LF checkout config did not take"
             exit 1
           fi
