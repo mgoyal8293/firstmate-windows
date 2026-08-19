@@ -34,6 +34,14 @@ session provider (`bin/backends/conpty.sh`, [`conpty-backend.md`](conpty-backend
 It is an experimental spawn backend and is never chosen by runtime
 auto-detection - select it explicitly with `config/backend`.
 
+Two further Windows-specific failures live in that backend rather than in the
+shared scripts, and are fixed at one owner each:
+
+| Failure | Owner | Substitute |
+|---|---|---|
+| A ConPTY console has no foreground process group, so a harness merely ATTACHED to the console reads as one that is RUNNING the session - which makes "the agent stopped" unprovable, so `fm-control exit` and `relaunch` had nothing to stand on | `bin/backends/conpty/fm-shell-integration.bash` | the session shell answers the foreground question itself, with OSC 133 prompt marks the daemon reads off the pty stream it already parses. The two carriers are exported, so the worktree provider's subshell - where the agent actually runs - continues the chain instead of freezing the last mark at "a command is running" for the whole task |
+| `treehouse get` opens `$SHELL` and falls back to `%COMSPEC%`, so a session whose `SHELL` is absent or belongs to another system (a firstmate launched from WSL exports `SHELL=/bin/bash`) gets a cmd.exe subshell: it announces no OSC 0 title, so worktree discovery never sees the pane leave the project, and it can emit no prompt mark | `bin/backends/conpty/fm-shell-integration.bash` | `SHELL` is repaired when it does not resolve to an executable, which is what a real Git Bash login session would have done. Probed, not keyed on a platform name, and an `SHELL` that works is the operator's and is left alone |
+
 `bin/fm-proc-lib.sh` owns the process-table reads and platform capability, including the `fm_pid_identity` that callers store next to a pid and compare later.
 The fifth row was produced by a second copy of that read: it kept working on Linux, so nothing surfaced until MSYS answered it with nothing.
 One narrower variant remains outside that owner, `task_process_identity` in `bin/fm-teardown.sh`, which is the same `/proc` stat field-22 parse with a `ps -o lstart=` fallback but prints its own shape and omits the cmdline, and it is outside the scope of this change.

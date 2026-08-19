@@ -190,6 +190,13 @@ fm_control_backend_supports_key() {  # <backend> <key>
 # transition as success. Keep this list identical to fm_backend_agent_state's
 # own arms (bin/fm-backend.sh) - a backend belongs here when it genuinely
 # classifies, never so a control verb stops refusing.
+#
+# conpty qualifies on the same terms as the other two rather than by exception:
+# it validates each attached process by name AND start time, and it scopes
+# liveness to the foreground the way tmux does, by reading the session shell's
+# own prompt marks (bin/backends/conpty/fmpty-liveness.js). Without that
+# foreground scoping the console list alone would report a harness left running
+# in the background as `alive`, and a stop could never be proven against it.
 fm_control_backend_state_verified() {  # <backend>
   case "${1-}" in
     tmux|herdr|conpty) return 0 ;;

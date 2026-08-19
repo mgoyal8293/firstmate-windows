@@ -717,8 +717,9 @@ The portable classifier regression is `tests/fm-backend-cmux.test.sh`.
 ## conpty
 
 The compatibility floor is Windows 10 1809 (ConPTY's own floor) with Node 20.
-Active live evidence is a manual pass recorded on 2026-08-18 against Windows 10.0.26200, Node v22.18.0, node-pty 1.1.0, @xterm/headless 6.0.0, and a real Claude Code 2.1.220.
-The Windows CI lane in `.github/workflows/windows-ci.yml` carries only the portable regression `tests/fm-backend-conpty.test.sh`, which fakes the session client, so this live evidence stays a recorded manual pass rather than a gate that reruns on every change.
+Active live evidence is a manual pass recorded on 2026-08-18 against Windows 10.0.26200, Node v22.18.0, node-pty 1.1.0, @xterm/headless 6.0.0, and a real Claude Code 2.1.220, extended on 2026-08-19 by the foreground-liveness and control-plane pass below (same host, Git for Windows 2.50.1 with bash 5.2.37, treehouse 2.1.1).
+The Windows CI lane in `.github/workflows/windows-ci.yml` carries only the portable regression `tests/fm-backend-conpty.test.sh` - which now covers the adapter with a faked session client, the liveness decision table with real node, and the mark chain with real bash - so this live evidence stays a recorded manual pass rather than a gate that reruns on every change.
+The backend capability matrix is covered portably by `tests/fm-control.test.sh`, and the real-harness half of the liveness proof is the opt-in `tests/fm-conpty-liveness-live-e2e.test.sh`.
 The later whole-system pass on this backend - session lock, spawn, supervision, landing, teardown, and restart in one run - is recorded in [`../windows.md`](../windows.md#run-end-to-end-on-windows) and is not repeated here.
 
 Detachment and reattach:
@@ -786,11 +787,91 @@ Unknowns the spike left open, resolved here:
 | Scrollback limits | Exact and bounded. With `--scrollback 500` and 2000 emitted lines, the buffer held 540 rows (500 scrollback plus a 40-row viewport) and capture returned exactly those. The durable transcript held all 2000. While Claude holds the alternate screen the buffer type is `alternate` and no scrollback exists at all, matching tmux on an alt-screen pane. |
 | Behaviour across a Windows sign-out | **Not verified by a live sign-out.** Measured: the daemon, its shell, and the agent all run in interactive logon SessionId 4, alongside only a `services` session 0, so Windows' session teardown at logoff ends them. Separately verified: the pipe namespace is machine-global, not session-scoped - an unrelated process listed all live `fmpty-*` pipes among 340 - so the control surface is not the limiting factor. A live sign-out would have terminated the session running the verification itself; `docs/conpty-backend.md` carries the exact two-minute test to settle it. |
 
-```sh
-tests/fm-backend-conpty.test.sh
+### Foreground liveness and the control plane, 2026-08-19
+
+The prompt-mark chain reaches the shell that actually hosts the agent.
+`fm-spawn` sends `treehouse get`, and the worktree provider opens a subshell that lives for the whole task, so the agent runs one level below the shell firstmate armed.
+Measured across that boundary, with the session shell's own verdict after each step:
+
+```text
+0 fresh session              state=dead       prompt=at-prompt  promptMark=B
+1 after `treehouse get`      state=dead       prompt=at-prompt  promptMark=D
+2 foreground `sleep 6`       state=ambiguous  prompt=running    promptMark=C
+3 sleep finished             state=dead       prompt=at-prompt  promptMark=D
+cwd reported: /c/Users/johns/.treehouse/demo-7c8ffb/1/demo
 ```
 
-Refresh this proof before accepting a node-pty, xterm.js, or Windows upgrade: rerun the manual pass above on a Windows host and update the version line.
+Step 1 is the load-bearing one: the mark at that point comes from the *nested* shell.
+With the carriers left shell-local the last mark stays `C` from `treehouse get` onward for the whole task, and `dead` becomes unreachable.
+`treehouse.exe` stays attached to the console for the task's life, so the fallback table's shell-only reading cannot produce `dead` either.
+
+With a real Claude Code 2.1.220 in that same topology, and the harness still attached:
+
+```text
+empty nested shell   state=dead   why=the session shell is at a prompt
+foreground agent     state=alive  why=harness process claude.exe and a foreground command running
+                                  prompt=running promptMark=C identityValidated=true
+2 s after /exit      state=dead   why=the session shell is at a prompt, so claude.exe is attached
+                                      but not in the foreground
+                                  procs=[claude.exe, sh.exe, bash.exe, treehouse.exe, bash.exe, ...]
+```
+
+That third reading is the divergence the console list alone gets wrong: the harness is still in the process list, and only the shell's mark establishes that it is no longer running the session.
+A deliberately backgrounded (`&`) real claude cannot be held in that state, because it exits on its own without a tty; the scout report's stand-in agent covers that shape, and `tests/fm-backend-conpty.test.sh` pins the decision itself.
+
+All three control verbs, end to end on a task spawned by `bin/fm-spawn.sh` with `--backend conpty --harness claude`:
+
+```text
+spawned ctlprobe harness=claude kind=ship mode=local-only yolo=off window=fm-firstmate-1923369c-ctlprobe worktree=/c/Users/johns/.treehouse/demo-099c58/1/demo
+interrupt-delivered ctlprobe harness=claude backend=conpty verified=agent-alive cancel=unconfirmed
+stopped ctlprobe harness=claude backend=conpty endpoint=fm-firstmate-1923369c-ctlprobe worktree=/c/Users/johns/.treehouse/demo-099c58/1/demo
+relaunched ctlprobe harness=claude from=claude model=default effort=default backend=conpty endpoint=fm-firstmate-1923369c-ctlprobe worktree=/c/Users/johns/.treehouse/demo-099c58/1/demo
+```
+
+The endpoint reported `present` and the pooled worktree was still on disk after `exit`, and the replacement agent read `alive` with `claude.exe` attached again.
+
+No harness mark collision, checked on the transcript of that live session:
+
+```text
+occurrences of OSC 133 carrying firstmate's tag: 12
+occurrences of OSC 133 in total:                 12
+untagged occurrences:                            0
+```
+
+The same count held across a real Bash tool call (`pwd && echo leak-probe-done`, whose output is on the session screen): `promptMarks` stayed at 12 and the verdict stayed `alive`, so a harness's own tool shells do not put marks on the pty stream.
+
+The console-list helper must be spawned with `windowsHide`.
+The daemon is launched detached and owns no console, so a console child spawned without `CREATE_NO_WINDOW` gets a brand-new console - a real window on the interactive desktop - and that helper runs on the warm loop every 1.2 s while anything polls liveness.
+Measured from a detached, console-less parent, with the child reporting `GetConsoleWindow()` on itself:
+
+```text
+hide=1 hwnd=0        visible=n/a
+hide=0 hwnd=3868064  visible=False
+```
+
+A window-attribution watcher sampling every top-level window for the whole run recorded no console window from the session machinery; the only new windows were one `python.exe` "Serena Dashboard" per agent launch, an MCP server started by the harness from the operator's own Claude configuration.
+
+The fallback path was exercised too, on a session started without the rcfile so the marker source is genuinely absent (`promptMarks: 0`, not merely quiet):
+
+```text
+fresh session, no rcfile   state=dead   why=only shells attached
+                           screen=shell prompt=unknown promptMarks=0
+same session, real agent   state=alive  why=harness process claude.exe
+                           screen=agent prompt=unknown promptMarks=0  identityValidated=true
+```
+
+The first reading is also the sparse-screen defect settled on a real terminal: a fresh session's content sits at the top of a 40-row viewport, which the earlier fixed-row-count reading saw as blank and reported `unknown`.
+
+The npm-install shape does not hide a harness from the classifier on this release.
+`@anthropic-ai/claude-code` 2.1.220 installs a native `bin/claude.exe`, and its `cli-wrapper.cjs` fallback - used only when `postinstall` is skipped - `spawnSync`s that same native binary, so `node.exe` is at most its parent and `claude.exe` is always the live process the console list reports.
+
+```sh
+tests/fm-backend-conpty.test.sh
+tests/fm-control.test.sh
+FM_CONPTY_LIVENESS_LIVE=1 tests/fm-conpty-liveness-live-e2e.test.sh   # Windows only
+```
+
+Refresh this proof before accepting a node-pty, xterm.js, or Windows upgrade, and after any harness upgrade: rerun the manual pass above on a Windows host, run the opt-in guard, and update the version line.
 
 ## Codex App host tools
 

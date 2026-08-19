@@ -488,4 +488,217 @@ line two'
   pass "conpty is registered as a known, spawn-capable, explicitly-selected backend needing no JSON parser"
 ) || exit 1
 
+# --- liveness decision: the foreground source and its fallback ---------------
+#
+# The recovery-grade classifier's own decision table, exercised through
+# bin/backends/conpty/fmpty-liveness.js with real node rather than through the
+# daemon, which cannot run anywhere but Windows. `dead` and `missing` are the
+# only verdicts that license recovery, so these cases deliberately drive the two
+# sources apart and assert which one wins.
+#
+# The real-Windows evidence these portable cases stand in for is recorded in
+# docs/verification/runtime-backends.md "conpty".
+(
+  CASE="$TMP_ROOT/liveness"; mkdir -p "$CASE"
+  LIVENESS="$ROOT/bin/backends/conpty/fmpty-liveness.js"
+  if ! command -v node >/dev/null 2>&1; then
+    fail "node is absent, so the conpty liveness decision cannot be exercised"
+  fi
+
+  # verdict <json-facts> -> "<state>|<why>"
+  verdict() {
+    node -e '
+      const l = require(process.argv[1]);
+      const v = l.decideAgentState(JSON.parse(process.argv[2]));
+      process.stdout.write(v.state + "|" + v.why);
+    ' "$LIVENESS" "$1"
+  }
+  # facts <extra-json-fields> -> a complete fact object. Composed with printf
+  # rather than by concatenating quoted fragments, so the quoting stays readable
+  # and shellcheck can see it.
+  facts() { printf '{"listAvailable":true,"listSource":"get-process",%s}' "$1"; }
+
+  out=$(verdict '{"exited":{"exitCode":0}}')
+  [ "${out%%|*}" = missing ] || fail "an exited pty child must be missing, got $out"
+  out=$(verdict '{"listAvailable":false,"listSource":"timeout"}')
+  [ "${out%%|*}" = unreadable ] || fail "an unreadable process list must not be a verdict, got $out"
+  assert_contains "$out" 'timeout' "the unreadable reason names how the list failed"
+
+  # THE CASE THE PROCESS LIST ALONE GETS WRONG. Identical process facts; the only
+  # difference is the shell's own answer about the foreground. Both verdicts are
+  # asserted, so this cannot go quietly vacuous if the marker source ever stops
+  # arriving: with no marker an attached harness reads `alive`, with `at-prompt`
+  # it reads `dead`, and that divergence IS the fidelity gap being closed.
+  bg='"agentName":"claude.exe","sawShell":true'
+  out=$(verdict "$(facts "$bg"',"prompt":"unknown","screen":"unknown"')")
+  [ "${out%%|*}" = alive ] || fail "with no marker an attached harness stays alive, got $out"
+  out=$(verdict "$(facts "$bg"',"prompt":"at-prompt"')")
+  [ "${out%%|*}" = dead ] || fail "a harness attached while the shell is at a prompt is dead, got $out"
+  assert_contains "$out" 'claude.exe' "the dead reason names the harness it decided against"
+  assert_contains "$out" 'not in the foreground' "the dead reason states why that harness does not count"
+
+  out=$(verdict "$(facts "$bg"',"prompt":"running"')")
+  [ "${out%%|*}" = alive ] || fail "a harness with a foreground command running is alive, got $out"
+
+  # No harness and the shell at a prompt is the postcondition bin/fm-control.sh
+  # exit proves. It has to be reachable with a nested shell and the worktree
+  # provider still attached, neither of which is a shell-only process list.
+  out=$(verdict "$(facts '"agentName":"","sawShell":true,"sawOther":true,"prompt":"at-prompt"')")
+  [ "${out%%|*}" = dead ] || fail "an agent-free session at a prompt must be dead, got $out"
+
+  # A foreground command with no recognised harness is NOT a stopped agent: it
+  # could be an unrecognised harness build. Narrowing to ambiguous is what keeps
+  # a duplicate agent off a live worktree.
+  out=$(verdict "$(facts '"agentName":"","sawShell":true,"sawOther":true,"prompt":"running"')")
+  [ "${out%%|*}" = ambiguous ] || fail "an unrecognised foreground command must be ambiguous, got $out"
+
+  # The fallback table, reached only when no marker has ever arrived.
+  out=$(verdict "$(facts '"agentName":"claude.exe","prompt":"unknown","screen":"shell"')")
+  [ "${out%%|*}" = ambiguous ] || fail "a harness contradicted by the screen is ambiguous, got $out"
+  out=$(verdict "$(facts '"agentName":"","sawShell":true,"sawOther":false,"prompt":"unknown","screen":"unknown"')")
+  [ "${out%%|*}" = dead ] || fail "a shell-only list with no marker is dead, got $out"
+  out=$(verdict "$(facts '"agentName":"","sawShell":true,"sawOther":false,"prompt":"unknown","screen":"agent"')")
+  [ "${out%%|*}" = ambiguous ] || fail "a shell-only list the screen contradicts is ambiguous, got $out"
+  out=$(verdict "$(facts '"agentName":"","sawShell":false,"sawOther":true,"prompt":"unknown","screen":"unknown"')")
+  [ "${out%%|*}" = ambiguous ] || fail "a list that is neither harness nor shell-only is ambiguous, got $out"
+  pass "conpty liveness: the shell's prompt mark settles the foreground, and silence falls back instead of inferring dead"
+
+  # The marker state machine, fed the way the daemon feeds it: raw pty text in
+  # arbitrary chunks.
+  track() {
+    node -e '
+      const l = require(process.argv[1]);
+      const t = l.createPromptTracker();
+      for (const c of JSON.parse(process.argv[2])) t.feed(c);
+      process.stdout.write(t.state() + "|" + t.lastMark() + "|" + t.marks());
+    ' "$LIVENESS" "$1"
+  }
+  # The ESC is written as a JSON \u001b escape: a raw control byte is not legal
+  # inside a JSON string, and the daemon's own feed is decoded text either way.
+  out=$(track '["\u001b]133;C;fmpty=1\u0007"]')
+  [ "$out" = 'running|C|1' ] || fail "a tagged C mark must read running, got $out"
+  out=$(track '["\u001b]133;C;fmp","ty=1\u0007"]')
+  [ "$out" = 'running|C|1' ] || fail "a mark split across chunks must still be read, got $out"
+  out=$(track '["\u001b]133;C;fmpty=1\u0007","\u001b]133;D;0;fmpty=1\u001b\\"]')
+  [ "$out" = 'at-prompt|D|2' ] || fail "a string-terminated D mark must read at-prompt, got $out"
+  # An untagged mark is somebody else's. A harness announcing "command finished"
+  # while it is itself alive is the one direction that could produce a false dead.
+  out=$(track '["\u001b]133;C;fmpty=1\u0007","\u001b]133;D;0\u0007"]')
+  [ "$out" = 'running|C|1' ] || fail "an untagged mark must be ignored, got $out"
+  out=$(track '[""]')
+  [ "$out" = 'unknown||0' ] || fail "a session with no mark must be unknown, got $out"
+  pass "conpty liveness: the marker tracker reads split marks, both terminators, and ignores untagged ones"
+
+  # The screen is the FALLBACK source, and it is a rendered-surface reading - what
+  # it matches is what a vendor draws - so both of its reproduced defects are
+  # pinned here rather than left to a single manual observation.
+  screen() {
+    node -e '
+      const l = require(process.argv[1]);
+      process.stdout.write(l.classifyScreenRows(JSON.parse(process.argv[2])));
+    ' "$LIVENESS" "$1"
+  }
+  out=$(screen '["johns@John MINGW64 /c/x","$ ",""]')
+  [ "$out" = shell ] || fail "a bare shell prompt should read shell, got $out"
+  # Blind on a sparse screen: the content sits at the TOP of the viewport, so a
+  # fixed count of rows taken from the bottom is all blank. The rows below stand
+  # in for a 40-row viewport holding three lines.
+  sparse='["johns@John MINGW64 /c/x","$ ","","","","","","","","","","","","","","","","",""]'
+  out=$(screen "$sparse")
+  [ "$out" = shell ] || fail "a prompt near the top of an otherwise blank viewport should still read shell, got $out"
+  # A prompt matched anywhere in a block: a leftover prompt line in scrollback
+  # above a live agent must not out-vote the agent's own bottom-most shape.
+  out=$(screen '["johns@John MINGW64 /c/x","$ claude","starting","","❯  (esc to interrupt)"]')
+  [ "$out" = agent ] || fail "an agent composer below a leftover prompt line should read agent, got $out"
+  out=$(screen '["", "", ""]')
+  [ "$out" = unknown ] || fail "a blank screen should read unknown, got $out"
+  out=$(screen '["some output with no prompt and no composer"]')
+  [ "$out" = unknown ] || fail "an unrecognisable screen should read unknown, got $out"
+  pass "conpty liveness: the fallback screen reading survives a sparse viewport and a prompt left in scrollback"
+) || exit 1
+
+# --- shell integration: the marks, and the nested shell that must inherit them -
+#
+# bin/backends/conpty/fm-shell-integration.bash is bash, so its behaviour is
+# portable and belongs in CI even though the daemon that reads its output is not.
+# What matters here is not that the marks exist but WHERE they come from: a task
+# session runs its agent inside the worktree provider's subshell, so a mark
+# scheme that stops at the shell firstmate armed would leave the last mark saying
+# "a command is running" for the whole task and no stop could ever be proven.
+(
+  CASE="$TMP_ROOT/shell-integration"; mkdir -p "$CASE"
+  RC="$ROOT/bin/backends/conpty/fm-shell-integration.bash"
+  H="$CASE/home"; mkdir -p "$H"
+
+  # marks_from <script-fed-to-stdin> -> the tagged mark letters seen, in order.
+  # A pipe-fed `bash -i` still prints prompts and still runs PS0 and
+  # PROMPT_COMMAND, so the marks are observable with no pty involved.
+  marks_from() {
+    printf '%s' "$1" | env -i HOME="$H" PATH="$PATH" bash --rcfile "$RC" -i 2>&1 \
+      | grep -ao '133;[A-D][^A-Za-z]*fmpty=1' | sed 's/^133;\([A-D]\).*/\1/' | tr -d '\n'
+  }
+
+  own=$(marks_from 'true
+exit
+')
+  case "$own" in
+    *C*) ;;
+    *) fail "the armed shell emitted no command-start mark: '$own'" ;;
+  esac
+  case "$own" in
+    *D*) ;;
+    *) fail "the armed shell emitted no command-finished mark: '$own'" ;;
+  esac
+  pass "conpty shell integration: the armed shell marks both command start and the return to its prompt"
+
+  # THE DIVERGENCE. Same script twice; the only difference is whether the nested
+  # shell inherits the two carriers. Asserting both sides is what stops this from
+  # passing vacuously if the export is ever dropped: the nested shell's marks are
+  # the ones that let a stop be proven on a real task.
+  nested=$(marks_from 'bash -i
+true
+exit
+exit
+')
+  stripped=$(marks_from 'env -u PS0 -u PROMPT_COMMAND bash -i
+true
+exit
+exit
+')
+  [ "${#nested}" -gt "${#stripped}" ] \
+    || fail "a nested shell added no marks (inherited '$nested' vs stripped '$stripped'), so the chain stops at the outer shell"
+  case "$stripped" in
+    *D*) ;;
+    *) fail "the control case lost the outer shell's own marks too, so it proves nothing: '$stripped'" ;;
+  esac
+  pass "conpty shell integration: a nested shell continues the mark chain, and stops marking when the carriers are withheld"
+
+  # SHELL is what the worktree provider opens its subshell with. An absent or
+  # unresolvable value is replaced, a working one is the operator's and is left
+  # alone.
+  # Tagged and extracted, not read as the whole of stdout: a distribution's own
+  # /etc/bash.bashrc may print a banner into an interactive shell, and this file
+  # deliberately sources it.
+  probe_shell() {  # <env-assignment>... -> the resulting SHELL
+    # SC2016: the single quotes are deliberate - this is the child shell's
+    # script, and $SHELL must expand there, not here.
+    # shellcheck disable=SC2016
+    env -i HOME="$H" PATH="$PATH" "$@" bash --rcfile "$RC" -ic 'printf "__FMSHELL__%s__\n" "$SHELL"' 2>/dev/null \
+      | sed -n 's/.*__FMSHELL__\(.*\)__$/\1/p' | tail -1
+  }
+  out=$(probe_shell)
+  case "$out" in
+    */bash) ;;
+    *) fail "an absent SHELL was not replaced with this shell, got '$out'" ;;
+  esac
+  out=$(probe_shell SHELL=/no/such/shell)
+  case "$out" in
+    */bash) ;;
+    *) fail "an unresolvable SHELL was left in place, got '$out'" ;;
+  esac
+  out=$(probe_shell SHELL=/bin/sh)
+  [ "$out" = /bin/sh ] || fail "a working SHELL must be left alone, got '$out'"
+  pass "conpty shell integration: SHELL is repaired only when it cannot resolve, so the worktree provider opens a shell that exists"
+) || exit 1
+
 pass "conpty adapter unit tests complete"

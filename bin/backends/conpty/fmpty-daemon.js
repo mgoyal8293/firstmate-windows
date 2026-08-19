@@ -40,6 +40,7 @@ const fs = require('fs');
 const net = require('net');
 const path = require('path');
 const lib = require('./fmpty-lib.js');
+const liveness = require('./fmpty-liveness.js');
 
 // ---------------------------------------------------------------------------
 // Dependency resolution
@@ -291,11 +292,18 @@ term.onTitleChange((t) => {
   else if (/^[A-Za-z]:[\\/]/.test(t)) { paneCwd = t; paneCwdAt = Date.now(); }
 });
 
+// The session shell's own answer to "am I at a prompt?", tracked as the bytes
+// arrive. This is the foreground source a ConPTY console cannot otherwise
+// supply; fmpty-liveness.js owns what the marks mean and
+// bin/backends/conpty/fm-shell-integration.bash owns emitting them.
+const promptTracker = liveness.createPromptTracker();
+
 ptyProc.onData((d) => {
   const buf = Buffer.from(d, 'utf8');
   bytesIn += buf.length;
   lastDataAt = Date.now();
   appendTranscript(buf);
+  promptTracker.feed(d);
   term.write(d);
 });
 ptyProc.onExit(({ exitCode, signal }) => {
@@ -479,11 +487,12 @@ function cursorInfo() {
 //     kept warm on a bounded interval whenever anybody has asked recently, so a
 //     watcher polling many sessions reads a warm cache instead of paying ~1 s
 //     per session per poll.
-//  3. The console list has no foreground concept, so a harness-named process
-//     left running in the BACKGROUND of an otherwise idle session classifies
-//     `alive` where tmux would say `dead`. The screen is used as an independent
-//     second source to narrow this, and the residual gap is documented in
-//     docs/conpty-backend.md rather than hidden.
+//  3. The console list has no foreground concept, so on its own it classifies a
+//     harness-named process left running in the BACKGROUND of an otherwise idle
+//     session `alive` where tmux would say `dead`. That is why the list is not
+//     the only source: the session shell's own OSC 133 prompt marks answer the
+//     foreground question directly (fmpty-liveness.js), and the screen stays on
+//     as the fallback for a session that emits no marks.
 const { fork } = require('child_process');
 const PTY_LIB = path.join(path.dirname(require.resolve('node-pty')), '');
 const CONSOLE_AGENT = path.join(PTY_LIB, 'conpty_console_list_agent.js');
@@ -584,7 +593,16 @@ function refreshProcList(done) {
     // AttachConsole mutates the CALLER's own console, so the console process
     // list must be read in a throwaway helper - node-pty ships exactly that
     // helper, and reusing it avoids a second copy of the same native call.
-    agent = fork(CONSOLE_AGENT, [String(ptyProc.pid)], { stdio: 'ignore' });
+    //
+    // windowsHide is not cosmetic here. The daemon is launched detached and
+    // therefore owns no console of its own, so a console child spawned without
+    // CREATE_NO_WINDOW gets a BRAND NEW console allocated - a real window that
+    // appears on the interactive desktop. This helper runs on the warm loop
+    // every 1.2 s for as long as anything is polling liveness, so without this
+    // flag a supervised Windows session flashes a console window at the user
+    // about once a second. Every other child this backend spawns already sets
+    // it (fmpty.js's daemon launch, fmpty-lib.js's two identity sweeps).
+    agent = fork(CONSOLE_AGENT, [String(ptyProc.pid)], { stdio: 'ignore', windowsHide: true });
   } catch (e) {
     log('console agent fork failed', String(e));
     return finish(null, 'fork-failed');
@@ -634,28 +652,30 @@ function ensureWarmLoop() {
   if (warmTimer.unref) warmTimer.unref();
 }
 
-// screenSuggestsAgent: the independent SECOND source for liveness, and the only
-// thing available to narrow the background-process gap in (3) above. A live
-// harness owns the screen: its composer box or prompt glyph is the bottom-most
-// shape. A session sitting at a bare shell prompt looks structurally different,
-// and that difference is what tmux gets for free from foreground scoping.
-// Deliberately conservative - it can say "agent" or "shell" or "unknown", and
-// only ever narrows a verdict the process list already made.
-const AGENT_GLYPH_RE = /[\u276F\u203A\u27E9\u2192]|esc to interrupt|\? for shortcuts|ctrl\+c to (?:exit|quit)/i;
-const SHELL_PROMPT_RE = /(?:^|\n)[^\n]*[$#%][ \t]*$|MINGW64|\$ $/;
+// screenSuggestsAgent: the FALLBACK second source for liveness, used only when
+// the session has emitted no prompt mark at all - an older bash without PS0, a
+// non-bash session shell, a nested shell whose own rc files overwrite the
+// carriers. This side only reads the viewport; what the rows MEAN, and the two
+// reproduced defects that reading used to have, are owned by
+// fmpty-liveness.js's classifyScreenRows so they are testable off Windows.
 function screenSuggestsAgent() {
-  let tail;
-  try { tail = captureTail(12); } catch (_) { return 'unknown'; }
-  if (!tail) return 'unknown';
-  if (AGENT_GLYPH_RE.test(tail)) return 'agent';
-  if (SHELL_PROMPT_RE.test(tail)) return 'shell';
-  return 'unknown';
+  try {
+    const buf = term.buffer.active;
+    const bottom = buf.baseY + term.rows - 1;
+    const rows = [];
+    for (let y = Math.max(0, bottom - (term.rows - 1)); y <= bottom; y++) rows.push(rowText(y));
+    return liveness.classifyScreenRows(rows, liveness.SCREEN_TAIL_ROWS);
+  } catch (_) {
+    return 'unknown';
+  }
 }
 
-// agentState: the fm_backend_agent_state vocabulary, decided from the same two
-// kinds of evidence the tmux adapter uses - is the endpoint there at all, and
-// does its process set contain a verified harness - plus the screen as a
-// tie-breaker that tmux does not need because it has foreground scoping.
+// agentState: the fm_backend_agent_state vocabulary. This function gathers the
+// evidence - is the endpoint there at all, does its process set contain a
+// verified harness, is the session shell at a prompt, and (only when no prompt
+// mark has ever arrived) what the screen looks like - and fmpty-liveness.js's
+// decideAgentState owns the verdict, so the whole table is readable in one place
+// and testable on any platform.
 //
 // `dead` and `missing` are the only verdicts that license recovery, so every
 // uncertain path resolves to `ambiguous` or `unreadable` instead. A false
@@ -682,8 +702,10 @@ function agentState() {
     return { state: 'missing', why: 'pty child exited', exited: exited, procs: [] };
   }
   const list = procCache.list;
+  const prompt = promptTracker.state();
   if (!list) {
-    return { state: 'unreadable', why: 'console process list unavailable (' + (procCache.source || 'cold') + ')', procs: [] };
+    const un = liveness.decideAgentState({ listAvailable: false, listSource: procCache.source });
+    return { state: un.state, why: un.why, procs: [], prompt: prompt };
   }
   let sawShell = false, sawOther = false, agentProc = null;
   for (const p of list) {
@@ -692,36 +714,25 @@ function agentState() {
     else if (c === 'shell') sawShell = true;
     else if (p.name) sawOther = true;
   }
-  const screen = screenSuggestsAgent();
-  if (agentProc) {
-    // The one case worth narrowing: the console names a harness but the screen
-    // is unmistakably a bare shell prompt, i.e. the harness is present but not
-    // in charge. tmux reports this `dead` via foreground scoping; here it is
-    // reported `ambiguous`, which does NOT license recovery, because the
-    // evidence genuinely conflicts and a wrong `dead` is the costly direction.
-    if (screen === 'shell') {
-      return {
-        state: 'ambiguous',
-        why: 'harness process ' + agentProc.name + ' attached but the screen shows a shell prompt',
-        procs: list, screen: screen, identityValidated: agentProc.identityValidated,
-      };
-    }
-    return {
-      state: 'alive',
-      why: 'harness process ' + agentProc.name,
-      procs: list, screen: screen, identityValidated: agentProc.identityValidated,
-    };
-  }
-  if (sawShell && !sawOther) {
-    if (screen === 'agent') {
-      // The console list names only shells but the screen is drawn by an agent.
-      // Refusing `dead` here is what keeps a harness whose process name this
-      // build does not recognise from being torn down as an empty session.
-      return { state: 'ambiguous', why: 'only shells attached but the screen shows an agent composer', procs: list, screen: screen };
-    }
-    return { state: 'dead', why: 'only shells attached', procs: list, screen: screen };
-  }
-  return { state: 'ambiguous', why: 'no harness and not shell-only', procs: list, screen: screen };
+  // The screen is only ever the fallback now, so it is not read at all while the
+  // shell is answering the foreground question itself.
+  const screen = prompt === liveness.PROMPT_UNKNOWN ? screenSuggestsAgent() : 'unread';
+  const verdict = liveness.decideAgentState({
+    listAvailable: true,
+    listSource: procCache.source,
+    agentName: agentProc ? agentProc.name : '',
+    sawShell: sawShell,
+    sawOther: sawOther,
+    prompt: prompt,
+    screen: screen,
+  });
+  const out = {
+    state: verdict.state, why: verdict.why,
+    procs: list, screen: screen,
+    prompt: prompt, promptMark: promptTracker.lastMark(), promptMarks: promptTracker.marks(),
+  };
+  if (agentProc) out.identityValidated = agentProc.identityValidated;
+  return out;
 }
 
 // ---------------------------------------------------------------------------
@@ -772,6 +783,10 @@ function handle(req, respond) {
         cmd: opt.cmd, args: opt.args, cwd: opt.cwd, startedAt: STARTED,
         exited: exited, bytesIn: bytesIn,
         lastDataAgeMs: lastDataAt ? Date.now() - lastDataAt : null,
+        // The session shell's prompt marker, reported so a host can tell "the
+        // shell says it is at a prompt" from "this session emits no marks and
+        // liveness is on its fallback reading".
+        prompt: promptTracker.state(), promptMarks: promptTracker.marks(),
         cols: term.cols, rows: term.rows,
         transcript: PATHS.transcript, transcriptBytes: transcriptBytes,
         scrollback: opt.scrollback, bufferLength: term.buffer.active.length,

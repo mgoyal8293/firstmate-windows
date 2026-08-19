@@ -43,14 +43,20 @@
 # is the second backend (and the first non-tmux one) that can declare
 # `cursor=1` to the shared composer classifier.
 #
-# KNOWN FIDELITY GAP, stated up front because it is real. tmux scopes liveness
-# to the pane tty's FOREGROUND process group, which is how a harness-named
-# process idling in the BACKGROUND of an otherwise idle pane still classifies
-# `dead`. A ConPTY console has a process list but no foreground concept, so that
-# case cannot be detected the same way. It is narrowed here by using the screen
-# as an independent second source (see fm_backend_conpty_agent_state), and the
-# residual gap is documented in docs/conpty-backend.md "Active limits" rather
-# than papered over.
+# HOW FOREGROUND SCOPING IS RECOVERED. tmux scopes liveness to the pane tty's
+# FOREGROUND process group, which is how a harness-named process idling in the
+# BACKGROUND of an otherwise idle pane still classifies `dead`. A ConPTY console
+# has a process list and no foreground concept, so that set cannot be narrowed
+# the same way - but the shell can be asked the same question directly. The
+# session shell is launched with fm-shell-integration.bash as its rcfile, which
+# has bash emit OSC 133 prompt marks; the daemon reads them off the pty stream it
+# already parses and treats "the shell is at a prompt" as tmux treats a
+# foreground group holding nothing but a shell. The rcfile exports its hooks, so
+# the worktree provider's subshell - where a task's agent actually runs - keeps
+# marking too; that is what makes the last mark the innermost shell's answer
+# rather than a stale one from before `treehouse get`. A session that emits no
+# mark - an older bash, or a non-bash session shell - falls back to the process
+# list and the screen, never to a false `dead`.
 #
 # Requires: node (already a universal firstmate tool), the installed
 # dependencies in bin/backends/conpty/node_modules, and a Windows host. The
@@ -245,13 +251,33 @@ fm_backend_conpty_shell() {
   return 1
 }
 
+# fm_backend_conpty_shell_integration_rcfile: the tracked rcfile that makes the
+# session shell announce whether it is at a prompt, as a Windows path, or
+# nothing at all when it must not be used.
+#
+# It refuses on a CR-bearing copy rather than passing it to bash. A Windows
+# checkout made with core.autocrlf=true rewrites this file's line endings, and a
+# sourced bash file whose lines end in CR does not merely lose the marks - it
+# fails mid-file and prints syntax errors into the session the composer
+# classifier then reads. No rcfile is the safe outcome: liveness falls back to
+# the reading this backend shipped with.
+fm_backend_conpty_shell_integration_rcfile() {
+  local rc="$FM_BACKEND_CONPTY_ROOT/bin/backends/conpty/fm-shell-integration.bash"
+  [ -f "$rc" ] || return 1
+  if LC_ALL=C grep -Uq $'\r' "$rc" 2>/dev/null; then
+    return 1
+  fi
+  fm_backend_conpty_winpath "$rc"
+}
+
 # fm_backend_conpty_create_task: create the task's session, refusing an existing
 # live one. The pipe doubles as the mutex (a second daemon on the same name gets
 # EADDRINUSE), so this check is a clear error rather than the only thing
 # standing between two daemons and one session id. Echoes the scoped session id,
 # which IS the endpoint target.
 fm_backend_conpty_create_task() {  # <label> <cwd> -> prints session id
-  local label=$1 cwd=$2 sid shell out
+  local label=$1 cwd=$2 sid shell out rc
+  local -a rcargs=()
   sid=$(fm_backend_conpty_scoped_id "$label")
   if fm_backend_conpty_client exists --id "$sid" --plain >/dev/null 2>&1; then
     echo "error: conpty session '$sid' already exists" >&2
@@ -261,8 +287,19 @@ fm_backend_conpty_create_task() {  # <label> <cwd> -> prints session id
     echo "error: backend=conpty could not find a bash for the task session; set FM_BACKEND_CONPTY_SHELL" >&2
     return 1
   }
+  # Shell integration is added only for bash, and only as extra arguments: an
+  # operator-pinned FM_BACKEND_CONPTY_SHELL that is not bash would reject
+  # --rcfile outright, and a session that never gets the flag is exactly the
+  # documented fallback rather than a failure.
+  case "${shell##*[/\\]}" in
+    bash|bash.exe)
+      if rc=$(fm_backend_conpty_shell_integration_rcfile); then
+        rcargs=(--arg --rcfile --arg "$rc")
+      fi
+      ;;
+  esac
   out=$(fm_backend_conpty_client spawn --id "$sid" \
-    --cmd "$shell" --arg -i \
+    --cmd "$shell" "${rcargs[@]+"${rcargs[@]}"}" --arg -i \
     --cwd "$(fm_backend_conpty_winpath "$cwd")" \
     --cols "$FM_BACKEND_CONPTY_COLS" --rows "$FM_BACKEND_CONPTY_ROWS" \
     --scrollback "$FM_BACKEND_CONPTY_SCROLLBACK" 2>&1) || {

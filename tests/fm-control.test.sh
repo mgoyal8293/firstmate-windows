@@ -347,6 +347,10 @@ test_unverified_harness_is_refused() {
 
 test_backend_key_capability_matrix() {
   local backend key
+  # conpty belongs in this set on the same terms as the others: its daemon's KEYS
+  # table normalizes all four (bin/backends/conpty/fmpty-daemon.js), so leaving it
+  # out made `interrupt` refuse before sending rather than reflect any real
+  # limitation.
   for backend in tmux herdr zellij cmux conpty; do
     # C-u is the composer clear muse's interrupt needs; every session provider
     # but Orca normalizes it (bin/backends/*.sh).
@@ -444,6 +448,9 @@ test_state_verified_backends_match_the_agent_state_dispatcher() {
   local backend verdict
   fm_control_backend_state_verified tmux || fail "tmux has a recovery-grade classifier"
   fm_control_backend_state_verified herdr || fail "herdr has a recovery-grade classifier"
+  # conpty scopes liveness to the foreground the way tmux does, by reading the
+  # session shell's own prompt marks rather than the console process list alone
+  # (bin/backends/conpty/fmpty-liveness.js), so a stop can be proven against it.
   fm_control_backend_state_verified conpty || fail "conpty has a recovery-grade classifier"
   for backend in zellij orca cmux; do
     fm_control_backend_state_verified "$backend" \
