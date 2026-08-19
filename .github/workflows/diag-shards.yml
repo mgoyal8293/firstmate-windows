@@ -1,0 +1,71 @@
+name: DIAG shards
+on:
+  workflow_dispatch:
+  push:
+    branches: [fm/winfm-flaky-diag5]
+permissions:
+  contents: read
+jobs:
+  serial:
+    name: DIAG portable serial ${{ matrix.shard }}
+    runs-on: ubuntu-latest
+    # Deliberately above the production 15-minute cap so an overflowing shard
+    # reports its real duration instead of being cancelled without one.
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3, 4]
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+      - name: Install pinned ShellCheck
+        run: |
+          set -eu
+          bin/fm-install-shellcheck.sh "$RUNNER_TEMP/bin"
+          echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
+      - name: Install pinned actionlint
+        run: |
+          set -eu
+          bin/fm-install-actionlint.sh "$RUNNER_TEMP/bin"
+          echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
+      - name: Require tmux for e2e tests
+        run: |
+          set -eu
+          command -v tmux >/dev/null || exit 1
+          tmux -V
+      - name: Install tasks-axi for backlog-handoff delegation
+        run: |
+          set -eu
+          npm install -g tasks-axi
+          tasks-axi --version
+      - name: Run portable serial shard ${{ matrix.shard }}
+        env:
+          FM_SERIAL_LANE: portable-serial-${{ matrix.shard }}of${{ strategy.job-total }}
+          FM_SERIAL_SHARD: ${{ matrix.shard }}
+        run: |
+          set -eu
+          mkdir -p "$RUNNER_TEMP/fm-test"
+          bin/fm-test-run.sh --lane "$FM_SERIAL_LANE" \
+            --json "$RUNNER_TEMP/fm-test/fm-test-timing-portable-serial-${FM_SERIAL_SHARD}.json"
+      - name: Report shard duration
+        if: always()
+        run: |
+          set -eu
+          f="$RUNNER_TEMP/fm-test/fm-test-timing-portable-serial-${{ matrix.shard }}.json"
+          [ -f "$f" ] || { echo "no timing artifact"; exit 0; }
+          python3 - "$f" <<'PY'
+          import json, sys
+          d = json.load(open(sys.argv[1]))
+          s = d["summary"]
+          print("SHARD_DURATION_MIN=%.2f failed=%s total=%s" % (
+              s["duration_ms"] / 60000, s["failed"], s["total"]))
+          PY
+      - name: Upload timing artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: diag-timing-portable-serial-${{ matrix.shard }}
+          path: ${{ runner.temp }}/fm-test/fm-test-timing-portable-serial-${{ matrix.shard }}.json
+          if-no-files-found: warn
