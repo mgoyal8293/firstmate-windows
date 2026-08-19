@@ -604,12 +604,20 @@ test_gitattributes_pins_an_lf_working_tree_for_every_clone() {
       || fail "gitattributes: could not clone the $variant fixture"
   done
 
+  # The CR byte travels in a variable and is double-quoted at the call. MEASURED
+  # on windows-latest (runner image 20260810.198.2, git 2.55.0.windows.3, Git
+  # Bash): spelled inline as $'\r' the pattern can reach grep EMPTY, and an
+  # empty pattern matches every file - see docs/fm-test-windows-lane.md. The
+  # control arm below would still catch that, but it would report it as a
+  # .gitattributes failure rather than as the detector's.
+  local cr=$'\r'
+
   clone="$dir/clone-bare/bin/sample.sh"
-  grep -qU $'\r' "$clone" \
+  grep -qU "$cr" "$clone" \
     || fail "gitattributes: CONTROL FAILED - core.autocrlf=true did not produce a CRLF checkout here, so this fixture proves nothing"
 
   clone="$dir/clone-shipped/bin/sample.sh"
-  grep -qU $'\r' "$clone" \
+  grep -qU "$cr" "$clone" \
     && fail "gitattributes: a shell file cloned with core.autocrlf=true must still land as LF"
   cmp -s "$dir/src-shipped/bin/sample.sh" "$clone" \
     || fail "gitattributes: the LF checkout must be byte-identical to the committed file"

@@ -96,11 +96,52 @@ The repair writes the committed bytes back, one flagged path at a time, with
 `eol`/`autocrlf`/attribute conversion sits between the object store and the file,
 so it cannot itself produce the line endings it is repairing. It replaced an
 earlier `git rm --cached -r .` + `git reset --hard` refresh plus a
-`sed 's/\r$//'` fallback, which is what the lane's own measurement condemned:
-on windows-latest (runner image 20260810.198.2, git 2.55.0.windows.3) that pair
-left the runner with **all 306** tracked shell files carrying CR - on a merge
-commit whose blobs are provably LF - and the `sed` pass removed none of them.
-Both halves ran through a conversion path; the committed bytes need none.
+`sed 's/\r$//'` fallback that went through a conversion path on both halves,
+which the committed bytes do not need.
+
+The measurement that condemned that pair on windows-latest (runner image
+20260810.198.2, git 2.55.0.windows.3) - **all 306** tracked shell files reported
+as carrying CR, on a merge commit whose blobs are provably LF, with the `sed`
+pass removing none of them - turned out to be measuring the scan rather than the
+repair. See the next section: the tree was LF the whole time.
+
+### The CR detector itself was the bug
+
+The measurement above - *all 306* tracked shell files carrying CR on a tree whose
+blobs are provably LF, with two independent conversion-free repairs unable to
+remove a single one - had one honest explanation, and it was not the tree.
+
+MEASURED on windows-latest (runner image 20260810.198.2, git 2.55.0.windows.3,
+Git Bash), against a tree `od` and `perl` both show is LF:
+
+| detector | clean tree | same tree + 1 CRLF file |
+|---|---|---|
+| `$(grep -rlU $'\r' bin tests --include='*.sh')` (inline) | **306** files | 307 files |
+| `$(grep -rl '' bin tests --include='*.sh')` (empty pattern) | 306 files | 307 files |
+| `cr=$'\r'; $(grep -rlU "$cr" ...)` (variable) | **0** files | **exactly that file** |
+| `perl -0777 -ne 'print if /\r/'` | 0 files | exactly that file |
+| `awk '/\r/'` | 0 files | **0 files** - blind to CR |
+
+Spelled inline as `$'\r'` inside a command substitution, the CR pattern reaches
+`grep` **empty** under Git Bash, and an empty pattern matches every line of every
+file - which is why the count matched `grep -rl ''` exactly. The lane was
+reporting a false positive no repair could ever clear, and it turned five Windows
+jobs red at a step that named the wrong cause three runs running.
+
+So the CR byte now travels in a variable and is double-quoted at every use, in
+both steps. `awk` is not an alternative in either direction: on MSYS it reads
+through a text-mode conversion and cannot see CR at all, which is the fail-open
+direction.
+
+A detector that cannot be trusted must also not be allowed to pass its verdict
+off as fact, so both steps **calibrate** it first: a fixture of one CRLF file and
+one LF file, scanned in the shell that is about to scan the tree, which must come
+back naming exactly the CRLF one. Anything else is a named `::error::` and the
+step refuses - it neither certifies the tree nor rewrites 306 files on the
+strength of an answer it cannot rely on. `tests/fm-test-run.test.sh` holds both
+directions by putting a `grep` on `PATH` that reproduces each measured failure -
+CR-as-empty-pattern and CR-blind - and requiring both steps to refuse by name and
+leave the tree untouched.
 
 A CR that survives the object-store restore is in the committed blob itself (or
 there was no object store to restore from). The step then strips CR in place with

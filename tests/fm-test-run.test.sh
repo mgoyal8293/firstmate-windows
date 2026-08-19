@@ -913,9 +913,14 @@ lfrestore_tree() {  # <dir> <mode>
   fi
 }
 
-# The shell files under <dir> that carry CR, scanned the way the lane scans them.
+# The shell files under <dir> that carry CR, scanned the way the lane scans them:
+# the CR byte in a variable, double-quoted at the call. Spelled inline as $'\r'
+# inside a command substitution - which is what the lane's own steps used to do -
+# the pattern reaches grep EMPTY under Git Bash and every file matches, so this
+# oracle would agree with a broken detector instead of catching it.
 lfrestore_crlf() {  # <dir>
-  ( cd "$1" && grep -rlU $'\r' bin tests --include='*.sh' ) || true
+  local cr=$'\r'
+  ( cd "$1" && grep -rlU "$cr" bin tests --include='*.sh' ) || true
 }
 
 test_windows_ci_lf_restore_makes_a_crlf_tree_runnable() {
@@ -1050,6 +1055,116 @@ test_windows_ci_lf_restore_makes_a_crlf_tree_runnable() {
 
   rm -rf "$tmp"
   pass "windows-ci restores a CRLF working tree to LF before the lane runs, however the CRLF got there"
+}
+
+# A `grep` that reproduces, on this host, what the CR pattern actually did on a
+# Windows runner. <mode> picks the direction:
+#   empty - a lone-CR argument arrives as the EMPTY pattern, so every file
+#           matches. MEASURED on windows-latest (runner image 20260810.198.2,
+#           git 2.55.0.windows.3, Git Bash): that is what the lane's inline
+#           `$(grep -rlU $'\r' ...)` did - 306 of 306 shell files reported as
+#           CRLF on a tree od and perl both prove is LF.
+#   blind - a lone-CR argument can never match, the direction an MSYS
+#           text-mode read produces. This is the dangerous one: the tree really
+#           is CRLF and the scan says it is clean.
+crstub_bin() {  # <dir> <mode>
+  local dir=$1 mode=$2 real
+  real=$(command -v grep) || fail "grep must be resolvable to build the CR stub"
+  mkdir -p "$dir"
+  cat > "$dir/grep" <<STUB
+#!/usr/bin/env bash
+args=()
+cr=\$'\r'
+for a in "\$@"; do
+  if [ "\$a" = "\$cr" ]; then
+    case $mode in
+      empty) args+=('') ;;
+      *)     args+=('zzz-this-pattern-never-matches-zzz') ;;
+    esac
+  else
+    args+=("\$a")
+  fi
+done
+exec $real "\${args[@]}"
+STUB
+  chmod +x "$dir/grep"
+}
+
+test_windows_ci_lf_steps_refuse_an_unusable_cr_detector() {
+  # THE REGRESSION. Both LF steps looked for CR with an inline `$'\r'` inside a
+  # command substitution. Under Git Bash that pattern reaches grep empty, so the
+  # restore step condemned all 306 tracked shell files on a provably-LF tree,
+  # every conversion-free repair "failed" because there was no CR to remove, and
+  # five Windows jobs went red at a step that named the wrong cause. The same
+  # class of breakage in the other direction would have the assertion step
+  # certify a CRLF tree as LF.
+  #
+  # A detector that cannot tell a CRLF file from an LF one must therefore say so
+  # by name and refuse, rather than pass its verdict on the tree off as fact.
+  # Both steps' REAL scripts run here under GitHub's own invocation, with a
+  # `grep` on PATH that reproduces each measured direction.
+  command -v ruby >/dev/null 2>&1 \
+    || fail "ruby is required to parse .github/workflows/windows-ci.yml as YAML"
+  local tmp step guard bash_bin name script mode tree out rc
+  bash_bin=$(command -v bash) || fail "bash must be resolvable to run the extracted steps"
+  tmp=$(mktemp -d "${TMPDIR:-/tmp}/fm-test-run-crstub.XXXXXX")
+  step="$tmp/step.sh"
+  guard="$tmp/guard.sh"
+  workflow_step_script "$ROOT/.github/workflows/windows-ci.yml" \
+    "Restore the working tree as LF" "$step" \
+    || { rm -rf "$tmp"; fail "could not extract the LF restore step from windows-ci.yml"; }
+  workflow_step_script "$ROOT/.github/workflows/windows-ci.yml" \
+    "Assert the working tree is LF" "$guard" \
+    || { rm -rf "$tmp"; fail "could not extract the LF assertion step from windows-ci.yml"; }
+
+  crstub_bin "$tmp/stub-empty" empty
+  crstub_bin "$tmp/stub-blind" blind
+  # An LF tree for the empty-pattern direction (which used to condemn it) and a
+  # CRLF tree for the blind direction (which used to certify it).
+  lfguard_tree "$tmp/lf" 0 4
+  lfguard_tree "$tmp/crlf" 2 4
+
+  for name in restore:"$step" assert:"$guard"; do
+    script=${name#*:}
+    for mode in empty blind; do
+      case $mode in
+        empty) tree=$tmp/lf ;;
+        *)     tree=$tmp/crlf ;;
+      esac
+      set +e
+      out=$(cd "$tree" && PATH="$tmp/stub-$mode:$PATH" \
+        "$bash_bin" --noprofile --norc -eo pipefail "$script" 2>&1)
+      rc=$?
+      set -e
+      [ "$rc" -ne 0 ] \
+        || { rm -rf "$tmp"; fail "the ${name%%:*} step must refuse a $mode CR detector, got exit 0: $out"; }
+      case "$out" in
+        *'::error::the CR detector is not usable in this shell'*) : ;;
+        *) rm -rf "$tmp"; fail "the ${name%%:*} step must name the unusable $mode CR detector, got: $out" ;;
+      esac
+      case "$out" in
+        *'working tree is LF'*|*'working tree restored as LF'*)
+          rm -rf "$tmp"
+          fail "the ${name%%:*} step certified the tree through a $mode CR detector: $out" ;;
+      esac
+      # And it refuses before touching anything: a detector it cannot trust is
+      # not licensed to rewrite 306 files.
+      [ "$(cat "$tmp/lf/bin/ok.sh")" = 'echo lf' ] \
+        || { rm -rf "$tmp"; fail "the ${name%%:*} step rewrote a file through a $mode CR detector"; }
+    done
+  done
+
+  # And the real grep on this host passes the same calibration, so the guard is
+  # a statement about the detector rather than a permanent refusal.
+  set +e
+  out=$(cd "$tmp/lf" && "$bash_bin" --noprofile --norc -eo pipefail "$guard" 2>&1)
+  rc=$?
+  set -e
+  [ "$rc" -eq 0 ] \
+    || { rm -rf "$tmp"; fail "a usable CR detector must still certify an LF tree, got exit $rc: $out"; }
+
+  rm -rf "$tmp"
+  pass "windows-ci LF steps refuse a CR detector that cannot tell CRLF from LF"
 }
 
 # Extract the `run` script of the step named <step> from <workflow>, requiring
@@ -1233,5 +1348,6 @@ test_jobs_parallel_scheduler_and_failure_propagation
 test_herdr_ci_family_run_has_a_step_timeout
 test_windows_ci_lf_guard_never_reports_lf_without_a_clean_scan
 test_windows_ci_lf_restore_makes_a_crlf_tree_runnable
+test_windows_ci_lf_steps_refuse_an_unusable_cr_detector
 test_windows_ci_harness_path_fails_on_an_unreachable_tool
 test_aggregate_json
