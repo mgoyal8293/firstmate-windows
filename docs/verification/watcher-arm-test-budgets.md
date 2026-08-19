@@ -45,6 +45,22 @@ Unloaded, the same case passed `80/80` and the whole file passed `12/12` on the 
 The suite now measures the start cost at load time and keeps five times the worst of five samples, never below 500ms.
 Oversizing is safe by construction: the fixtures never emit an established line for a successor, so readiness cannot resolve true however long the budget is, and the budget only decides how long each case waits.
 
+The calibration blocks on the child while the extension's real path observes it asynchronously, so it was checked against that real path rather than assumed equivalent.
+Under 3x oversubscription on the workstation, over 40 paired samples, the calibration read `p50=25 max=59` where the asynchronous spawn-to-first-append path read `p50=30 max=61`.
+It under-reads by about a fifth at the median and by a twentieth at the tail, which the five-times multiplier absorbs.
+
+### Result
+
+Twenty-five consecutive runs of each affected suite from a frozen checkout at `9a20f7c`, workstation:
+
+```console
+PI_WATCH_EXTENSION pass=25 fail=0 of 25
+OPERATIONAL_INPUT  pass=25 fail=0 of 25
+```
+
+The calibration was stable across those runs, reading 12ms to 17ms and resolving to the 500ms floor every time.
+A workstation cannot falsify this defect on its own, because the pre-fix suite also passed 232 consecutive runs here, including under single-CPU contention; the runner rows above are the evidence that matters.
+
 ## Why the guard plugins guard their stdin write
 
 `tests/fm-pi-watch-extension.test.sh` also failed intermittently inside the OpenCode turn-end guard, with a different signature that turned out to be a defect in tracked plugin code rather than in the test.
