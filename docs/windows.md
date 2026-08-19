@@ -196,8 +196,8 @@ Claude Code 2.1.220 on MINGW64_NT-10.0-26200, Git for Windows 2.50.1, node v22.1
 All six steps completed on the real machine.
 A Windows firstmate can therefore take its own home, put a real crewmate on real work, supervise it through a real wake, land the commit, and release the task, which is the whole loop rather than a set of passing parts.
 Three gaps came out of it.
-There is no way to stop a crewmate politely, because the control plane refuses every verb on this backend and teardown's reaper is what actually ends the agent (`winfm-conpty-graceful-stop`).
-Teardown also leaves a completed task's ConPTY session directory behind, so one accumulates per task (`winfm-conpty-transcript-dir-accumulation`).
+There is no way to stop a crewmate politely, because the control plane refuses every verb on this backend and teardown's reaper is what actually ends the agent (tracked as `winfm-conpty-graceful-stop`, queued in firstmate-windows).
+Teardown also leaves a completed task's ConPTY session directory behind, which [`conpty-backend.md`](conpty-backend.md) "Active limits" owns.
 Neither of those blocks the loop, though the first is a reduction against tmux.
 The third is an outright defect: a merged task branch was left behind in the project (`winfm-merged-branch-prune`).
 The run needed no code change of its own: what it produced is this record and those three documented gaps.
