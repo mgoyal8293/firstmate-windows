@@ -195,9 +195,12 @@ Claude Code 2.1.220 on MINGW64_NT-10.0-26200, Git for Windows 2.50.1, node v22.1
 
 All six steps completed on the real machine.
 A Windows firstmate can therefore take its own home, put a real crewmate on real work, supervise it through a real wake, land the commit, and release the task, which is the whole loop rather than a set of passing parts.
-One real gap came out of it: there is no way to stop a crewmate politely, because the control plane refuses on this backend and teardown's reaper is what actually ends the agent.
-That is a reduction against tmux, not a blocker for the loop.
-The run needed no code change of its own: what it produced is this record and that one newly documented limit.
+Three gaps came out of it.
+There is no way to stop a crewmate politely, because the control plane refuses every verb on this backend and teardown's reaper is what actually ends the agent (`winfm-conpty-graceful-stop`).
+Teardown also leaves a completed task's ConPTY session directory behind, so one accumulates per task (`winfm-conpty-transcript-dir-accumulation`).
+Neither of those blocks the loop, though the first is a reduction against tmux.
+The third is an outright defect: a merged task branch was left behind in the project (`winfm-merged-branch-prune`).
+The run needed no code change of its own: what it produced is this record and those three documented gaps.
 
 ### What the run turned up
 
@@ -228,7 +231,6 @@ A Windows operator meets them in this order.
   The failure was observed only in this run's context, a worktree whose processes had just been force-killed and needed a second reap pass, and nothing here rules out the same failure in the same context off Windows.
   Which of the two commands failed remains unobserved, because the detach discards its stderr and the delete discards both its output and its exit status.
   The cause is not established, and this record deliberately does not argue one.
-  `winfm-merged-branch-prune` owns establishing it.
   What is established is that the prune path applied, its precondition was met, the ref survived, and the same two commands succeeded unsilenced in the control test on the same host, so the defect itself stands.
   The leftover ref is harmless in itself because it is fully merged.
   Tracked as `winfm-merged-branch-prune` (queued, firstmate-windows), which owns both establishing the cause and the fix.
