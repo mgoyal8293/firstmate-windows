@@ -61,6 +61,16 @@ OPERATIONAL_INPUT  pass=25 fail=0 of 25
 The calibration was stable across those runs, reading 12ms to 17ms and resolving to the 500ms floor every time.
 A workstation cannot falsify this defect on its own, because the pre-fix suite also passed 232 consecutive runs here, including under single-CPU contention; the runner rows above are the evidence that matters.
 
+### The fork-cost hypothesis, ruled on
+
+A recorded hypothesis held that this flake was the same fork-cost sensitivity that forced the portable serial lane to be sharded.
+It is half right.
+
+Fork cost is the load-dependent input driving the test flake: the child start measured above at 14 ms on a workstation against 300-800 ms under runner load is what overran a fixed observation window.
+Fork cost is not what forced the sharding.
+That was accumulated serial runtime - stale weight values on already-hinted scripts plus lane growth - recorded in `docs/fm-test-portable-shards.md`.
+The two failures share a runner-load flavour, but they have different causes and different fixes, and neither fix would have prevented the other failure.
+
 ## Why the session-lock case settles its refusal instead of pausing
 
 The same suite failed a second way, on the same underlying quantity.
@@ -194,7 +204,9 @@ not ok - a refused encoder body killed the adapter's host: exit 1 - node:events:
 The two turn-end guard sites carry the identical one-line guard, and both are pinned deterministically too, in `tests/fm-pi-watch-extension.test.sh`.
 Their payload is a fixed 26 bytes, which fits the pipe buffer, so the oversize-body trick does not port and the real race cannot be lost on demand - the parent's first write attempt lands microseconds after the fork and normally beats the child's exit, which is why the campaign above scored only 7 in 200.
 Those two cases instead inject the refusal where the kernel would raise it: a loader hook redirects `node:child_process` to a shim that spawns the real guard, with its real exit code and stderr, and replaces only that child's stdin with a stream whose first write fails `EPIPE`.
-Each case asserts that the host survives, that no `EPIPE` escapes, and that the guard's blocking verdict and its stderr still reach the caller.
+Each case asserts that the host survives, that no `EPIPE` escapes, and that the guard's blocking verdict still reaches the caller.
+Its stderr is checked through a fixture token rather than the guard's own words: both guards prepend the fixed prose `TURN WOULD END BLIND - supervision is off. ` before appending the child's stderr, so asserting anything resembling that sentence would pass on an empty stderr.
+Each case also asserts a marker the shim writes at the moment it replaces the child's stdin, because a shim that silently stopped matching would spawn the real guard, write its 26 bytes successfully, still see exit 2, and leave the case green with the listener deleted.
 
 ```console
 $ bash tests/fm-pi-watch-extension.test.sh | grep 'stdin write is refused'

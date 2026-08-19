@@ -82,6 +82,8 @@ An unhinted script is packed at the flat default wherever its real duration sits
 That is why shard 4 specifically overflowed while the lane total was under-counted at the same time.
 On red run [32142691561](https://github.com/mgoyal8293/firstmate-windows/actions/runs/32142691561) on `main` the day before, the measured spread was 7.72 minutes for shard 2 to 14.68 minutes for shard 4 against a packing that believed all four were 8.5 minutes.
 
+This overflow was accumulated serial runtime, not the fork-cost sensitivity behind the watcher-suite flake of the same week; `docs/verification/watcher-arm-test-budgets.md` owns that ruling.
+
 `bin/fm-test-run.sh --check-coverage` reports `unmeasured_serial=<n>` and names any selected serial script still packed at the flat default, so a missing measurement is visible in every CI run rather than surfacing later as an unbalanced shard.
 Read that counter for exactly what it says. It reports whether any selected serial script is packed at the default, so `unmeasured_serial=0` means no script is packed at the default - it does **not** mean the hints are current.
 An already-hinted script can quadruple while the count stays at zero, which is what happened here: the lane's script count was stable, the count was zero throughout, and most of the hidden time was in values the guard never looks at.

@@ -2260,6 +2260,7 @@ install_refused_stdin_write_shim() {
   cat > "$dir/cp-shim.mjs" <<'JS'
 export * from "node:child_process";
 import { spawn as spawnReal } from "node:child_process";
+import { writeFileSync } from "node:fs";
 import { Writable } from "node:stream";
 
 const target = process.env.FM_REFUSED_STDIN_TARGET || "";
@@ -2273,6 +2274,12 @@ export function spawn(command, args, options) {
       done(Object.assign(new Error("write EPIPE"), { code: "EPIPE", syscall: "write" }));
     },
   });
+  // Recorded at the assignment itself, because every other signal a driver can
+  // read is identical whether or not the swap happened: the real guard is
+  // spawned either way, writes its 26 bytes into a real pipe successfully, and
+  // still exits 2. Without this marker a shim that silently stopped matching
+  // would leave the whole case green with the listener deleted.
+  writeFileSync(process.env.FM_REFUSED_STDIN_MARKER, `${command}\n`);
   return child;
 }
 JS
@@ -2291,12 +2298,13 @@ JS
 }
 
 test_opencode_turnend_guard_survives_a_refused_stdin_write() {
-  local guard_plugin repo home shim guard_log out status
+  local guard_plugin repo home shim guard_log swap_marker out status
   guard_plugin="$ROOT/.opencode/plugins/fm-primary-turnend-guard.js"
   repo="$TMP_ROOT/opencode-guard-refused-stdin-root"
   home="$TMP_ROOT/opencode-guard-refused-stdin-home"
   shim="$TMP_ROOT/opencode-guard-refused-stdin-shim"
   guard_log="$TMP_ROOT/opencode-guard-refused-stdin.log"
+  swap_marker="$TMP_ROOT/opencode-guard-refused-stdin.swap"
   mkdir -p "$repo/bin" "$home/state" "$home/config"
   cp "$ROOT/bin/fm-operational-input.sh" "$repo/bin/fm-operational-input.sh"
   chmod +x "$repo/bin/fm-operational-input.sh"
@@ -2304,13 +2312,16 @@ test_opencode_turnend_guard_survives_a_refused_stdin_write() {
   cat > "$repo/bin/fm-turnend-guard.sh" <<'SH'
 #!/usr/bin/env bash
 printf 'guard\n' >> "${FM_GUARD_LOG:?}"
-printf 'supervision is off\n' >&2
+# Both guards prepend their own "TURN WOULD END BLIND - supervision is off. "
+# prose before appending this stream, so anything resembling that sentence
+# would be found in the prompt whether or not the child's stderr arrived.
+printf 'guard-stderr-marker-4f2a\n' >&2
 exit 2
 SH
   chmod +x "$repo/bin/fm-turnend-guard.sh"
   out=$(GUARD_PLUGIN="$guard_plugin" WORKTREE="$repo" FM_HOME="$home" FM_GUARD_LOG="$guard_log" \
     FM_CHILD_PROCESS_SHIM="$shim/cp-shim.mjs" FM_CP_HOOKS="$shim/cp-hooks.mjs" \
-    FM_REFUSED_STDIN_TARGET=bin/fm-turnend-guard.sh \
+    FM_REFUSED_STDIN_TARGET=bin/fm-turnend-guard.sh FM_REFUSED_STDIN_MARKER="$swap_marker" \
     node --input-type=module 2>&1 <<'EOF'
 import { register } from "node:module";
 import { existsSync } from "node:fs";
@@ -2332,13 +2343,16 @@ const hooks = await mod.FmPrimaryTurnendGuard({
   worktree: process.env.WORKTREE,
 });
 await hooks.event({ event: { type: "session.idle", properties: { sessionID: "session-test" } } });
+if (!existsSync(process.env.FM_REFUSED_STDIN_MARKER)) {
+  throw new Error("no stdin write was ever refused: the shim did not replace the guard child's stdin");
+}
 if (!existsSync(process.env.FM_GUARD_LOG)) {
   throw new Error("the real guard never ran, so no stdin write was refused");
 }
 if (!promptBody.includes("TURN WOULD END BLIND")) {
   throw new Error(`a refused stdin write lost the guard's blocking verdict: ${promptBody}`);
 }
-if (!promptBody.includes("supervision is off")) {
+if (!promptBody.includes("guard-stderr-marker-4f2a")) {
   throw new Error(`a refused stdin write lost the guard's own stderr: ${promptBody}`);
 }
 EOF
@@ -2355,12 +2369,13 @@ EOF
 }
 
 test_pi_turnend_guard_survives_a_refused_stdin_write() {
-  local ext repo home shim guard_log out status
+  local ext repo home shim guard_log swap_marker out status
   ext="$ROOT/.pi/extensions/fm-primary-turnend-guard.ts"
   repo="$TMP_ROOT/pi-guard-refused-stdin-root"
   home="$TMP_ROOT/pi-guard-refused-stdin-home"
   shim="$TMP_ROOT/pi-guard-refused-stdin-shim"
   guard_log="$TMP_ROOT/pi-guard-refused-stdin.log"
+  swap_marker="$TMP_ROOT/pi-guard-refused-stdin.swap"
   mkdir -p "$repo/.pi/extensions/lib" "$repo/bin" "$home/state" "$home/config"
   cp "$ext" "$repo/.pi/extensions/fm-primary-turnend-guard.ts"
   cp "$ROOT/.pi/extensions/lib/fm-operational-input.ts" "$repo/.pi/extensions/lib/fm-operational-input.ts"
@@ -2370,13 +2385,16 @@ test_pi_turnend_guard_survives_a_refused_stdin_write() {
   cat > "$repo/bin/fm-turnend-guard.sh" <<'SH'
 #!/usr/bin/env bash
 printf 'guard\n' >> "${FM_GUARD_LOG:?}"
-printf 'supervision is off\n' >&2
+# Both guards prepend their own "TURN WOULD END BLIND - supervision is off. "
+# prose before appending this stream, so anything resembling that sentence
+# would be found in the prompt whether or not the child's stderr arrived.
+printf 'guard-stderr-marker-4f2a\n' >&2
 exit 2
 SH
   chmod +x "$repo/bin/fm-turnend-guard.sh"
   out=$(EXTENSION="$repo/.pi/extensions/fm-primary-turnend-guard.ts" FM_HOME="$home" FM_GUARD_LOG="$guard_log" \
     FM_CHILD_PROCESS_SHIM="$shim/cp-shim.mjs" FM_CP_HOOKS="$shim/cp-hooks.mjs" \
-    FM_REFUSED_STDIN_TARGET=bin/fm-turnend-guard.sh \
+    FM_REFUSED_STDIN_TARGET=bin/fm-turnend-guard.sh FM_REFUSED_STDIN_MARKER="$swap_marker" \
     node --input-type=module 2>&1 <<'EOF'
 import { register } from "node:module";
 import { existsSync } from "node:fs";
@@ -2399,13 +2417,16 @@ mod.default(pi);
 const settled = handlers.get("agent_settled");
 if (!settled) throw new Error("the extension registered no agent_settled handler");
 await settled({ type: "agent_settled" });
+if (!existsSync(process.env.FM_REFUSED_STDIN_MARKER)) {
+  throw new Error("no stdin write was ever refused: the shim did not replace the guard child's stdin");
+}
 if (!existsSync(process.env.FM_GUARD_LOG)) {
   throw new Error("the real guard never ran, so no stdin write was refused");
 }
 if (!message.includes("TURN WOULD END BLIND")) {
   throw new Error(`a refused stdin write lost the guard's blocking verdict: ${message}`);
 }
-if (!message.includes("supervision is off")) {
+if (!message.includes("guard-stderr-marker-4f2a")) {
   throw new Error(`a refused stdin write lost the guard's own stderr: ${message}`);
 }
 EOF
