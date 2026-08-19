@@ -1,0 +1,14 @@
+@1
+ok - real tmux: fm_backend_tmux_create_task creates a window and refuses a duplicate
+ok - real tmux: fm_backend_tmux_send_text_line sends literal text and submits with Enter
+ok - real tmux: fm_backend_tmux_send_literal + fm_backend_tmux_send_key Enter submit as two separate steps
+ok - real tmux: fm_backend_tmux_capture's -S -N bound trims old history for a small window and reaches it for a large one
+ok - real tmux: fm_backend_tmux_resolve_bare_selector (list-live) finds the created window by name
+ok - real tmux: fm_backend_tmux_resolve_bare_selector fails for a window that does not exist
+ok - real tmux: fm_backend_tmux_target_exists and the fm_backend_target_exists dispatcher return the raw pane_id probe's verdict for a live window, an unknown window, an unknown session, and an empty target
+ok - real tmux: the equivalence is not vacuous - a live window reads as present
+ok - real tmux: fm_backend_tmux_leader_pid and the fm_backend_leader_pid dispatcher return the raw '#{pane_pid}' read, and it names a live process
+ok - real tmux: fm_backend_tmux_list_live and the fm_backend_list_task_windows dispatcher reproduce the raw list-windows|grep ':fm-' pipeline exactly, including its non-task-window exclusion
+ok - real tmux: fm_backend_tmux_list_live prints the shared '<target>\t<label>' shape every other adapter's list_live prints
+ok - real tmux: the fm_backend_list_task_windows dispatcher preserves the adapter's '<target>\t<label>' pair verbatim
+ok - real tmux: kill removes the window and the readable session inventory authoritatively classifies it missing
