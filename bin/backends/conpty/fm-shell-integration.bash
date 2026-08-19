@@ -110,7 +110,7 @@ _fm_conpty_bash_has_ps0() {
 
 if _fm_conpty_bash_has_ps0; then
   # C: a command has started, so a command owns the foreground.
-  PS0='\[\e]133;C;fmpty=1\a\]'
+  PS0='\e]133;C;fmpty=1\a'
   export PS0
   # A and B bracket the prompt itself. Both are wrapped in \[ \] so bash counts
   # them as zero-width: an unwrapped escape sequence in PS1 corrupts readline's

@@ -545,12 +545,15 @@ fm_backend_conpty_busy_state() {  # <target>
 # fm_backend_conpty_agent_state: recovery-grade agent state. See
 # bin/fm-backend.sh's fm_backend_agent_state for the shared vocabulary.
 #
-# The daemon owns the decision because it owns both sources of evidence: the
+# The daemon owns the decision because it owns every source of evidence: the
 # ConPTY console process list (with per-pid identity validated by name AND
-# process start time, so a recycled pid cannot be reported as the agent) and the
-# screen. Only `dead` and `missing` license recovery, so every genuinely
-# conflicting reading resolves to `ambiguous` instead - a false `dead` is the
-# one outcome that can launch a duplicate agent onto a live worktree.
+# process start time, so a recycled pid cannot be reported as the agent), the
+# session shell's own OSC 133 prompt marks - the FOREGROUND source, which is
+# what scopes a reading to whoever actually holds the console - and the screen,
+# which is only the FALLBACK, consulted when no mark has arrived (an unarmed or
+# non-bash session shell). Only `dead` and `missing` license recovery, so every
+# genuinely conflicting reading resolves to `ambiguous` instead - a false `dead`
+# is the one outcome that can launch a duplicate agent onto a live worktree.
 #
 # A session whose pipe does not answer is classified from the DURABLE RECORD,
 # not guessed: `crashed` and `clean` both mean the endpoint is authoritatively

@@ -333,7 +333,89 @@ SH
   # The session must start as a SHELL, not as the harness: treehouse get has to
   # run somewhere, and the cwd probe needs a shell to answer it.
   assert_contains "$spawn_call" 'bash.exe' "the task session starts as a shell"
+  # THE ARMING WIRE. Everything gap 2 reads off the pty depends on this one pair
+  # of arguments reaching the spawn: without them the session shell emits no
+  # prompt mark, liveness silently reverts to the screen fallback, and `exit`
+  # goes back to refusing instead of proving a stop. Asserted against the args
+  # the fake client actually received, and as an ADJACENT pair, because
+  # `--rcfile` separated from its path would arm some other file.
+  rcpath=$(fm_backend_conpty_winpath "$ROOT/bin/backends/conpty/fm-shell-integration.bash")
+  us=$(printf '\x1f')
+  assert_contains "$spawn_call" "$us--arg$us--rcfile$us--arg$us$rcpath$us" \
+    "spawn armed the shell integration rcfile"
   pass "create_task spawns a home-scoped shell session and confirms it answers before reporting success"
+) || exit 1
+
+# The CR guard, read from the spawn it produces rather than from the source. A
+# Windows checkout made with core.autocrlf=true rewrites the rcfile's line
+# endings, and bash sourcing a CR-bearing file prints syntax errors into the
+# very screen the composer classifier reads. No rcfile is the safe outcome, so
+# the spawn must simply carry no --rcfile at all.
+(
+  CASE="$TMP_ROOT/create-rcfile-cr"; mkdir -p "$CASE"
+  load_adapter "$CASE"
+  FM_BACKEND_CONPTY_SHELL='C:\fake\bash.exe'
+
+  # A CR-bearing copy of the tracked file, in a case-local root the adapter
+  # resolves the rcfile from. Only the rcfile lookup reads this at call time.
+  cp "$ROOT/bin/backends/conpty/fm-shell-integration.bash" "$CASE/repo/bin/backends/conpty/fm-shell-integration.bash"
+  sed -i 's/$/\r/' "$CASE/repo/bin/backends/conpty/fm-shell-integration.bash"
+  FM_BACKEND_CONPTY_ROOT="$CASE/repo"
+
+  cat > "$CASE/fakebin/node" <<'SH'
+#!/usr/bin/env bash
+set -u
+LOG="${FM_CONPTY_LOG:?}"
+cmd=${2:-}
+{ printf '%s' "${1:-}"; for a in "$@"; do printf '\x1f%s' "$a"; done; printf '\n'; } >> "$LOG"
+if [ "$cmd" = exists ]; then
+  n=$(grep -c "$(printf '\x1f')exists$(printf '\x1f')" "$LOG")
+  [ "$n" -gt 1 ] && { printf 'present\n'; exit 0; }
+  printf 'absent\n'; exit 1
+fi
+exit 0
+SH
+  chmod +x "$CASE/fakebin/node"
+
+  fm_backend_conpty_create_task fm-crlf1 /tmp/proj >/dev/null || fail "create_task failed with a CR-bearing rcfile"
+  spawn_call=$(calls_for spawn)
+  [ -n "$spawn_call" ] || fail "no spawn reached the client"
+  case "$spawn_call" in
+    *--rcfile*) fail "a CR-bearing rcfile was still armed, so the session shell would source a file bash cannot parse" ;;
+  esac
+  assert_contains "$spawn_call" 'bash.exe' "the session still starts, unarmed, rather than failing the spawn"
+  pass "create_task refuses to arm a CR-bearing rcfile and spawns the session unarmed instead"
+) || exit 1
+
+# The non-bash arm. An operator-pinned FM_BACKEND_CONPTY_SHELL that is not bash
+# would reject --rcfile outright, so the flag must not be offered to it.
+(
+  CASE="$TMP_ROOT/create-rcfile-nonbash"; mkdir -p "$CASE"
+  load_adapter "$CASE"
+  FM_BACKEND_CONPTY_SHELL='C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe'
+
+  cat > "$CASE/fakebin/node" <<'SH'
+#!/usr/bin/env bash
+set -u
+LOG="${FM_CONPTY_LOG:?}"
+cmd=${2:-}
+{ printf '%s' "${1:-}"; for a in "$@"; do printf '\x1f%s' "$a"; done; printf '\n'; } >> "$LOG"
+if [ "$cmd" = exists ]; then
+  n=$(grep -c "$(printf '\x1f')exists$(printf '\x1f')" "$LOG")
+  [ "$n" -gt 1 ] && { printf 'present\n'; exit 0; }
+  printf 'absent\n'; exit 1
+fi
+exit 0
+SH
+  chmod +x "$CASE/fakebin/node"
+
+  fm_backend_conpty_create_task fm-ps1 /tmp/proj >/dev/null || fail "create_task failed on a pinned non-bash shell"
+  spawn_call=$(calls_for spawn)
+  [ -n "$spawn_call" ] || fail "no spawn reached the client"
+  case "$spawn_call" in
+    *--rcfile*) fail "a bash-only flag was handed to a non-bash session shell" ;;
+  esac
+  pass "create_task does not offer --rcfile to a pinned non-bash session shell"
 ) || exit 1
 
 # --- send path --------------------------------------------------------------
@@ -650,6 +732,21 @@ exit
     *) fail "the armed shell emitted no command-finished mark: '$own'" ;;
   esac
   pass "conpty shell integration: the armed shell marks both command start and the return to its prompt"
+
+  # PS0 is printed straight to the pty, not handed to readline, so readline's
+  # zero-width brackets are not stripped from it the way they are from PS1 -
+  # they would reach the terminal, and the durable transcript, as SOH/STX on
+  # every command start. Read off the bytes the shell actually emitted.
+  raw=$(printf 'true\nexit\n' | env -i HOME="$H" PATH="$PATH" bash --rcfile "$RC" -i 2>&1)
+  printf '%s' "$raw" | LC_ALL=C grep -aq $'133;C;fmpty=1\a' \
+    || fail "the command-start mark never reached the stream, so this proves nothing"
+  if printf '%s' "$raw" | LC_ALL=C grep -aq $'\x01\x1b]133;C'; then
+    fail "the command-start mark is preceded by a literal SOH: PS0 does not strip readline's zero-width brackets"
+  fi
+  if printf '%s' "$raw" | LC_ALL=C grep -aq $'133;C;fmpty=1\a\x02'; then
+    fail "the command-start mark is followed by a literal STX: PS0 does not strip readline's zero-width brackets"
+  fi
+  pass "conpty shell integration: the command-start mark writes no stray control bytes onto the pty"
 
   # THE DIVERGENCE. Same script twice; the only difference is whether the nested
   # shell inherits the two carriers. Asserting both sides is what stops this from
