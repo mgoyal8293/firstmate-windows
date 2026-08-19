@@ -1,0 +1,18 @@
+Named cause: bash converts a $'\uXXXX' escape through the AMBIENT locale.
+Git Bash defaults to a LANG-less C locale, where the escape is emitted as its
+six literal characters instead of the glyph - so the herdr half-block case was
+comparing something that is not a rule row at all.
+
+$ x=$'▀'; echo "${#x} [$x]"
+LC_ALL=<unset> bytes=1 value=[▀]
+LC_ALL=C bytes=6 value=[\u2580]
+
+=== the test AS IT WAS at the base commit, run in Git Bash's locale ===
+$ LC_ALL=C bash tests/fm-composer-lib.test.sh   # base commit 1baa477
+not ok - a half-block rule row must count as a structural edge
+exit=1
+
+=== the same test after this change, same locale ===
+$ LC_ALL=C bash tests/fm-composer-lib.test.sh   # HEAD ae6af50
+ok - matrix: herdr half-block rules bound a bare composer's wrap region
+exit=0

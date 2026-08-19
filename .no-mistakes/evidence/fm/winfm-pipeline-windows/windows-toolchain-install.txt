@@ -1,0 +1,45 @@
+Windows install arms for ShellCheck + actionlint, exercised end-to-end.
+
+Host is WSL2 Linux, so `uname` is stubbed to what Git Bash reports on a
+windows-latest runner (MINGW64_NT-10.0-26200 / x86_64) and RUNNER_TEMP is
+spelled the way GitHub spells it there (a path holding backslashes). Every
+other step is real: the real GitHub release asset is downloaded, the real
+sha256 pin is verified, real unzip extracts it, and the installed .exe is
+really executed (WSL2 binfmt runs PE binaries natively).
+
+$ uname -s && uname -m
+MINGW64_NT-10.0-26200
+x86_64
+
+$ RUNNER_TEMP="D:\a\_temp" bin/fm-install-shellcheck.sh "$RUNNER_TEMP/bin"
+ShellCheck - shell script analysis tool
+version: 0.11.0
+license: GNU General Public License, version 3
+website: https://www.shellcheck.net
+exit=0
+
+$ RUNNER_TEMP="D:\a\_temp" bin/fm-install-actionlint.sh "$RUNNER_TEMP/bin"
+1.7.12
+installed by downloading from release page
+built with go1.26.1 compiler for windows/amd64
+exit=0
+
+$ file "$RUNNER_TEMP/bin"/*.exe
+$RUNNER_TEMP/bin/actionlint.exe: PE32+ executable (console) x86-64, for MS Windows, 8 sections
+$RUNNER_TEMP/bin/shellcheck.exe: PE32+ executable (console) x86-64, for MS Windows, 9 sections
+
+--- the installed Windows ShellCheck really analyses this repo -----------
+$ shellcheck.exe --format=gcc bin/fm-lint.sh bin/fm-install-shellcheck.sh; echo "exit=$?"
+exit=0
+
+$ printf "%s\n" "cd /tmp" > /tmp/nm-winarm/defect.sh   # a file with a real defect
+$ shellcheck.exe --format=gcc /tmp/nm-winarm/defect.sh; echo "exit=$?"
+/tmp/nm-winarm/defect.sh:2:1: warning: Use 'cd ... || exit' or 'cd ... || return' in case cd fails. [SC2164]
+/tmp/nm-winarm/defect.sh:3:8: note: Double quote to prevent globbing and word splitting. [SC2086]
+exit=1
+
+--- the installed Windows actionlint really parses the new lane ----------
+$ actionlint.exe -version
+1.7.12
+installed by downloading from release page
+built with go1.26.1 compiler for windows/amd64

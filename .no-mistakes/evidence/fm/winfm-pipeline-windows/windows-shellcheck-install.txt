@@ -1,0 +1,17 @@
+$ uname -s   # (stubbed to what Git Bash reports on a Windows runner)
+MINGW64_NT-10.0-26200
+$ uname -m
+x86_64
+
+$ RUNNER_TEMP='D:\a\_temp'  bin/fm-install-shellcheck.sh $W/dest
++ ARCHIVE=shellcheck-v0.11.0.zip
++ SHA256=8a4e35ab0b331c85d73567b12f2a444df187f483e5079ceffa6bda1faa2e740e
++ URL=https://github.com/koalaman/shellcheck/releases/download/v0.11.0/shellcheck-v0.11.0.zip
++ curl -fsSL https://github.com/koalaman/shellcheck/releases/download/v0.11.0/shellcheck-v0.11.0.zip -o '/tmp/nm-winarm/D:\a\_temp/fm-shellcheck.gJrkYM/shellcheck-v0.11.0.zip'
++ command -v sha256sum
+++ sha256sum
++ command -v unzip
++ unzip -q '/tmp/nm-winarm/D:\a\_temp/fm-shellcheck.gJrkYM/shellcheck-v0.11.0.zip' -d '/tmp/nm-winarm/D:\a\_temp/fm-shellcheck.gJrkYM'
++ install -m 0755 '/tmp/nm-winarm/D:\a\_temp/fm-shellcheck.gJrkYM/shellcheck.exe' /tmp/nm-winarm/dest/shellcheck.exe
++ /tmp/nm-winarm/dest/shellcheck.exe --version
+exit=0

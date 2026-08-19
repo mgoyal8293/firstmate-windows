@@ -1,0 +1,22 @@
+Targeted test runs (Linux host), all green
+==========================================
+tests/fm-lint.test.sh                      22 ok, exit 0   (ShellCheck Windows arm + backslash-digest regression)
+tests/fm-lint-workflows.test.sh            17 ok, exit 0   (actionlint Windows arm + backslash-digest regression)
+tests/fm-test-run.test.sh                  21 ok, exit 0   (windows lane/shards, LF guard, harness-PATH step)
+tests/fm-windows-portability.test.sh       13 ok, exit 0   (/proc mount aliasing, .gitattributes LF)
+tests/fm-composer-lib.test.sh              exit 0          (locale-independent half-block fixture)
+tests/fm-crew-state.test.sh                49 ok, exit 0   (exec-wrapper toolbin, scaled perl bound)
+tests/fm-wake-queue.test.sh                19 ok, exit 0   (scaled watcher-exit bound)
+tests/fm-turnend-guard.test.sh             65 ok, exit 0   (stranded stdin write / EPIPE)
+
+Same scripts again with uname stubbed to MINGW64_NT-10.0-26200, so the
+Windows-only arms are the ones that actually execute:
+tests/fm-crew-state.test.sh                49 ok, exit 0
+tests/fm-wake-queue.test.sh                19 ok, exit 0
+tests/fm-windows-portability.test.sh       13 ok, exit 0
+
+One real Windows shard driven through the runner exactly as the CI step does
+(bin/fm-test-run.sh --lane windows-2of4 --json ...): see windows-shard-2-run.log
+FM_TEST_SLOWEST rank=2 script=tests/fm-windows-portability.test.sh duration_ms=1557
+FM_TEST_SLOWEST rank=3 script=tests/fm-send-settle.test.sh duration_ms=832
+FM_TEST_SLOWEST rank=4 script=tests/fm-classify-decision-key.test.sh duration_ms=764

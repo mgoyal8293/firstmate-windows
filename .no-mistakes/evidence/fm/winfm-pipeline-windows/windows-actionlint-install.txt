@@ -1,0 +1,15 @@
+$ RUNNER_TEMP='D:\a\_temp'  bin/fm-install-actionlint.sh $W/dest
++++ dirname bin/fm-install-actionlint.sh
++ ARCHIVE=actionlint_1.7.12_windows_amd64.zip
++ SHA256=6e7241b51e6817ea6a047693d8e6fed13b31819c9a0dd6c5a726e1592d22f6e9
++ URL=https://github.com/rhysd/actionlint/releases/download/v1.7.12/actionlint_1.7.12_windows_amd64.zip
+++ mktemp -d '/tmp/nm-winarm/D:\a\_temp/fm-actionlint.XXXXXX'
++ TMP='/tmp/nm-winarm/D:\a\_temp/fm-actionlint.iyQSJu'
++ curl -fsSL https://github.com/rhysd/actionlint/releases/download/v1.7.12/actionlint_1.7.12_windows_amd64.zip -o '/tmp/nm-winarm/D:\a\_temp/fm-actionlint.iyQSJu/actionlint_1.7.12_windows_amd64.zip'
++ command -v sha256sum
++ command -v unzip
++ unzip -q '/tmp/nm-winarm/D:\a\_temp/fm-actionlint.iyQSJu/actionlint_1.7.12_windows_amd64.zip' -d '/tmp/nm-winarm/D:\a\_temp/fm-actionlint.iyQSJu'
++ install -m 0755 '/tmp/nm-winarm/D:\a\_temp/fm-actionlint.iyQSJu/actionlint.exe' /tmp/nm-winarm/dest/actionlint.exe
++ /tmp/nm-winarm/dest/actionlint.exe -version
++ rm -rf '/tmp/nm-winarm/D:\a\_temp/fm-actionlint.iyQSJu'
+exit=0

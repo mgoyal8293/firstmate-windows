@@ -1,0 +1,13 @@
+Root cause of the first Windows lint-gate failure: GNU coreutils escapes its
+output LINE when the FILENAME holds a backslash, so the digest field is no
+longer bare hex and can never equal a pin. RUNNER_TEMP on a Windows runner is
+D:\a\_temp, so this hit a byte-perfect download.
+
+$ sha256sum "$RUNNER_TEMP/archive.bin"        # what the installer used to do
+\c9e82ada36ef4b8d4caf1f97fa89289048c8f4a33c2c76ffffc88bfe09ff00c5  /tmp/nm-winarm/D:\\a\\_temp/archive.bin
+
+$ sha256sum < "$RUNNER_TEMP/archive.bin"      # what it does now
+c9e82ada36ef4b8d4caf1f97fa89289048c8f4a33c2c76ffffc88bfe09ff00c5  -
+
+The first line is prefixed with a literal backslash and its first field reads
+\<hex>; the second is bare hex. Same bytes, and only the second can match a pin.

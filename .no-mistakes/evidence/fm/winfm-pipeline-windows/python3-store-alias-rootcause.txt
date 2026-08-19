@@ -1,0 +1,28 @@
+Named cause: on Windows, 'python3' is a Microsoft Store app-execution alias.
+It RESOLVES on PATH and then fails every invocation, so a 'command -v python3'
+probe reports success and the run dies later instead of degrading.
+
+$ python3 -c "print(1)"   # the alias, as the runner meets it on a Windows box
+Python was not found; run without arguments to install from the Microsoft Store, or disable this shortcut from Settings > Manage App Execution Aliases.
+exit=49
+$ command -v python3      # ...yet it resolves, which is what the old probe asked
+/tmp/nm-pystub/python3
+
+=== base commit 1baa477: probes by resolving the name ===
+$ bin/fm-test-run.sh tests/fm-gitignore-config.test.sh --json out.json
+Python was not found; run without arguments to install from the Microsoft Store, or disable this shortcut from Settings > Manage App Execution Aliases.
+exit=49
+artifact written: NO
+
+=== HEAD ae6af50: probes by executing, and accepts a real 'python' ===
+$ bin/fm-test-run.sh tests/fm-gitignore-config.test.sh --json out.json
+ok - an unrelated path outside config/ remains visible to git
+FM_TEST_END 2026-08-19T12:42:15Z tests/fm-gitignore-config.test.sh exit=0 duration_ms=26 gate_skip=false
+FM_TEST_SUMMARY total=1 failed=0 skipped_gate=0 duration_ms=70
+FM_TEST_SUMMARY_FAMILY family=unclassified count=1 duration_ms=26 failed=0
+FM_TEST_SLOWEST rank=1 script=tests/fm-gitignore-config.test.sh duration_ms=26
+fm-test-run: wrote timing artifact: /tmp/nm-pystub/new.json
+exit=0
+artifact written: yes
+$ jq -c "{summary, script: .scripts[0].path}" out.json   # a valid timing artifact
+{"summary":{"duration_ms":70,"failed":0,"skipped_gate":0,"total":1},"script":"tests/fm-gitignore-config.test.sh"}

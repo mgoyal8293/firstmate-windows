@@ -1,0 +1,43 @@
+The workflow's 'Resolve the test harness PATH' step, extracted from
+.github/workflows/windows-ci.yml with a YAML parser and executed as GitHub
+runs it (shell: bash, -o pipefail). cygpath and 'npm prefix -g' are stubbed
+to behave the way they do on MINGW64: npm prints a Windows-form prefix.
+
+=== arm 1: a resolver is present (the windows-latest runner) ===
+$ bash -o pipefail step.sh   # no seed override: the CI literal is used
+harness PATH: /mingw64/bin:/usr/bin:/bin:/usr/local/bin:/tmp/nm-winpath/stub:/c/npm/prefix
+--- harness PATH entries, one per line ---
+  /mingw64/bin
+  /usr/bin
+  /bin
+  /usr/local/bin
+  /tmp/nm-winpath/stub
+  /c/npm/prefix
+--- reachability of the tools the suite asserts on ---
+git      /usr/bin/git
+node     /usr/bin/node
+gh       /usr/bin/gh
+jq       /usr/bin/jq
+perl     /usr/bin/perl
+exit=0
+
+$ cat "$GITHUB_ENV"   # what the lane actually receives
+FM_TEST_BASE_PATH=/mingw64/bin:/usr/bin:/bin:/usr/local/bin:/tmp/nm-winpath/stub:/c/npm/prefix
+
+=== arm 2: the same step with no cygpath on PATH ===
+(the Windows-form prefix then survives, splits at its drive-letter colon,
+ and the step refuses to publish a PATH that silently lost an entry)
+harness PATH: /mingw64/bin:/usr/bin:/bin:/usr/local/bin:/tmp/nm-winpath/stub-nocyg:C:\npm\prefix
+--- harness PATH entries, one per line ---
+  /mingw64/bin
+  /usr/bin
+  /bin
+  /usr/local/bin
+  /tmp/nm-winpath/stub-nocyg
+  C
+  \npm\prefix
+::error::harness PATH holds a Windows-form entry; cygpath conversion did not take: C
+\npm\prefix
+exit=1
+$ cat "$GITHUB_ENV"   # nothing published
+(empty)

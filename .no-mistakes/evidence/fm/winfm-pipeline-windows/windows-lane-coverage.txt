@@ -1,0 +1,19 @@
+$ bin/fm-test-run.sh --list-lanes
+portable-parallel-1
+portable-parallel-2
+portable-serial
+portable-serial-1of4
+portable-serial-2of4
+portable-serial-3of4
+portable-serial-4of4
+real-herdr-gated
+windows
+windows-1of4
+windows-2of4
+windows-3of4
+windows-4of4
+
+$ bin/fm-test-run.sh --check-coverage
+FM_TEST_COVERAGE ok total=152 parallel=24 serial=116 serial_shards=4 herdr=12
+FM_TEST_COVERAGE_WINDOWS ok windows=39 windows_shards=4
+exit=0
