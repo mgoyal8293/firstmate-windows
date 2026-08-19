@@ -35,7 +35,7 @@ whole suite.
 A script joins the lane when it exits 0 with no failed assertion on Git Bash.
 A gate skip counts as green: that is the test declining to run, which it does on
 Linux too. But a script that can *only* skip on this runner, because the tool it
-needs is not installed there, is left out - see the five green-by-skip scripts
+needs is not installed there, is left out - see the six green-by-skip scripts
 below.
 
 The list is **enumerated, not derived**.
@@ -177,23 +177,36 @@ scripts that bound exceeded.
 |---|---:|
 | candidates measured | 98 |
 | measured green (exit 0, no failed assertion) | 45 |
-| of those, green only because they gate-skip on the runner - dropped | 5 |
-| **in the lane** | **40** |
+| of those, green only because they gate-skip on the runner - dropped | 6 |
+| **in the lane** | **39** |
 | failing on Windows, excluded | 41 |
 | still unresolved (hit the 180s bound, no failure seen) | 12 |
 
 45 + 41 + 12 = 98. One of the 41, `tests/fm-teardown.test.sh`, has its cause
 isolated below; the other 40 are recorded but not chased.
 
-### The five green-by-skip scripts are not lane members
+### The six green-by-skip scripts are not lane members
 
 `tests/fm-afk-inject-e2e.test.sh`, `tests/fm-backend-tmux-smoke.test.sh` and
 `tests/fm-tmux-agent-liveness.test.sh` exit early on `command -v tmux`;
 `tests/fm-backend-herdr-focus-flash-e2e.test.sh` on `command -v herdr`;
-`tests/fm-claude-stop-autoarm-live-e2e.test.sh` unless `FM_CLAUDE_LIVE_E2E=1`.
-The job installs none of that, so on `windows-latest` those five can only skip.
+`tests/fm-claude-stop-autoarm-live-e2e.test.sh` unless `FM_CLAUDE_LIVE_E2E=1`;
+`tests/fm-pi-primary-types.test.sh` on `command -v tsc`.
+The job installs none of that, so on `windows-latest` those six can only skip.
 They are dropped from the lane rather than carried, and neither tmux nor herdr is
 installed on the runner - not needing tmux is the point of this port.
+
+`fm-pi-primary-types` is the one that was measured as a lane member first. The
+behavior job installs only `tasks-axi`, never TypeScript, so the script exits at
+its `tsc` guard with a single
+`skip: tsc not found for Pi extension typecheck` line and **zero** `ok`/`not ok`
+assertions - a 1000 ms member that proves nothing about Windows. It is out.
+`tests/fm-calm-pi-extension.test.sh` looks similar and is *not* in this list:
+without the global `@earendil-works/pi-coding-agent` package it skips most of
+its cases, but still executes two real assertions that do not need it - Pi calm
+compatibility evidence never rejecting a newer-than-0.82.0 Pi while failing
+closed on a missing or malformed version, and missing Pi presentation class
+exports reaching the independent adapter degradation path. It stays a member.
 
 Dropping them loses no Windows coverage, because they never executed anything
 there. What it buys is honesty about what the lane runs: a dropped member is
@@ -204,7 +217,7 @@ tests" step (`.github/workflows/ci.yml`), which hard-fails so those scripts
 cannot quietly skip on a required gate. The Windows lane reaches it from the
 other direction: no tool, no member.
 
-Total lane cost: **61.9 min** of serial Git Bash work (3,714,000 ms of hints).
+Total lane cost: **61.9 min** of serial Git Bash work (3,713,000 ms of hints).
 The longest single script is `tests/fm-decision-hold-lifecycle.test.sh` at 860s,
 which is the floor no shard count can lower - so 4 shards is the useful maximum
 here, not 8 or 16. Beyond 4 the floor binds and extra runners buy nothing.
@@ -212,7 +225,7 @@ here, not 8 or 16. Beyond 4 the floor binds and extra runners buy nothing.
 | shard | scripts | predicted |
 |---|---:|---:|
 | `windows-1of4` | 6 | 929s (15.5 min) |
-| `windows-2of4` | 8 | 929s (15.5 min) |
+| `windows-2of4` | 7 | 928s (15.5 min) |
 | `windows-3of4` | 13 | 928s (15.5 min) |
 | `windows-4of4` | 13 | 928s (15.5 min) |
 | imbalance | | 1s |
@@ -220,7 +233,7 @@ here, not 8 or 16. Beyond 4 the floor binds and extra runners buy nothing.
 **`windows-4of4` was run end to end on Git Bash to check that sum against
 reality: rc=0, 14/14 scripts, 0 failures, 2 gate skips, wall 932s (15.5 min)**
 against 927s predicted - 0.5% out, which is what makes the other three shards'
-predicted figures trustworthy. That run was taken before the five green-by-skip
+predicted figures trustworthy. That run was taken before the six green-by-skip
 scripts were dropped, so it covered 14 scripts including the 2 that skipped;
 the same shard is now 13 scripts and 928s, and the drop moves no measured work.
 

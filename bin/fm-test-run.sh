@@ -106,9 +106,9 @@ PORTABLE_SERIAL_DEFAULT_WEIGHT_MS=20000
 WINDOWS_SHARDS=4
 
 # Balance hint for a Windows-lane script with no measured Windows duration.
-# The measured per-script mean of the lane below (3,714,000 ms over 40 scripts),
+# The measured per-script mean of the lane below (3,713,000 ms over 39 scripts),
 # so a newly listed test neither starves nor overloads the shard it lands in.
-WINDOWS_DEFAULT_WEIGHT_MS=92850
+WINDOWS_DEFAULT_WEIGHT_MS=95205
 
 usage() {
   awk '
@@ -451,6 +451,7 @@ list_portable_serial() {
 # the cap, and otherwise periodically, not only when the count is non-zero
 # (fm-test-weight-drift-detector is the filed follow-up that will compare
 # measured durations against this table). That doc owns the refresh procedure.
+# shellcheck disable=SC2329 # Invoked by name through lane_weight_for.
 portable_serial_weight_hints() {
   cat <<'EOF'
 tests/fm-afk-inject-e2e.test.sh 35004
@@ -572,26 +573,32 @@ tests/fm-windows-portability.test.sh 1985
 EOF
 }
 
-portable_serial_weight_for() {
-  local want=$1 path ms
+# Shared lane partition helpers. The Linux serial remainder and the Windows
+# allowlist split across separate-runner shards by the same rule, so the
+# partition logic lives here once; each lane supplies its own script list,
+# duration hints, shard count and lane naming.
+# shellcheck disable=SC2329 # Reached only through the per-lane weight_for wrappers.
+lane_weight_for() {
+  local hints_fn=$1 default_ms=$2 want=$3 path ms
   while read -r path ms; do
     if [ "$path" = "$want" ]; then
       printf '%s\n' "$ms"
       return 0
     fi
-  done < <(portable_serial_weight_hints)
-  printf '%s\n' "$PORTABLE_SERIAL_DEFAULT_WEIGHT_MS"
+  done < <("$hints_fn")
+  printf '%s\n' "$default_ms"
 }
 
-# Longest-processing-time assignment of the serial remainder to
-# PORTABLE_SERIAL_SHARDS bins, printing "<shard>\t<script>" for every script.
-# Deterministic: candidates are ordered by hint descending then path, and ties
-# between equally loaded bins always take the lowest bin index.
-portable_serial_assignments() {
+# Longest-processing-time assignment of a lane's scripts to <shards> bins,
+# printing "<shard>\t<script>" for every script. Deterministic: candidates are
+# ordered by hint descending then path, and ties between equally loaded bins
+# always take the lowest bin index.
+lane_assignments() {
+  local shards=$1 list_fn=$2 weight_fn=$3
   local ms script i best best_load
   local -a loads=()
   i=1
-  while [ "$i" -le "$PORTABLE_SERIAL_SHARDS" ]; do
+  while [ "$i" -le "$shards" ]; do
     loads[i]=0
     i=$((i + 1))
   done
@@ -600,7 +607,7 @@ portable_serial_assignments() {
     best=1
     best_load=${loads[1]}
     i=2
-    while [ "$i" -le "$PORTABLE_SERIAL_SHARDS" ]; do
+    while [ "$i" -le "$shards" ]; do
       if [ "${loads[i]}" -lt "$best_load" ]; then
         best_load=${loads[i]}
         best=$i
@@ -612,17 +619,18 @@ portable_serial_assignments() {
   done < <(
     while IFS= read -r script; do
       [ -n "$script" ] || continue
-      printf '%s\t%s\n' "$(portable_serial_weight_for "$script")" "$script"
-    done < <(list_portable_serial) | LC_ALL=C sort -t$'\t' -k1,1nr -k2,2
+      printf '%s\t%s\n' "$("$weight_fn" "$script")" "$script"
+    done < <("$list_fn") | LC_ALL=C sort -t$'\t' -k1,1nr -k2,2
   )
 }
 
-# Parse "<k>of<n>" from a portable-serial shard lane and echo <k>, refusing when
-# <n> disagrees with this script's configured count so a CI matrix built for a
-# different shard count fails loudly instead of dropping tests.
-portable_serial_shard_index() {
-  local lane=$1 spec index count
-  spec=${lane#portable-serial-}
+# Parse "<k>of<n>" from a "<prefix><k>of<n>" shard lane and echo <k>, refusing
+# when <n> disagrees with this script's configured count so a CI matrix built
+# for a different shard count fails loudly instead of dropping tests. <noun>
+# names the lane in the refusal so the operator sees which one disagreed.
+lane_shard_index() {
+  local lane=$1 prefix=$2 shards=$3 noun=$4 spec index count
+  spec=${lane#"$prefix"}
   index=${spec%%of*}
   count=${spec#*of}
   case "$spec" in
@@ -635,13 +643,26 @@ portable_serial_shard_index() {
   case "$count" in
     ''|*[!0-9]*) die "unknown lane '$lane' (see --list-lanes)" ;;
   esac
-  if [ "$count" -ne "$PORTABLE_SERIAL_SHARDS" ]; then
-    die "lane '$lane' asks for $count portable serial shards but this runner is configured for $PORTABLE_SERIAL_SHARDS (see --list-lanes)"
+  if [ "$count" -ne "$shards" ]; then
+    die "lane '$lane' asks for $count $noun shards but this runner is configured for $shards (see --list-lanes)"
   fi
-  if [ "$index" -lt 1 ] || [ "$index" -gt "$PORTABLE_SERIAL_SHARDS" ]; then
-    die "lane '$lane' shard index is outside 1..$PORTABLE_SERIAL_SHARDS (see --list-lanes)"
+  if [ "$index" -lt 1 ] || [ "$index" -gt "$shards" ]; then
+    die "lane '$lane' shard index is outside 1..$shards (see --list-lanes)"
   fi
   printf '%s\n' "$index"
+}
+
+# shellcheck disable=SC2329 # Invoked by name through lane_assignments.
+portable_serial_weight_for() {
+  lane_weight_for portable_serial_weight_hints "$PORTABLE_SERIAL_DEFAULT_WEIGHT_MS" "$1"
+}
+
+portable_serial_assignments() {
+  lane_assignments "$PORTABLE_SERIAL_SHARDS" list_portable_serial portable_serial_weight_for
+}
+
+portable_serial_shard_index() {
+  lane_shard_index "$1" portable-serial- "$PORTABLE_SERIAL_SHARDS" 'portable serial'
 }
 
 # The Windows lane: an explicit allowlist rather than a derived remainder.
@@ -684,7 +705,6 @@ tests/fm-gate-refuse.test.sh
 tests/fm-gitignore-config.test.sh
 tests/fm-gotmp.test.sh
 tests/fm-herdr-session-cleanup.test.sh
-tests/fm-pi-primary-types.test.sh
 tests/fm-pr-merge.test.sh
 tests/fm-pr-private-file-mode.test.sh
 tests/fm-project-origin.test.sh
@@ -714,6 +734,7 @@ EOF
 # Measured Git Bash durations, in ms, for the scripts above. Hints only affect
 # balance: the coverage guard keeps the partition complete and disjoint whatever
 # they say, so a stale hint costs a slower shard rather than lost coverage.
+# shellcheck disable=SC2329 # Invoked by name through lane_weight_for.
 windows_weight_hints() {
   cat <<'EOF'
 tests/fm-afk-return.test.sh 63000
@@ -732,7 +753,6 @@ tests/fm-gate-refuse.test.sh 117000
 tests/fm-gitignore-config.test.sh 1000
 tests/fm-gotmp.test.sh 23000
 tests/fm-herdr-session-cleanup.test.sh 154000
-tests/fm-pi-primary-types.test.sh 1000
 tests/fm-pr-merge.test.sh 165000
 tests/fm-pr-private-file-mode.test.sh 5000
 tests/fm-project-origin.test.sh 2000
@@ -759,76 +779,17 @@ tests/fm-windows-portability.test.sh 7000
 EOF
 }
 
+# shellcheck disable=SC2329 # Invoked by name through lane_assignments.
 windows_weight_for() {
-  local want=$1 path ms
-  while read -r path ms; do
-    if [ "$path" = "$want" ]; then
-      printf '%s\n' "$ms"
-      return 0
-    fi
-  done < <(windows_weight_hints)
-  printf '%s\n' "$WINDOWS_DEFAULT_WEIGHT_MS"
+  lane_weight_for windows_weight_hints "$WINDOWS_DEFAULT_WEIGHT_MS" "$1"
 }
 
-# Longest-processing-time assignment of the Windows lane to WINDOWS_SHARDS bins,
-# printing "<shard>\t<script>" for every script. Deterministic: candidates are
-# ordered by hint descending then path, and ties between equally loaded bins
-# always take the lowest bin index.
 windows_assignments() {
-  local ms script i best best_load
-  local -a loads=()
-  i=1
-  while [ "$i" -le "$WINDOWS_SHARDS" ]; do
-    loads[i]=0
-    i=$((i + 1))
-  done
-  while IFS=$'\t' read -r ms script; do
-    [ -n "$script" ] || continue
-    best=1
-    best_load=${loads[1]}
-    i=2
-    while [ "$i" -le "$WINDOWS_SHARDS" ]; do
-      if [ "${loads[i]}" -lt "$best_load" ]; then
-        best_load=${loads[i]}
-        best=$i
-      fi
-      i=$((i + 1))
-    done
-    loads[best]=$((best_load + ms))
-    printf '%s\t%s\n' "$best" "$script"
-  done < <(
-    while IFS= read -r script; do
-      [ -n "$script" ] || continue
-      printf '%s\t%s\n' "$(windows_weight_for "$script")" "$script"
-    done < <(list_windows) | LC_ALL=C sort -t$'\t' -k1,1nr -k2,2
-  )
+  lane_assignments "$WINDOWS_SHARDS" list_windows windows_weight_for
 }
 
-# Parse "<k>of<n>" from a windows shard lane and echo <k>, refusing when <n>
-# disagrees with this script's configured count so a CI matrix built for a
-# different shard count fails loudly instead of dropping tests.
 windows_shard_index() {
-  local lane=$1 spec index count
-  spec=${lane#windows-}
-  index=${spec%%of*}
-  count=${spec#*of}
-  case "$spec" in
-    *of*) ;;
-    *) die "unknown lane '$lane' (see --list-lanes)" ;;
-  esac
-  case "$index" in
-    ''|*[!0-9]*) die "unknown lane '$lane' (see --list-lanes)" ;;
-  esac
-  case "$count" in
-    ''|*[!0-9]*) die "unknown lane '$lane' (see --list-lanes)" ;;
-  esac
-  if [ "$count" -ne "$WINDOWS_SHARDS" ]; then
-    die "lane '$lane' asks for $count windows shards but this runner is configured for $WINDOWS_SHARDS (see --list-lanes)"
-  fi
-  if [ "$index" -lt 1 ] || [ "$index" -gt "$WINDOWS_SHARDS" ]; then
-    die "lane '$lane' shard index is outside 1..$WINDOWS_SHARDS (see --list-lanes)"
-  fi
-  printf '%s\n' "$index"
+  lane_shard_index "$1" windows- "$WINDOWS_SHARDS" windows
 }
 
 select_proven_isolated() {
