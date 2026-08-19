@@ -8,15 +8,13 @@ permissions:
 jobs:
   diag:
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    timeout-minutes: 90
     steps:
       - uses: actions/checkout@v6
       - name: Runner shape
-        run: |
-          nproc; free -m; cat /proc/loadavg
-      - name: Load-sensitivity curve for child process start
-        run: node .diag/loadcurve.mjs
-      - name: Failing case 150x under representative load
+        run: nproc; cat /proc/loadavg
+      # Same load that reproduced 150/150 before the fix.
+      - name: Fixed hung-successor case 150x under representative load
         run: |
           set +e
           for i in 1 2 3 4; do bash -c 'while :; do :; done' & done
@@ -27,16 +25,41 @@ jobs:
             if [ $? -ne 0 ]; then fails=$((fails+1)); echo "### FAIL run $i"; echo "$out"; fi
           done
           kill %1 %2 %3 %4 2>/dev/null
-          echo "PI_HUNG_LOADED_FAILS=$fails/150"
-      - name: Whole file 10x under representative load
+          echo "FIXED_PI_HUNG_LOADED_FAILS=$fails/150"
+      - name: Fixed external-healthy case 150x under representative load
         run: |
           set +e
           for i in 1 2 3 4; do bash -c 'while :; do :; done' & done
           sleep 1
           fails=0
-          for i in $(seq 1 10); do
-            out=$(bash tests/fm-pi-watch-extension.test.sh 2>&1)
-            if [ $? -ne 0 ]; then fails=$((fails+1)); echo "### FILE FAIL $i"; echo "$out" | grep -E "not ok|NODEERR" ; fi
+          for i in $(seq 1 150); do
+            out=$(bash .diag/one.sh test_opencode_healthy_arm_output_does_not_suppress_guard 2>&1)
+            if [ $? -ne 0 ]; then fails=$((fails+1)); echo "### FAIL run $i"; echo "$out"; fi
           done
           kill %1 %2 %3 %4 2>/dev/null
-          echo "WHOLE_FILE_LOADED_FAILS=$fails/10"
+          echo "FIXED_EXTERNAL_HEALTHY_LOADED_FAILS=$fails/150"
+      - name: Fixed whole file 25x under representative load
+        run: |
+          set +e
+          for i in 1 2 3 4; do bash -c 'while :; do :; done' & done
+          sleep 1
+          fails=0
+          for i in $(seq 1 25); do
+            out=$(bash tests/fm-pi-watch-extension.test.sh 2>&1)
+            if [ $? -ne 0 ]; then fails=$((fails+1)); echo "### FILE FAIL $i"; echo "$out" | grep -E "not ok"; fi
+            echo "$out" | head -1
+          done
+          kill %1 %2 %3 %4 2>/dev/null
+          echo "FIXED_WHOLE_FILE_LOADED_FAILS=$fails/25"
+      - name: Fixed operational-input suite 25x under representative load
+        run: |
+          set +e
+          for i in 1 2 3 4; do bash -c 'while :; do :; done' & done
+          sleep 1
+          fails=0
+          for i in $(seq 1 25); do
+            out=$(bash tests/fm-operational-input.test.sh 2>&1)
+            if [ $? -ne 0 ]; then fails=$((fails+1)); echo "### FAIL $i"; echo "$out" | grep -E "not ok"; fi
+          done
+          kill %1 %2 %3 %4 2>/dev/null
+          echo "FIXED_OPERATIONAL_INPUT_LOADED_FAILS=$fails/25"
