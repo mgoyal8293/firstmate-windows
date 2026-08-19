@@ -488,7 +488,9 @@ import { pathToFileURL } from "node:url";
 
 let tool = null;
 let prompt = "";
-let rowsAtPrompt = 0;
+// -1, not 0, so "no delivery was ever observed" cannot be reported as
+// "a wake arrived with an empty arm log" - two different failures.
+let rowsAtPrompt = -1;
 const pi = {
   on() {},
   registerCommand() {},
@@ -513,7 +515,9 @@ const rows = existsSync(process.env.FM_ARM_LOG)
   ? readFileSync(process.env.FM_ARM_LOG, "utf8").trim().split("\n")
   : [];
 if (rows.length !== 4) throw new Error(`expected one successor plus two retries, got ${rows.length}: ${rows.join(" | ")}`);
-if (rowsAtPrompt !== 4) throw new Error(`wake arrived before restoration exhausted (${rowsAtPrompt} arm rows)`);
+if (rowsAtPrompt !== 4) throw new Error(rowsAtPrompt < 0
+  ? `no wake delivery was observed at all; arm log holds ${rows.length} rows`
+  : `wake arrived before restoration exhausted (${rowsAtPrompt} of ${rows.length} arm rows)`);
 if (!prompt.includes("signal: synthetic wake")) throw new Error(`original wake was lost: ${prompt}`);
 if (!prompt.includes("could not restore watcher continuity after 2 retries")) throw new Error(`missing typed restoration failure: ${prompt}`);
 await new Promise((resolve) => setTimeout(resolve, 100));
@@ -1377,7 +1381,17 @@ const hooks = await mod.FmPrimaryWatchArm({
 const event = { event: { type: "session.idle", properties: { sessionID: "session-test" } } };
 writeFileSync(`${process.env.FM_HOME}/state/.lock`, "999999\n");
 await hooks.event(event);
-await new Promise((resolve) => setTimeout(resolve, 120));
+// The event hook starts the arm decision without awaiting it, and refusing an
+// unowned lock walks the parent-pid chain with up to eight `ps` spawns, so any
+// fixed pause here is a bet on process-start cost. Settle the decision
+// instead: the coordinator coalesces onto the same in-flight evaluation and
+// resolves when it does, so the owned-lock event below starts from a finished
+// verdict rather than inheriting this refusal.
+const refusal = await globalThis.__firstmateOpenCodeWatchArm.ensureArmed("session-test", client);
+if (refusal !== "read-only") {
+  console.error(`an unowned session lock did not refuse the arm: ${refusal}`);
+  process.exit(1);
+}
 if (existsSync(process.env.FM_ARM_LOG)) {
   console.error("watch arm ran without owning the session lock");
   process.exit(1);
@@ -1646,7 +1660,9 @@ import { pathToFileURL } from "node:url";
 
 const mod = await import(pathToFileURL(process.env.PLUGIN).href);
 let prompt = "";
-let rowsAtPrompt = 0;
+// -1, not 0, so "no delivery was ever observed" cannot be reported as
+// "a wake arrived with an empty arm log" - two different failures.
+let rowsAtPrompt = -1;
 const client = {
   session: {
     promptAsync: async (request) => {
@@ -1671,7 +1687,9 @@ const rows = existsSync(process.env.FM_ARM_LOG)
   ? readFileSync(process.env.FM_ARM_LOG, "utf8").trim().split("\n")
   : [];
 if (rows.length !== 4) throw new Error(`expected one successor plus two retries, got ${rows.length}: ${rows.join(" | ")}`);
-if (rowsAtPrompt !== 4) throw new Error(`wake arrived before restoration exhausted (${rowsAtPrompt} arm rows)`);
+if (rowsAtPrompt !== 4) throw new Error(rowsAtPrompt < 0
+  ? `no wake delivery was observed at all; arm log holds ${rows.length} rows`
+  : `wake arrived before restoration exhausted (${rowsAtPrompt} of ${rows.length} arm rows)`);
 if (!prompt.includes("signal: synthetic wake")) throw new Error(`original wake was lost: ${prompt}`);
 if (!prompt.includes("could not restore watcher continuity after 2 retries")) throw new Error(`missing typed restoration failure: ${prompt}`);
 await new Promise((resolve) => setTimeout(resolve, 100));
