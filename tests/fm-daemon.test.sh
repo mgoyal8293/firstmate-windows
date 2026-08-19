@@ -1713,6 +1713,7 @@ test_housekeeping_identifies_a_discovered_endpoint_on_a_non_tmux_backend() {
   _now > "$state/.subsuper-stale-t7"
   (
     _FM_BACKEND_CONPTY_SOURCED=1
+    # shellcheck disable=SC2329 # invoked indirectly through fm_backend_list_task_windows
     fm_backend_conpty_list_live() { printf 'fm-acme-t7\tfm-t7\n'; }
     FM_BACKEND=conpty FM_STATE_OVERRIDE="$state" FM_ESCALATE_BATCH_SECS=999999 \
       housekeeping "$state"
@@ -1731,6 +1732,7 @@ test_housekeeping_identifies_a_discovered_endpoint_on_a_non_tmux_backend() {
   echo $(( $(date +%s) - 5000 )) > "$state/.subsuper-stale-t8"
   (
     _FM_BACKEND_CONPTY_SOURCED=1
+    # shellcheck disable=SC2329 # invoked indirectly through fm_backend_list_task_windows
     fm_backend_conpty_list_live() { printf 'fm-acme-t8\tfm-t8\n'; }
     fm_backend_capture() { printf 'idle prompt $\n'; }
     fm_busy_classify() { printf 'idle'; }

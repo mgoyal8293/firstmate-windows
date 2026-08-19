@@ -172,6 +172,6 @@ verdict, so this can widen a match and never silently accept an unresolvable one
 ## Not yet ported
 
 - Relay's artifact writes (`x_mode_write_if_changed` in `bin/fm-bootstrap.sh`) still assert exact modes directly. Relay is off unless the home opts in.
-- Away mode (`/afk`) does not run on Windows; [`conpty-backend.md`](conpty-backend.md#active-limits) owns the two missing primitives and the clean refusal.
+- Away mode's daemon launch (`bin/fm-afk-launch.sh`) is unexamined on Windows.
 - `fm_pending_reply_pid_identity` (`bin/fm-pending-reply-lib.sh`) still reads sender liveness through `ps -o lstart= -o command=`, which MSYS answers with nothing, so a secondmate's pending reply reads its sender as dead there. The fleet's `/proc` identity (`fm_pid_identity`) is the right substitute but lives in `bin/fm-wake-lib.sh`, which that file sources only inside one function; wiring it needs an owner move rather than a local patch.
 - The macOS-only surfaces (`bin/backends/herdr.sh`, `bin/fm-remote-job-*.sh`, muse) are deliberately out of scope.
