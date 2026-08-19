@@ -22,6 +22,13 @@ function runProcess(command, args, input = "") {
     });
     child.on("error", () => resolve({ code: 0, stdout: "", stderr: "" }));
     child.on("close", (code) => resolve({ code: code ?? 0, stdout, stderr }));
+    // A child that exits before draining stdin makes this write fail with
+    // EPIPE. That error is emitted on the stdin stream, not on the
+    // ChildProcess, so the handler above does not cover it and node turns it
+    // into an unhandled error that kills the host session. The child's exit is
+    // already the authoritative result and the close handler above captures
+    // it, so a refused write carries nothing of its own.
+    child.stdin.on("error", () => {});
     child.stdin.end(input);
   });
 }
