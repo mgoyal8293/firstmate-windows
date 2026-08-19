@@ -11,55 +11,61 @@ jobs:
     timeout-minutes: 90
     steps:
       - uses: actions/checkout@v6
-      - name: Runner shape
-        run: nproc; cat /proc/loadavg
-      # Same load that reproduced 150/150 before the fix.
-      - name: Fixed hung-successor case 150x under representative load
+      # Each step must FAIL on any failure. The previous round ended every step
+      # with an echo under `set +e`, so the step exit code was the echo's and
+      # the job went green while the counters showed real failures.
+      - name: Fixed hung-successor case 150x under load
         run: |
-          set +e
           for i in 1 2 3 4; do bash -c 'while :; do :; done' & done
           sleep 1
           fails=0
           for i in $(seq 1 150); do
-            out=$(bash .diag/one.sh test_pi_hung_successor_falls_back_to_typed_wake 2>&1)
-            if [ $? -ne 0 ]; then fails=$((fails+1)); echo "### FAIL run $i"; echo "$out"; fi
+            if ! out=$(bash .diag/one.sh test_pi_hung_successor_falls_back_to_typed_wake 2>&1); then
+              fails=$((fails+1)); echo "### FAIL run $i"; echo "$out"
+            fi
           done
-          kill %1 %2 %3 %4 2>/dev/null
-          echo "FIXED_PI_HUNG_LOADED_FAILS=$fails/150"
-      - name: Fixed external-healthy case 150x under representative load
+          kill %1 %2 %3 %4 2>/dev/null || true
+          echo "PI_HUNG=$fails/150"
+          [ "$fails" -eq 0 ]
+      - name: Fixed session-lock case 150x under load
+        if: always()
         run: |
-          set +e
           for i in 1 2 3 4; do bash -c 'while :; do :; done' & done
           sleep 1
           fails=0
           for i in $(seq 1 150); do
-            out=$(bash .diag/one.sh test_opencode_healthy_arm_output_does_not_suppress_guard 2>&1)
-            if [ $? -ne 0 ]; then fails=$((fails+1)); echo "### FAIL run $i"; echo "$out"; fi
+            if ! out=$(bash .diag/one.sh test_opencode_primary_watch_plugin_requires_session_lock 2>&1); then
+              fails=$((fails+1)); echo "### FAIL run $i"; echo "$out"
+            fi
           done
-          kill %1 %2 %3 %4 2>/dev/null
-          echo "FIXED_EXTERNAL_HEALTHY_LOADED_FAILS=$fails/150"
-      - name: Fixed whole file 25x under representative load
+          kill %1 %2 %3 %4 2>/dev/null || true
+          echo "SESSION_LOCK=$fails/150"
+          [ "$fails" -eq 0 ]
+      - name: Fixed whole file 25x under load
+        if: always()
         run: |
-          set +e
           for i in 1 2 3 4; do bash -c 'while :; do :; done' & done
           sleep 1
           fails=0
           for i in $(seq 1 25); do
-            out=$(bash tests/fm-pi-watch-extension.test.sh 2>&1)
-            if [ $? -ne 0 ]; then fails=$((fails+1)); echo "### FILE FAIL $i"; echo "$out" | grep -E "not ok"; fi
-            echo "$out" | head -1
+            if ! out=$(bash tests/fm-pi-watch-extension.test.sh 2>&1); then
+              fails=$((fails+1)); echo "### FILE FAIL $i"; echo "$out" | grep -E "not ok" || true
+            fi
           done
-          kill %1 %2 %3 %4 2>/dev/null
-          echo "FIXED_WHOLE_FILE_LOADED_FAILS=$fails/25"
-      - name: Fixed operational-input suite 25x under representative load
+          kill %1 %2 %3 %4 2>/dev/null || true
+          echo "WHOLE_FILE=$fails/25"
+          [ "$fails" -eq 0 ]
+      - name: Fixed operational-input suite 25x under load
+        if: always()
         run: |
-          set +e
           for i in 1 2 3 4; do bash -c 'while :; do :; done' & done
           sleep 1
           fails=0
           for i in $(seq 1 25); do
-            out=$(bash tests/fm-operational-input.test.sh 2>&1)
-            if [ $? -ne 0 ]; then fails=$((fails+1)); echo "### FAIL $i"; echo "$out" | grep -E "not ok"; fi
+            if ! out=$(bash tests/fm-operational-input.test.sh 2>&1); then
+              fails=$((fails+1)); echo "### FAIL $i"; echo "$out" | grep -E "not ok" || true
+            fi
           done
-          kill %1 %2 %3 %4 2>/dev/null
-          echo "FIXED_OPERATIONAL_INPUT_LOADED_FAILS=$fails/25"
+          kill %1 %2 %3 %4 2>/dev/null || true
+          echo "OPERATIONAL_INPUT=$fails/25"
+          [ "$fails" -eq 0 ]
