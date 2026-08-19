@@ -64,8 +64,8 @@ jobs:
         # that goes quiet exactly when it should fire is worse than none.
         run: |
           set -eu
-          # The same variable-held CR pattern and the same calibration as the
-          # restore step above, for the same measured reason: spelled inline as
+          # The CR pattern travels in a variable and the scan is calibrated
+          # before it is trusted, for a measured reason: spelled inline as
           # $'\r' inside a command substitution the pattern reaches grep EMPTY
           # under Git Bash, and a detector whose answer cannot be trusted must
           # be allowed neither to certify this tree nor to condemn it.
@@ -154,8 +154,8 @@ jobs:
         # that goes quiet exactly when it should fire is worse than none.
         run: |
           set -eu
-          # The same variable-held CR pattern and the same calibration as the
-          # restore step above, for the same measured reason: spelled inline as
+          # The CR pattern travels in a variable and the scan is calibrated
+          # before it is trusted, for a measured reason: spelled inline as
           # $'\r' inside a command substitution the pattern reaches grep EMPTY
           # under Git Bash, and a detector whose answer cannot be trusted must
           # be allowed neither to certify this tree nor to condemn it.

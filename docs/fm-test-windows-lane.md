@@ -135,45 +135,30 @@ file - which is why the count matched `grep -rl ''` exactly. The lane was
 reporting a false positive no repair could ever clear, and it turned five Windows
 jobs red at a step that named the wrong cause three runs running.
 
-So the CR byte now travels in a variable and is double-quoted at every use, in
-both steps. `awk` is not an alternative in either direction: on MSYS it reads
-through a text-mode conversion and cannot see CR at all, which is the fail-open
-direction.
+So the CR byte now travels in a variable and is double-quoted at every use.
+`awk` is not an alternative in either direction: on MSYS it reads through a
+text-mode conversion and cannot see CR at all, which is the fail-open direction.
 
 A detector that cannot be trusted must also not be allowed to pass its verdict
-off as fact, so both steps **calibrate** it first: a fixture of one CRLF file and
+off as fact, so the step **calibrates** it first: a fixture of one CRLF file and
 one LF file, scanned in the shell that is about to scan the tree, which must come
 back naming exactly the CRLF one. Anything else is a named `::error::` and the
-step refuses - it neither certifies the tree nor rewrites 306 files on the
-strength of an answer it cannot rely on. `tests/fm-test-run.test.sh` holds both
-directions by putting a `grep` on `PATH` that reproduces each measured failure -
-CR-as-empty-pattern and CR-blind - and requiring both steps to refuse by name and
-leave the tree untouched.
+step refuses - it neither certifies the tree nor condemns it on the strength of
+an answer it cannot rely on. `tests/fm-test-run.test.sh` holds both directions by
+putting a `grep` on `PATH` that reproduces each measured failure -
+CR-as-empty-pattern and CR-blind - and requiring the step to refuse by name and
+leave the tree under test untouched.
 
-A CR that survives the object-store restore is in the committed blob itself (or
-there was no object store to restore from). The step then strips CR in place with
-`tr -d '\r'` - CR anywhere in the file, not only before a newline - so the lane
-can run, and emits a `::warning::` naming the files, because a working tree
-patched in place is not a repo that is fixed; that needs a committed
-`git add --renormalize .`.
-
-The repair is re-scanned before the step reports success, and the step fails if
-CR survives both passes. The earlier shape printed "working tree restored as LF"
-over a tree it had not repaired, and the lane then went red one step later with a
-verdict that named nothing - five shard jobs at the same assertion.
-
-The assertion after the restore then *verifies* the invariant and fails loudly if
-it does not hold. It captures the scan and then judges it, rather than piping the
-recursive `grep` into `head`. GitHub runs `shell: bash` steps with
+Once the detector has been calibrated, the assertion *verifies* the invariant and
+fails loudly if it does not hold. It captures the scan and then judges it, rather
+than piping the recursive `grep` into `head`. GitHub runs `shell: bash` steps with
 `-o pipefail`, so the pipeline form let `head` close the pipe, kill `grep` with
 SIGPIPE, and turn the guard's own non-zero status into a reported
 "working tree is LF" - on a CRLF tree. A scan that does not complete is now an
-error too. `tests/fm-test-run.test.sh` executes both steps' real scripts against
-fixture trees to hold this: the assertion against LF, CRLF and unscannable trees,
-and the restore against a CRLF-but-clean checkout (byte-compared against the
-committed blob), a tree whose blobs carry the CR, a tree with no object store, an
-already-LF tree, and a tree it cannot repair at all - which it must fail on
-rather than certify.
+error too. `tests/fm-test-run.test.sh` executes the step's real script against
+fixture trees to hold this: an LF tree, a small CRLF tree, a CRLF tree whose scan
+output is larger than a pipe buffer, and a tree it cannot finish scanning - which
+it must fail on rather than certify.
 
 ## The harness PATH
 

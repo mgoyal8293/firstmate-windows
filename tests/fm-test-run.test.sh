@@ -795,20 +795,8 @@ test_windows_ci_lf_guard_never_reports_lf_without_a_clean_scan() {
   local tmp guard out rc
   tmp=$(mktemp -d "${TMPDIR:-/tmp}/fm-test-run-lfguard.XXXXXX")
   guard="$tmp/guard.sh"
-  ruby -ryaml -e '
-doc = YAML.load_file(ARGV[0])
-jobs = doc.fetch("jobs")
-scripts = jobs.map { |name, job|
-  step = job.fetch("steps").find { |s|
-    s.is_a?(Hash) && s["name"] == "Assert the working tree is LF"
-  }
-  raise "job #{name} has no LF assertion step" if step.nil?
-  step.fetch("run")
-}
-raise "every Windows job must carry the LF assertion" unless scripts.size == jobs.size
-raise "the LF assertion must be one spelling, not per-job variants" unless scripts.uniq.size == 1
-print scripts.first
-' "$ROOT/.github/workflows/windows-ci.yml" > "$guard" \
+  workflow_step_script "$ROOT/.github/workflows/windows-ci.yml" \
+    "Assert the working tree is LF" "$guard" every-job \
     || { rm -rf "$tmp"; fail "could not extract the LF assertion step from windows-ci.yml"; }
   [ -s "$guard" ] || { rm -rf "$tmp"; fail "the extracted LF assertion script is empty"; }
 
@@ -919,11 +907,11 @@ test_windows_ci_lf_steps_refuse_an_unusable_cr_detector() {
   #
   # A detector that cannot tell a CRLF file from an LF one must therefore say so
   # by name and refuse, rather than pass its verdict on the tree off as fact.
-  # Both steps' REAL scripts run here under GitHub's own invocation, with a
+  # The step's REAL script runs here under GitHub's own invocation, with a
   # `grep` on PATH that reproduces each measured direction.
   command -v ruby >/dev/null 2>&1 \
     || fail "ruby is required to parse .github/workflows/windows-ci.yml as YAML"
-  local tmp guard bash_bin name script mode tree out rc
+  local tmp guard bash_bin mode tree out rc
   bash_bin=$(command -v bash) || fail "bash must be resolvable to run the extracted steps"
   tmp=$(mktemp -d "${TMPDIR:-/tmp}/fm-test-run-crstub.XXXXXX")
   guard="$tmp/guard.sh"
@@ -938,34 +926,31 @@ test_windows_ci_lf_steps_refuse_an_unusable_cr_detector() {
   lfguard_tree "$tmp/lf" 0 4
   lfguard_tree "$tmp/crlf" 2 4
 
-  for name in assert:"$guard"; do
-    script=${name#*:}
-    for mode in empty blind; do
-      case $mode in
-        empty) tree=$tmp/lf ;;
-        *)     tree=$tmp/crlf ;;
-      esac
-      set +e
-      out=$(cd "$tree" && PATH="$tmp/stub-$mode:$PATH" \
-        "$bash_bin" --noprofile --norc -eo pipefail "$script" 2>&1)
-      rc=$?
-      set -e
-      [ "$rc" -ne 0 ] \
-        || { rm -rf "$tmp"; fail "the ${name%%:*} step must refuse a $mode CR detector, got exit 0: $out"; }
-      case "$out" in
-        *'::error::the CR detector is not usable in this shell'*) : ;;
-        *) rm -rf "$tmp"; fail "the ${name%%:*} step must name the unusable $mode CR detector, got: $out" ;;
-      esac
-      case "$out" in
-        *'working tree is LF'*|*'working tree restored as LF'*)
-          rm -rf "$tmp"
-          fail "the ${name%%:*} step certified the tree through a $mode CR detector: $out" ;;
-      esac
-      # And it refuses before touching anything: a detector it cannot trust is
-      # not licensed to rewrite 306 files.
-      [ "$(cat "$tmp/lf/bin/ok.sh")" = 'echo lf' ] \
-        || { rm -rf "$tmp"; fail "the ${name%%:*} step rewrote a file through a $mode CR detector"; }
-    done
+  for mode in empty blind; do
+    case $mode in
+      empty) tree=$tmp/lf ;;
+      *)     tree=$tmp/crlf ;;
+    esac
+    set +e
+    out=$(cd "$tree" && PATH="$tmp/stub-$mode:$PATH" \
+      "$bash_bin" --noprofile --norc -eo pipefail "$guard" 2>&1)
+    rc=$?
+    set -e
+    [ "$rc" -ne 0 ] \
+      || { rm -rf "$tmp"; fail "the LF assertion step must refuse a $mode CR detector, got exit 0: $out"; }
+    case "$out" in
+      *'::error::the CR detector is not usable in this shell'*) : ;;
+      *) rm -rf "$tmp"; fail "the LF assertion step must name the unusable $mode CR detector, got: $out" ;;
+    esac
+    case "$out" in
+      *'working tree is LF'*)
+        rm -rf "$tmp"
+        fail "the LF assertion step certified the tree through a $mode CR detector: $out" ;;
+    esac
+    # And it refuses before touching anything: a detector it cannot trust is not
+    # licensed to rewrite the tree it was pointed at.
+    [ "$(cat "$tree/bin/ok.sh")" = 'echo lf' ] \
+      || { rm -rf "$tmp"; fail "the LF assertion step rewrote a file through a $mode CR detector"; }
   done
 
   # And the real grep on this host passes the same calibration, so the guard is
@@ -983,19 +968,26 @@ test_windows_ci_lf_steps_refuse_an_unusable_cr_detector() {
 
 # Extract the `run` script of the step named <step> from <workflow>, requiring
 # that every job carrying it spells it identically, and write it to <out>.
-workflow_step_script() {  # <workflow> <step-name> <out>
+# Pass `every-job` as the fourth argument to additionally require that no job is
+# missing the step - what a lane needs from a tripwire it cannot afford one job
+# to ship without.
+workflow_step_script() {  # <workflow> <step-name> <out> [every-job]
   ruby -ryaml -e '
 doc = YAML.load_file(ARGV[0])
 want = ARGV[1]
-scripts = doc.fetch("jobs").filter_map { |name, job|
+jobs = doc.fetch("jobs")
+scripts = jobs.filter_map { |name, job|
   step = job.fetch("steps").find { |s| s.is_a?(Hash) && s["name"] == want }
   next nil if step.nil?
   step.fetch("run")
 }
 raise "no job carries a step named #{want.inspect}" if scripts.empty?
+if ARGV[2] == "every-job" && scripts.size != jobs.size
+  raise "every job must carry a step named #{want.inspect}"
+end
 raise "#{want.inspect} must be one spelling, not per-job variants" unless scripts.uniq.size == 1
 print scripts.first
-' "$1" "$2" > "$3"
+' "$1" "$2" "${4:-}" > "$3"
 }
 
 # A bin/ directory holding ONLY the named tools, as stubs, plus the coreutils the
