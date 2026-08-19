@@ -164,7 +164,9 @@ jobs:
         # silently empty the PATH again.
         run: |
           set -eu
-          base="/mingw64/bin:/usr/bin:/bin:/usr/local/bin"
+          # The seed is overridable so the assertions below can be exercised
+          # against a controlled toolchain; CI never sets it and gets the literal.
+          base="${FM_HARNESS_PATH_SEED:-/mingw64/bin:/usr/bin:/bin:/usr/local/bin}"
           # PATH is colon-separated, so a Windows-form directory splits at its
           # drive-letter colon: "C:\npm\prefix" becomes a bare relative entry
           # "C" plus a "\npm\prefix" that MSYS reads as root-relative and that
@@ -185,6 +187,13 @@ jobs:
               *) base="$base:$dir" ;;
             esac
           }
+          # Advisory on purpose, and NOT the same question as the reachability
+          # check below. This asks whether a candidate exists in the ambient PATH
+          # while the harness PATH is being built, over a wider list than the
+          # suite asserts on - curl, openssl, tar and npx are here so their
+          # directories are picked up when present, not because a lane member
+          # needs them. The reachability check is the single authority on whether
+          # the PATH that was actually built is usable.
           for tool in git node npm npx gh jq perl curl openssl tar; do
             resolved=$(command -v "$tool" 2>/dev/null) || {
               echo "note: $tool not on PATH; not added to the harness PATH"
@@ -196,21 +205,43 @@ jobs:
           # not the directory npm itself lives in.
           npm_bin=$(npm prefix -g 2>/dev/null) || npm_bin=
           [ -z "$npm_bin" ] || add_dir "$npm_bin"
-          echo "FM_TEST_BASE_PATH=$base" >> "$GITHUB_ENV"
           echo "harness PATH: $base"
+          entries=$(tr ':' '\n' <<<"$base")
           echo "--- harness PATH entries, one per line ---"
-          printf '%s\n' "$base" | tr ':' '\n' | sed 's/^/  /'
+          sed 's/^/  /' <<<"$entries"
           # A surviving Windows-form entry shows up here as a single-letter
           # directory or one holding a backslash. Fail rather than run the lane
-          # with a PATH that silently lost the entry it was built to add.
-          if printf '%s\n' "$base" | tr ':' '\n' | grep -qE '^[A-Za-z]$|\\'; then
-            echo "::error::harness PATH holds a Windows-form entry; cygpath conversion did not take"
+          # with a PATH that silently lost the entry it was built to add. Matched
+          # against a captured list rather than through a pipeline, because
+          # `-o pipefail` would let a reader closing the pipe early turn a match
+          # into a pass.
+          winform=$(grep -E '^[A-Za-z]$|\\' <<<"$entries") || winform=
+          if [ -n "$winform" ]; then
+            echo "::error::harness PATH holds a Windows-form entry; cygpath conversion did not take: $winform"
             exit 1
           fi
+          # The whole table prints before any verdict, so one run shows the
+          # complete picture of a runner-image move rather than stopping at the
+          # first casualty. A tool the suite asserts on that the built PATH
+          # cannot reach means FM_TEST_BASE_PATH would misdescribe the machine,
+          # and the lane would then fail for the harness's reasons rather than
+          # the code's - so this is fatal, exactly as the Windows-form check is.
           echo "--- reachability of the tools the suite asserts on ---"
+          unreachable=
           for tool in git node gh jq perl; do
-            printf '%-8s %s\n' "$tool" "$(PATH="$base" command -v "$tool" || echo UNREACHABLE)"
+            found=$(PATH="$base" command -v "$tool" 2>/dev/null) || {
+              found=UNREACHABLE
+              unreachable="${unreachable:+$unreachable }$tool"
+            }
+            printf '%-8s %s\n' "$tool" "$found"
           done
+          if [ -n "$unreachable" ]; then
+            echo "::error::harness PATH cannot reach: $unreachable - the suite asserts on these tools, so FM_TEST_BASE_PATH would misdescribe the machine. PATH was: $base"
+            exit 1
+          fi
+          # Published only after both verdicts, so a PATH that failed validation
+          # is never handed to the lane.
+          echo "FM_TEST_BASE_PATH=$base" >> "$GITHUB_ENV"
       - name: Run Windows shard ${{ matrix.shard }}
         env:
           # job-total rather than a literal, so shrinking or growing the matrix

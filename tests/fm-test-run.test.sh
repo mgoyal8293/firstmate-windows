@@ -876,6 +876,124 @@ print scripts.first
   pass "windows-ci LF guard detects CRLF at any scale and refuses to certify an unfinished scan"
 }
 
+# Extract the `run` script of the step named <step> from <workflow>, requiring
+# that every job carrying it spells it identically, and write it to <out>.
+workflow_step_script() {  # <workflow> <step-name> <out>
+  ruby -ryaml -e '
+doc = YAML.load_file(ARGV[0])
+want = ARGV[1]
+scripts = doc.fetch("jobs").filter_map { |name, job|
+  step = job.fetch("steps").find { |s| s.is_a?(Hash) && s["name"] == want }
+  next nil if step.nil?
+  step.fetch("run")
+}
+raise "no job carries a step named #{want.inspect}" if scripts.empty?
+raise "#{want.inspect} must be one spelling, not per-job variants" unless scripts.uniq.size == 1
+print scripts.first
+' "$1" "$2" > "$3"
+}
+
+# A bin/ directory holding ONLY the named tools, as stubs, plus the coreutils the
+# harness-PATH step itself shells out to. Making it the step's whole world - both
+# its ambient PATH and its seed - is what lets a tool be genuinely unreachable,
+# which the real /usr/bin can never be made to be.
+lfharness_bin() {  # <dir> <tool>...
+  local dir=$1 tool real
+  shift
+  mkdir -p "$dir"
+  for real in dirname tr sed grep printf env; do
+    tool=$(command -v "$real" 2>/dev/null) || continue
+    ln -sf "$tool" "$dir/$real"
+  done
+  for tool in "$@"; do
+    printf '#!/usr/bin/env bash\necho %s stub\n' "$tool" > "$dir/$tool"
+    chmod +x "$dir/$tool"
+  done
+}
+
+test_windows_ci_harness_path_fails_on_an_unreachable_tool() {
+  # .github/workflows/windows-ci.yml's "Resolve the test harness PATH" step
+  # publishes FM_TEST_BASE_PATH, the only PATH 16 test files give the code under
+  # test. If a runner-image move leaves a tool the suite asserts on unreachable
+  # through that PATH, the lane runs against a machine the harness has
+  # misdescribed and fails for the harness's reasons rather than the code's.
+  #
+  # Executes the step's REAL script under GitHub's own invocation
+  # (`bash --noprofile --norc -eo pipefail`), so this pins behavior rather than
+  # the text of the file.
+  command -v ruby >/dev/null 2>&1 \
+    || fail "ruby is required to parse .github/workflows/windows-ci.yml as YAML"
+  local tmp step out rc all bash_bin published
+  all="git node gh jq perl"
+  bash_bin=$(command -v bash) || fail "bash must be resolvable to run the extracted step"
+  tmp=$(mktemp -d "${TMPDIR:-/tmp}/fm-test-run-harnesspath.XXXXXX")
+  step="$tmp/step.sh"
+  workflow_step_script "$ROOT/.github/workflows/windows-ci.yml" \
+    "Resolve the test harness PATH" "$step" \
+    || { rm -rf "$tmp"; fail "could not extract the harness PATH step from windows-ci.yml"; }
+  [ -s "$step" ] || { rm -rf "$tmp"; fail "the extracted harness PATH step is empty"; }
+
+  # Every asserted-on tool present: the step must succeed and publish the PATH.
+  # shellcheck disable=SC2086 # deliberate word splitting of the tool list
+  lfharness_bin "$tmp/full" $all
+  set +e
+  out=$(FM_HARNESS_PATH_SEED="$tmp/full" GITHUB_ENV="$tmp/env-full" \
+    PATH="$tmp/full" "$bash_bin" --noprofile --norc -eo pipefail "$step" 2>&1)
+  rc=$?
+  set -e
+  [ "$rc" -eq 0 ] || { rm -rf "$tmp"; fail "a complete toolchain must pass the harness PATH step, got exit $rc: $out"; }
+  published=$(cat "$tmp/env-full" 2>/dev/null || true)
+  case "$published" in
+    "FM_TEST_BASE_PATH=$tmp/full"*) : ;;
+    *) rm -rf "$tmp"; fail "a passing step must publish FM_TEST_BASE_PATH seeded from the fixture, got: $published" ;;
+  esac
+
+  # THE REGRESSION. jq unreachable: the step used to print "UNREACHABLE" in its
+  # table and exit 0 anyway, publishing a PATH it had just shown to be unusable.
+  lfharness_bin "$tmp/nojq" git node gh perl
+  set +e
+  out=$(FM_HARNESS_PATH_SEED="$tmp/nojq" GITHUB_ENV="$tmp/env-nojq" \
+    PATH="$tmp/nojq" "$bash_bin" --noprofile --norc -eo pipefail "$step" 2>&1)
+  rc=$?
+  set -e
+  [ "$rc" -ne 0 ] \
+    || { rm -rf "$tmp"; fail "an unreachable asserted-on tool must fail the step, got exit 0: $out"; }
+  case "$out" in
+    *'::error::harness PATH cannot reach: jq'*) : ;;
+    *) rm -rf "$tmp"; fail "the failure must name the unreachable tool, got: $out" ;;
+  esac
+  case "$out" in
+    *"PATH was: $tmp/nojq"*) : ;;
+    *) rm -rf "$tmp"; fail "the failure must print the PATH it built, got: $out" ;;
+  esac
+  [ ! -s "$tmp/env-nojq" ] \
+    || { rm -rf "$tmp"; fail "a failing step must not publish FM_TEST_BASE_PATH, got: $(cat "$tmp/env-nojq")"; }
+
+  # Two casualties: the complete table prints before the verdict, so one run
+  # diagnoses the whole runner-image move rather than the first tool to break.
+  lfharness_bin "$tmp/nogh" git node jq
+  set +e
+  out=$(FM_HARNESS_PATH_SEED="$tmp/nogh" GITHUB_ENV="$tmp/env-nogh" \
+    PATH="$tmp/nogh" "$bash_bin" --noprofile --norc -eo pipefail "$step" 2>&1)
+  rc=$?
+  set -e
+  [ "$rc" -ne 0 ] || { rm -rf "$tmp"; fail "two unreachable tools must fail the step, got exit 0: $out"; }
+  case "$out" in
+    *'::error::harness PATH cannot reach: gh perl'*) : ;;
+    *) rm -rf "$tmp"; fail "the failure must name every unreachable tool, got: $out" ;;
+  esac
+  local tool
+  for tool in $all; do
+    case "$out" in
+      *"$tool"*) : ;;
+      *) rm -rf "$tmp"; fail "the reachability table must list $tool before the verdict, got: $out" ;;
+    esac
+  done
+
+  rm -rf "$tmp"
+  pass "windows-ci harness PATH step fails, and names the tools, when the built PATH cannot reach them"
+}
+
 test_aggregate_json() {
   local tmp a b
   tmp=$(mktemp -d "${TMPDIR:-/tmp}/fm-test-run-aggjson.XXXXXX")
@@ -938,4 +1056,5 @@ test_jobs_requires_proven_isolated
 test_jobs_parallel_scheduler_and_failure_propagation
 test_herdr_ci_family_run_has_a_step_timeout
 test_windows_ci_lf_guard_never_reports_lf_without_a_clean_scan
+test_windows_ci_harness_path_fails_on_an_unreachable_tool
 test_aggregate_json

@@ -114,9 +114,34 @@ a bare relative `C` plus a `\npm\prefix` that MSYS reads as root-relative and
 that does not exist. `npm prefix -g` prints exactly that form, because npm
 resolves through native node - so the npm global bin, the entry that exists
 because `npm install -g` puts `tasks-axi` there, was the one entry the step
-failed to add. `cygpath` is probed rather than assumed, and the step now prints
+failed to add. `cygpath` is probed rather than assumed, and the step prints
 every entry and fails on a surviving single-letter or backslash entry, so this
-cannot regress silently. The `windows-behavior` job installs no ShellCheck: no
+cannot regress silently.
+
+The step then checks that the PATH it built can actually **reach** `git`, `node`,
+`gh`, `jq` and `perl` - the tools the suite asserts on - and **fails the job** if
+any is unreachable, naming the tools and printing the PATH so a runner-image move
+is diagnosable from the log alone. The complete table prints first, so one run
+shows every casualty rather than stopping at the first. This is the same trade
+the Linux lane makes with its hard-failing "Require tmux for e2e tests" step:
+collecting exactly the evidence needed to fail and then exiting 0 leaves the lane
+running against a machine the harness has misdescribed, and the resulting red
+shard blames the code for the harness's problem.
+
+The earlier per-tool loop that prints `note: <tool> not on PATH` stays advisory,
+deliberately. It asks a different question - does a candidate exist in the
+*ambient* PATH while the harness PATH is being assembled - over a wider list that
+includes `curl`, `openssl`, `tar` and `npx`, which are collected opportunistically
+and which no lane member asserts on. Making that fatal would redden the lane for a
+tool nothing needs. The reachability check is the single authority.
+
+`FM_TEST_BASE_PATH` is published to `$GITHUB_ENV` only after both verdicts pass,
+so a PATH that failed validation is never handed to the lane. The seed list is
+overridable through `FM_HARNESS_PATH_SEED` so `tests/fm-test-run.test.sh` can
+execute the step's real script against a controlled toolchain and prove the
+unreachable case fails; CI never sets it and gets the literal seed.
+
+The `windows-behavior` job installs no ShellCheck: no
 lane member runs it, and `windows-lint` already proves that installer on the
 runner.
 All 16 test files that build a restricted PATH honour `FM_TEST_BASE_PATH` as of
