@@ -394,13 +394,17 @@ test_portable_shard_union_and_coverage_guard() {
   pass "portable shard union, disjointness, and coverage guard hold"
 }
 
+unmeasured_serial_count() { # <coverage guard stdout>
+  printf '%s\n' "$1" | sed -n 's/.*unmeasured_serial=\([0-9]*\).*/\1/p'
+}
+
 test_unmeasured_serial_report_names_the_unhinted_script() {
-  local sandbox out err rc f count
-  # The production tree is fully hinted, so the report the guard added is only
-  # exercised against a lane that actually contains an unmeasured script. A
-  # sandbox root gives it one: the runner resolves its own root from its
-  # location and derives the serial lane from tests/*.test.sh, so a copy beside
-  # a mirrored inventory plus one new script drives the real guard.
+  local sandbox out err rc f baseline count expected
+  # The report the guard added is only exercised against a lane that actually
+  # contains an unmeasured script. A sandbox root gives it one: the runner
+  # resolves its own root from its location and derives the serial lane from
+  # tests/*.test.sh, so a copy beside a mirrored inventory drives the real guard
+  # and one added script is the only difference between the two runs below.
   sandbox=$(fm_test_tmproot fm-test-run-unmeasured) || fail "could not create sandbox root"
   mkdir -p "$sandbox/bin" "$sandbox/tests"
   cp "$RUNNER" "$sandbox/bin/fm-test-run.sh"
@@ -408,19 +412,34 @@ test_unmeasured_serial_report_names_the_unhinted_script() {
   for f in "$ROOT"/tests/*.test.sh; do
     : > "$sandbox/tests/$(basename "$f")"
   done
-  : > "$sandbox/tests/fm-zzz-unmeasured-probe.test.sh"
 
+  # Baseline first, so the assertion is the delta this case creates and not the
+  # production tree's own hint coverage. A newly added test legitimately has no
+  # measured duration until it has run once in CI, so an absolute count here
+  # would red this required lane for adding a test - the same self-inflicted
+  # false red the guard reports rather than refuses in order to avoid.
+  out=$("$sandbox/bin/fm-test-run.sh" --check-coverage 2>"$sandbox/baseline-err.txt")
+  rc=$?
+  [ "$rc" = 0 ] || fail "coverage guard must pass on the mirrored sandbox: $out $(cat "$sandbox/baseline-err.txt")"
+  baseline=$(unmeasured_serial_count "$out")
+  case $baseline in
+    ''|*[!0-9]*) fail "coverage guard did not report an unmeasured serial count: $out" ;;
+  esac
+
+  : > "$sandbox/tests/fm-zzz-unmeasured-probe.test.sh"
   out=$("$sandbox/bin/fm-test-run.sh" --check-coverage 2>"$sandbox/err.txt")
   rc=$?
   err=$(cat "$sandbox/err.txt")
   # Reported, never refused: an unmeasured script must not fail the guard.
   [ "$rc" = 0 ] || fail "unmeasured serial script must not fail the coverage guard: $out $err"
   assert_contains "$out" "FM_TEST_COVERAGE ok" "coverage guard success marker in sandbox"
-  # The count must be the real difference, not a constant: swapped comm
-  # operands or a divergent sort order report 0 here for a lane that has one.
-  count=$(printf '%s\n' "$out" | sed -n 's/.*unmeasured_serial=\([0-9]*\).*/\1/p')
-  [ "$count" = 1 ] \
-    || fail "guard must count the one unhinted serial script, reported unmeasured_serial=$count: $out"
+  # The count must move with the lane, not be a constant: swapped comm operands
+  # or a divergent sort order leave it at the baseline for a lane that gained an
+  # unmeasured script.
+  count=$(unmeasured_serial_count "$out")
+  expected=$((baseline + 1))
+  [ "$count" = "$expected" ] \
+    || fail "one added unhinted script must raise unmeasured_serial from $baseline to $expected, got $count: $out"
   printf '%s\n' "$err" | grep -Fq 'tests/fm-zzz-unmeasured-probe.test.sh' \
     || fail "guard must name the unhinted serial script on stderr: $err"
   # And a hinted script must not be swept in with it.

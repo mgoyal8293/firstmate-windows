@@ -70,7 +70,7 @@ A script with no hint gets the conservative `PORTABLE_SERIAL_DEFAULT_WEIGHT_MS` 
 Hints affect balance, not coverage: the coverage guard keeps the partition complete and disjoint whatever they say.
 Past the job cap, however, a stale hint stops being merely a slower shard.
 A shard that overruns `timeout-minutes` is cancelled and reports no verdict at all, which a required check can never turn green and which is indistinguishable from a hang.
-That is what happened on 2026-08-19: the table still described a 69-script lane while the lane had grown to 116 scripts and about 42 minutes, 45 of the selected scripts had no hint and were packed at the flat default - including `tests/fm-remote-secondmate-lifecycle-e2e.test.sh` at 157171 ms, the longest of the unhinted scripts - and packing believed all four shards were 8.5 minutes while the measured spread was 7.7 to 14.7 minutes.
+That is what happened on 2026-08-19: the table still described a 69-script lane while the lane had grown to 116 scripts and about 42 minutes, 45 of the selected scripts had no hint and were packed at the flat default - including `tests/fm-remote-secondmate-lifecycle-e2e.test.sh` at 157171 ms, the longest of the unhinted scripts - and packing believed all four shards were 8.5 minutes while the measured spread on red run [32142691561](https://github.com/mgoyal8293/firstmate-windows/actions/runs/32142691561) on `main` the day before was 7.72 minutes for shard 2 to 14.68 minutes for shard 4.
 `bin/fm-test-run.sh --check-coverage` therefore reports `unmeasured_serial=<n>` and names any selected serial script still packed at the default, so the drift is visible in every CI run instead of only surfacing as a cancelled job.
 
 | Lane | Script count | Estimated duration |
@@ -83,8 +83,15 @@ That is what happened on 2026-08-19: the table still described a 69-script lane 
 
 Those four numbers are the packer's own arithmetic over the table above, not a measurement.
 
-Measured on green run [32259417831](https://github.com/mgoyal8293/firstmate-windows/actions/runs/32259417831), the first real lane run with the refreshed hints: all four shards passed, the worst shard fell from 13.43 min to 11.67 min, and the spread roughly halved.
+Measured on green run [32259417831](https://github.com/mgoyal8293/firstmate-windows/actions/runs/32259417831), the first real lane run with the refreshed hints: all four shards passed, the worst shard fell to 11.67 min from the 13.43 min it took on run [32159215212](https://github.com/mgoyal8293/firstmate-windows/actions/runs/32159215212) - the run whose artifacts supplied these weights - and the spread roughly halved.
 The overflow was removed rather than relocated - no other shard took up the time the worst one gave back.
+The two "before" figures above are two different runs, not one quantity stated twice: 14.68 min is shard 4 on red run 32142691561, and 13.43 min is the worst shard on green run 32159215212.
+
+Script time alone does not reach the cap, which is why the weights are only most of the story.
+The job wall clock adds runner setup and checkout on top of it.
+On run 32142691561, `Behavior portable serial 4` ran 13:29:51Z to 13:44:41Z - 14m50s of wall clock against 14m41s of script time, about 9s of overhead.
+The job that was actually cancelled is run [32222210223](https://github.com/mgoyal8293/firstmate-windows/actions/runs/32222210223) on `fm/winfm-tmux-leakage`, where the same shard ran 06:09:14Z to 06:24:29Z - 15m15s of wall clock, conclusion `cancelled`, no verdict at all.
+Script time was already within roughly 20 seconds of the cap and ordinary job overhead tipped it over, so judge the remaining margin against script-time weights with that overhead included.
 
 The single longest script in the lane, `tests/fm-pr-check-security.test.sh` at 236511 ms, is the floor for any shard count.
 It was already hinted before the 2026-08-19 refresh, so it was never part of the unhinted set above.
@@ -92,7 +99,7 @@ It was already hinted before the 2026-08-19 refresh, so it was never part of the
 Refresh the hints by downloading the per-shard timing artifacts from a green CI run, replacing the `portable_serial_weight_hints` table in `bin/fm-test-run.sh` with the measured `path`/`duration_ms` pairs, and updating the table above:
 
 ```sh
-gh run download <run-id> -R kunchenguid/firstmate --pattern 'fm-test-timing-portable-serial-*' -D /tmp/fm-serial
+gh run download <run-id> -R mgoyal8293/firstmate-windows --pattern 'fm-test-timing-portable-serial-*' -D /tmp/fm-serial
 jq -r '.scripts[] | [.path, .duration_ms] | @tsv' /tmp/fm-serial/*.json | LC_ALL=C sort
 bin/fm-test-run.sh --check-coverage
 ```
