@@ -4,11 +4,6 @@ Repeatable evidence for the two timing guarantees the tracked watcher arm suites
 Current behavior of the Pi extension and the OpenCode plugins is owned by their own sources; this page records evidence only.
 
 Date: 2026-08-19.
-Status: work in progress. The readiness-budget and stdin-write findings below are
-closed and independently verified. The session-lock finding is closed against its
-counterfactual but its loaded-runner pass count is still being measured (run
-32224627637), so no runner row is recorded for it yet. One failure remains
-unisolated; see "Known residual".
 Node: v22.23.2 on both machines.
 Comparison base: `main` at `1baa477`.
 
@@ -90,11 +85,71 @@ ok - OpenCode watcher plugin requires session lock ownership
 The case now settles the decision through the coordinator, which coalesces onto the same in-flight evaluation and resolves when it does, so the owned-lock event starts from a finished verdict.
 It also asserts the refusal itself, which the pause only implied.
 
-## Known residual
+### Result
 
-One failure in this suite is recorded but not isolated: a wake delivered before any arm had recorded a row, three times in 150 runs at a load level that makes the runner roughly three times slower than the real serial shard.
-It did not reproduce in 168 workstation runs at 14-way concurrency, so no cause is claimed here.
-The assertion now distinguishes an unobserved delivery from a delivery that saw an empty arm log and prints the arm log with it, so the next occurrence carries its own evidence instead of a count.
+On `ubuntu-latest` under four background spinners, run [32224627637](https://github.com/mgoyal8293/firstmate-windows/actions/runs/32224627637):
+
+```console
+SESSION_LOCK=0/150
+OPERATIONAL_INPUT=0/25
+```
+
+## Why the observation window is derived from the same measurement
+
+Measuring the budget moved the failure rather than removing it, because the budget was only one of two bounds on the same operation.
+
+A hung successor is detected only when the budget expires, once per retry, so a case with `FM_WATCH_REARM_RETRY_LIMIT=2` cannot deliver its wake until three budgets, three retirements and two backoffs have elapsed, plus the child starts around them.
+Every driver that waited for that result used a literal `for (let i = 0; i < 500; i += 1)` with a 10ms sleep, about five seconds.
+The budget moves with the machine and that window did not, so the two crossed at roughly `(retryLimit + 1) x 5 x child start` against `500 x 10ms` - a child start near 333ms.
+
+On run [32224627637](https://github.com/mgoyal8293/firstmate-windows/actions/runs/32224627637), 150 runs of the case under four background spinners:
+
+```console
+PI_HUNG=92/150
+# arm child start 328ms measured, readiness budget 1640ms
+Error: no wake delivery was observed at all; arm log holds 4 rows
+```
+
+All 92 failures carry that identical message, and `arm log holds 4 rows` in every one of them is what rules the budget out: each attempt launched and recorded itself, so nothing was killed early and it was the test's own clock that ran out.
+The measured child start across those 92 failures spans 313-352ms, mean 324ms, and the 58 passing runs are below it.
+
+Counterfactual on a workstation, with `bash` shimmed so the extension's own spawn shape pays a runner's fork cost:
+
+```console
+$ bash <case>          # baseline, 415-424ms child start
+not ok - Pi must deliver the actionable wake after bounded hung-successor recovery
+Error: no wake delivery was observed at all; arm log holds 4 rows
+
+$ bash <case>          # derived observation window, same fork cost
+ok - Pi hung successor falls back to one typed actionable wake
+```
+
+Each case that compresses the budget now derives its deadline from the same measurement, through `fm_recovery_deadline_ms`.
+These are upper bounds on waiting rather than sleeps: every driver stops the moment its event lands, so sizing one from the worst case costs nothing on the passing path and only bounds how long a genuine failure takes to report.
+
+### Result
+
+On `ubuntu-latest` under the same four background spinners that failed the case 92 times in 150:
+
+```console
+FIXED_PI_HUNG=0/150
+FIXED_OC_HUNG=0/150
+```
+
+On a workstation, from frozen snapshots, across four fork-cost levels between 10ms and 621ms of child start: 150 consecutive runs of the fixed tree with no failures, against 70 consecutive baseline runs with no passes at 415ms and above.
+
+### The residual is closed by the same finding
+
+An earlier round recorded one failure it could not isolate: a wake apparently delivered before any arm had recorded a row, three times in 150 runs.
+The self-describing assertion it added is what resolved it.
+The ambiguous count meant "no delivery was observed", not "a delivery saw an empty log", and it is this same crossing on the OpenCode arm, whose plugin carries the same readiness, retire, backoff and retry-limit defaults and whose driver carried the same literal window.
+It is reproduced deterministically by the counterfactual above and passes 150/150 on the runner alongside the Pi case.
+
+### The rule this cost two rounds to learn
+
+When a test bound is derived from a measurement, every bound coupled to it must be derived from the same measurement.
+Fixing one side of a two-sided constraint moves the failure; it does not remove it.
+A derived bound must also print what it derived, which is the only reason this was diagnosable from a CI log instead of a fourth reproduction.
 
 ## Why the guard plugins guard their stdin write
 
