@@ -450,10 +450,10 @@ stale_marker_record() {  # <window> <state>  — create if absent
   [ -e "$marker" ] || _now > "$marker"
 }
 
-stale_marker_remove() {  # <window> <state>
-  local win=$1 state=$2 key
-  key=$(_stale_key "$(window_to_task "$win" "$state")")
-  rm -f "$state/.subsuper-stale-$key"
+stale_marker_remove() {  # <window> <state> [task]
+  local win=$1 state=$2 task=${3:-}
+  [ -n "$task" ] || task=$(window_to_task "$win" "$state")
+  rm -f "$state/.subsuper-stale-$(_stale_key "$task")"
 }
 
 # Pause marker: state/.subsuper-paused-<key> holds the epoch a declared pause was
@@ -461,10 +461,10 @@ stale_marker_remove() {  # <window> <state>
 # longer than a wedge) and re-surfaces the pause once per window. Recording is
 # create-if-absent so the timestamp is stable across a churny idle pane (many
 # distinct stale hashes map to one marker), keeping the cadence hash-immune.
-pause_marker_record() {  # <window> <state> - create if absent
-  local win=$1 state=$2 key marker
-  key=$(_stale_key "$(window_to_task "$win" "$state")")
-  marker="$state/.subsuper-paused-$key"
+pause_marker_record() {  # <window> <state> [task] - create if absent
+  local win=$1 state=$2 task=${3:-} marker
+  [ -n "$task" ] || task=$(window_to_task "$win" "$state")
+  marker="$state/.subsuper-paused-$(_stale_key "$task")"
   [ -e "$marker" ] || _now > "$marker"
 }
 
@@ -474,9 +474,9 @@ pause_marker_remove() {  # <window> <state>
   rm -f "$state/.subsuper-paused-$key"
 }
 
-clear_pause_tracking() {  # <window> <state>
-  local win=$1 state=$2 task key watcher_key
-  task=$(window_to_task "$win" "$state")
+clear_pause_tracking() {  # <window> <state> [task]
+  local win=$1 state=$2 task=${3:-} key watcher_key
+  [ -n "$task" ] || task=$(window_to_task "$win" "$state")
   key=$(_stale_key "$task")
   watcher_key=$(_stale_key "$win")
   rm -f "$state/.subsuper-paused-$key" "$state/.subsuper-stale-$key" \
@@ -484,17 +484,17 @@ clear_pause_tracking() {  # <window> <state>
     "$state/.stale-$watcher_key" "$state/.stale-since-$watcher_key" "$state/.wedge-escalations-$watcher_key"
 }
 
-reconcile_pause_tracking() {  # <window> <state> <last-status-line>
-  local win=$1 state=$2 last=$3 task key marker watcher_key
-  task=$(window_to_task "$win" "$state")
+reconcile_pause_tracking() {  # <window> <state> <last-status-line> [task]
+  local win=$1 state=$2 last=$3 task=${4:-} key marker watcher_key
+  [ -n "$task" ] || task=$(window_to_task "$win" "$state")
   key=$(_stale_key "$task")
   marker="$state/.subsuper-paused-$key"
   watcher_key=$(_stale_key "$win")
   if status_is_paused "$last"; then
-    stale_marker_remove "$win" "$state"
-    pause_marker_record "$win" "$state"
+    stale_marker_remove "$win" "$state" "$task"
+    pause_marker_record "$win" "$state" "$task"
   elif [ -e "$marker" ] || [ -e "$state/.paused-$watcher_key" ]; then
-    clear_pause_tracking "$win" "$state"
+    clear_pause_tracking "$win" "$state" "$task"
   fi
 }
 
@@ -515,7 +515,7 @@ migrate_watcher_pause_markers() {  # <state>
 }
 
 sync_pause_markers_from_signal() {  # <state> <signal files>
-  local state=$1 paths=$2 f last task win
+  local state=$1 paths=$2 f last task win found
   local -a files
   read -r -a files <<<"$paths"
   for f in "${files[@]}"; do
@@ -523,9 +523,10 @@ sync_pause_markers_from_signal() {  # <state> <signal files>
     [ -e "$f" ] || continue
     last=$(last_status_line "$f")
     task=$(basename "$f"); task=${task%.status}
-    win=$(window_for_task "$task" "$state" 2>/dev/null || true)
-    [ -n "$win" ] || continue
-    reconcile_pause_tracking "$win" "$state" "$last"
+    found=$(window_for_task "$task" "$state" 2>/dev/null || true)
+    [ -n "$found" ] || continue
+    win=${found%%$'\t'*}
+    reconcile_pause_tracking "$win" "$state" "$last" "$task"
   done
 }
 
@@ -612,16 +613,16 @@ pane_input_pending() {  # <target> [backend]
   [ "$(fm_backend_composer_state "$backend" "$target" 2>/dev/null)" != empty ]
 }
 
-task_window_backend() {  # <window> <state>
-  local win=$1 state=$2 task meta
-  task=$(window_to_task "$win" "$state")
+task_window_backend() {  # <window> <state> [task]
+  local win=$1 state=$2 task=${3:-} meta
+  [ -n "$task" ] || task=$(window_to_task "$win" "$state")
   meta="$state/$task.meta"
   fm_backend_of_meta "$meta"
 }
 
-task_window_harness() {  # <window> <state>
-  local win=$1 state=$2 task meta
-  task=$(window_to_task "$win" "$state")
+task_window_harness() {  # <window> <state> [task]
+  local win=$1 state=$2 task=${3:-} meta
+  [ -n "$task" ] || task=$(window_to_task "$win" "$state")
   meta="$state/$task.meta"
   grep '^harness=' "$meta" 2>/dev/null | cut -d= -f2- || true
 }
@@ -631,11 +632,11 @@ task_window_harness() {  # <window> <state>
 # when the endpoint could not be read at all. Only an exact busy verdict is
 # working: unknown semantic state never becomes busy and never becomes a
 # silent idle, so a stale pane whose state cannot be proven surfaces.
-stale_window_is_busy() {  # <window> <state>
-  local win=$1 state=$2 backend harness label task tail40 verdict
-  backend=$(task_window_backend "$win" "$state")
-  harness=$(task_window_harness "$win" "$state")
-  task=$(window_to_task "$win" "$state")
+stale_window_is_busy() {  # <window> <state> [task]
+  local win=$1 state=$2 task=${3:-} backend harness label tail40 verdict
+  [ -n "$task" ] || task=$(window_to_task "$win" "$state")
+  backend=$(task_window_backend "$win" "$state" "$task")
+  harness=$(task_window_harness "$win" "$state" "$task")
   label="fm-$task"
   tail40=$(fm_backend_capture "$backend" "$win" 40 "$label" 2>/dev/null) || return 2
   verdict=$(fm_busy_classify "$backend" "$win" "$harness" "$task" "$state" "$tail40")
@@ -969,7 +970,7 @@ _oldest_line_age() {  # <buf> -> seconds since the oldest buffered item first ar
 #  3) heartbeat scan: every HEARTBEAT_SCAN_SECS, grep state/*.status for a
 #     captain-relevant line the per-wake classifier missed and escalate it.
 housekeeping() {  # <state>
-  local state=$1 now due f key task win marker age last max_defer oldest pause_secs
+  local state=$1 now due f key task win found marker age last max_defer oldest pause_secs
   now=$(_now)
   migrate_watcher_pause_markers "$state"
 
@@ -1009,25 +1010,26 @@ housekeeping() {  # <state>
     key="${marker##*.subsuper-stale-}"
     # Reconstruct the backend target from metadata, with the live tmux list as the
     # legacy fallback for old markers that predate meta lookup.
-    win=$(window_for_task "$key" "$state" 2>/dev/null || true)
-    if [ -z "$win" ]; then
+    found=$(window_for_task "$key" "$state" 2>/dev/null || true)
+    if [ -z "$found" ]; then
       # Window gone (task torn down): drop the marker, nothing to escalate.
       rm -f "$marker"; continue
     fi
-    task=$(window_to_task "$win" "$state")
+    win=${found%%$'\t'*}
+    task=${found#*$'\t'}
     last=$(last_status_line "$state/$task.status")
     if [ -n "$last" ] && status_is_paused "$last"; then
-      reconcile_pause_tracking "$win" "$state" "$last"
+      reconcile_pause_tracking "$win" "$state" "$last" "$task"
       continue
     fi
     age=$(( now - $(cat "$marker" 2>/dev/null || echo "$now") ))
     [ "$age" -ge "${FM_STALE_ESCALATE_SECS:-$STALE_ESCALATE_SECS_DEFAULT}" ] || continue
-    stale_window_is_busy "$win" "$state"
+    stale_window_is_busy "$win" "$state" "$task"
     case "$?" in
       0) rm -f "$marker" ;;
       2) rm -f "$marker" ;;
       *) escalate_add "$state" "stale persisted ${age}s (possible wedge): $win"
-         stale_marker_remove "$win" "$state" ;;
+         stale_marker_remove "$win" "$state" "$task" ;;
     esac
   done
 
@@ -1041,19 +1043,20 @@ housekeeping() {  # <state>
   for marker in "$state"/.subsuper-paused-*; do
     [ -e "$marker" ] || continue
     key="${marker##*.subsuper-paused-}"
-    win=$(window_for_task "$key" "$state" 2>/dev/null || true)
-    if [ -z "$win" ]; then
+    found=$(window_for_task "$key" "$state" 2>/dev/null || true)
+    if [ -z "$found" ]; then
       rm -f "$marker"; continue
     fi
-    task=$(window_to_task "$win" "$state")
+    win=${found%%$'\t'*}
+    task=${found#*$'\t'}
     last=$(last_status_line "$state/$task.status")
     if [ -z "$last" ] || ! status_is_paused "$last"; then
-      reconcile_pause_tracking "$win" "$state" "$last"
+      reconcile_pause_tracking "$win" "$state" "$last" "$task"
       continue
     fi
     age=$(( now - $(cat "$marker" 2>/dev/null || echo "$now") ))
     [ "$age" -ge "$pause_secs" ] || continue
-    stale_window_is_busy "$win" "$state"
+    stale_window_is_busy "$win" "$state" "$task"
     case "$?" in
       0) rm -f "$marker" ;;
       2) rm -f "$marker" ;;
@@ -1119,18 +1122,24 @@ _home_backend() {
 # id cannot be recovered from it on anything but tmux; the label carries the id
 # on every backend, and the target is what the caller gets back to address the
 # endpoint with.
-window_for_task() {  # <task-key> [state]
+#
+# Both halves are therefore printed as "<target>\t<task>": the target addresses
+# the endpoint, and the task is the identity this function MATCHED ON, which the
+# caller would otherwise have to recover from the opaque target. Callers use the
+# printed id instead of re-deriving one, since only tmux targets carry it.
+window_for_task() {  # <task-key> [state] -> "<target>\t<task>"
   local key=$1 state=${2:-$(_state_root)} meta task w label
   for meta in "$state"/*.meta; do
     [ -e "$meta" ] || continue
     task=$(basename "$meta"); task=${task%.meta}
     [ "$(_stale_key "$task")" = "$key" ] || continue
     w=$(fm_backend_target_of_meta "$meta")
-    [ -n "$w" ] && { printf '%s' "$w"; return 0; }
+    [ -n "$w" ] && { printf '%s\t%s' "$w" "$task"; return 0; }
   done
   while IFS=$'\t' read -r w label; do
     [ -n "$w" ] && [ -n "$label" ] || continue
-    [ "$(_stale_key "${label#fm-}")" = "$key" ] && { printf '%s' "$w"; return 0; }
+    task=${label#fm-}
+    [ "$(_stale_key "$task")" = "$key" ] && { printf '%s\t%s' "$w" "$task"; return 0; }
   done < <(fm_backend_list_task_windows "$(_home_backend)" 2>/dev/null)
   return 1
 }
