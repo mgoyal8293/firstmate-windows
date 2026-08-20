@@ -16,12 +16,20 @@ DRAIN="$ROOT/bin/fm-wake-drain.sh"
 
 TMP_ROOT=$(fm_test_tmproot fm-wake-tests)
 
-# How long a watcher gets to start, poll, print its wake and exit before the
-# assertion calls it wedged. Measured latency for that whole cycle is 1.5-1.6s
-# on Linux, which uses 40% of the 4.0s Linux bound, and 8.9-10.4s on Git Bash,
-# where MSYS process creation costs 14-18x more. Scaling the bound on Windows -
-# rather than loosening it everywhere - keeps the Linux tripwire tight while
-# giving Windows the same ~2.5x headroom over its own measured worst case.
+# How many poll iterations a watcher gets to start, poll, print its wake and
+# exit before the assertion calls it wedged. The unit is ITERATIONS, not
+# seconds: wait_for_exit spends one liveness check plus one fixed `sleep 0.1`
+# per pass, measured at 0.106s per iteration on Linux and 0.202s on Git Bash.
+# So 40 iterations is a 4.3s bound against a 1.5-1.6s measured cycle (2.6x
+# headroom), and 300 iterations is a 61s bound against 8.9-10.4s on Git Bash
+# (5.8x headroom) - more generous than parity, which errs safe on the platform
+# whose timing is least stable. Scaling the bound on Windows, rather than
+# loosening it everywhere, keeps the Linux tripwire tight.
+# The 0.1s sleep, not the fork, dominates each iteration on both platforms:
+# the fork/ps overhead alone is 6ms on Linux against 102ms on Git Bash (17x,
+# the fork-cost thesis exactly), yet the per-iteration total only doubles
+# (1.9x) because that fixed floor does not scale. This loop obeys the thesis
+# while illustrating it poorly, so neither ratio means anything unlabelled.
 WATCHER_EXIT_LIMIT=40
 case "$(uname -s)" in
   MINGW*|MSYS*|CYGWIN*) WATCHER_EXIT_LIMIT=300 ;;

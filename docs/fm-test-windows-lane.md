@@ -428,15 +428,33 @@ Windows failure in the file and the exec-wrapper fix holds.
 `wait_for_exit` was instrumented to report observed latency for the watcher's
 start-poll-print-exit cycle:
 
-| | first signal | second signal | bound | headroom |
-|---|---:|---:|---:|---:|
-| Linux | 1.6s | 1.5s | 4.0s | 2.5x |
-| Git Bash | 10.4s | 8.9s | 4.0s | exceeded 2.6x |
+| | first signal | second signal | bound (iterations) | that bound in wall clock | headroom |
+|---|---:|---:|---:|---:|---:|
+| Linux | 1.6s | 1.5s | 40 | 4.3s | 2.6x |
+| Git Bash | 10.4s | 8.9s | 300 | 61s | 5.8x |
 
-The Windows bound is 30s, giving Windows the same ~2.5x headroom over its own
-measured worst case that Linux has over its own. Scaled in a Windows arm so the
-Linux tripwire keeps its sensitivity.
+`WATCHER_EXIT_LIMIT` counts poll ITERATIONS, not seconds: `wait_for_exit` does
+one liveness check plus one fixed `sleep 0.1` per pass, timed against a live pid
+at 0.106s per iteration on Linux and 0.202s on Git Bash, linear at 40, 100 and
+300. So 40 iterations measures 4.24-4.31s on Linux, and the Windows arm's 300
+measures 60.58s - a ~61s bound, not the 30s an earlier draft of this section
+claimed, and 5.8x headroom over the 10.4s worst case rather than ~2.5x. The
+bound is therefore more generous than described, so the tripwire errs safe; it
+is less sensitive than parity, not closer to flaking. Before the Windows arm,
+Git Bash ran the same 40 iterations, which is ~8.1s there rather than Linux's
+4.3s, and the 10.4s cycle still overran it. Scaled in a Windows arm so the Linux
+tripwire keeps its sensitivity.
 Before: 4 ok / 1 failed. After: **rc=0, 19 ok**.
+
+One nuance, because the mechanism is the reverse of the obvious reading: the
+fork is not what dominates this loop. Each iteration also pays a constant 0.1s
+sleep that does not scale with platform, and that fixed floor dominates the
+per-iteration total on both platforms. The fork/`ps` overhead alone - the total
+minus that sleep - is 6ms on Linux against 102ms on Git Bash, a 17x ratio that
+sits squarely inside this lane's 14-18x fork-cost thesis, while the
+per-iteration total only rises 1.9x. This loop obeys the thesis precisely and
+illustrates it poorly, so either figure quoted without saying which one it is
+misleads in one direction or the other.
 
 ### `fm-teardown.test.sh` - isolated, fix belongs elsewhere
 
