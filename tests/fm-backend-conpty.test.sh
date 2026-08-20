@@ -358,8 +358,16 @@ SH
 
   # A CR-bearing copy of the tracked file, in a case-local root the adapter
   # resolves the rcfile from. Only the rcfile lookup reads this at call time.
-  cp "$ROOT/bin/backends/conpty/fm-shell-integration.bash" "$CASE/repo/bin/backends/conpty/fm-shell-integration.bash"
-  sed -i 's/$/\r/' "$CASE/repo/bin/backends/conpty/fm-shell-integration.bash"
+  # awk, not `sed -i 's/$/\r/'`: bare -i and a \r replacement are both GNU
+  # extensions, and on a BSD sed the copy would silently stay LF and fail this
+  # case against a correct implementation.
+  crcopy="$CASE/repo/bin/backends/conpty/fm-shell-integration.bash"
+  awk '{ printf "%s\r\n", $0 }' "$ROOT/bin/backends/conpty/fm-shell-integration.bash" > "$crcopy" \
+    || fail "could not build the CR-bearing copy"
+  case "$(head -n 1 "$crcopy")" in
+    *$'\r') ;;
+    *) fail "the copy carries no CR, so this case would pass without exercising the guard" ;;
+  esac
   FM_BACKEND_CONPTY_ROOT="$CASE/repo"
 
   cat > "$CASE/fakebin/node" <<'SH'
@@ -688,8 +696,15 @@ line two'
   sparse='["johns@John MINGW64 /c/x","$ ","","","","","","","","","","","","","","","","",""]'
   out=$(screen "$sparse")
   [ "$out" = shell ] || fail "a prompt near the top of an otherwise blank viewport should still read shell, got $out"
-  # A prompt matched anywhere in a block: a leftover prompt line in scrollback
-  # above a live agent must not out-vote the agent's own bottom-most shape.
+  # A prompt matched anywhere in a block: a leftover MINGW64 line in scrollback
+  # must not make a session that is NOT at a prompt read as one. These rows carry
+  # no agent glyph, so the agent arm cannot answer first and the shell arm is the
+  # one under test: matching the block returns `shell` (the reproduced defect,
+  # which narrows an attached harness from alive to ambiguous), matching the
+  # bottom-most row alone returns `unknown`.
+  out=$(screen '["johns@John MINGW64 /c/x","$ some-tool","working..."]')
+  [ "$out" = unknown ] || fail "a prompt left in scrollback above a running command should not read shell, got $out"
+  # And the agent's own bottom-most shape still wins over the same leftover line.
   out=$(screen '["johns@John MINGW64 /c/x","$ claude","starting","","❯  (esc to interrupt)"]')
   [ "$out" = agent ] || fail "an agent composer below a leftover prompt line should read agent, got $out"
   out=$(screen '["", "", ""]')
@@ -793,9 +808,46 @@ exit
     */bash) ;;
     *) fail "an unresolvable SHELL was left in place, got '$out'" ;;
   esac
-  out=$(probe_shell SHELL=/bin/sh)
-  [ "$out" = /bin/sh ] || fail "a working SHELL must be left alone, got '$out'"
-  pass "conpty shell integration: SHELL is repaired only when it cannot resolve, so the worktree provider opens a shell that exists"
+  # The consumer is a NATIVE Windows program that CreateProcesses the value, so
+  # the question is whether a Windows executable image stands behind it, not
+  # whether this msys bash could resolve it. Synthesised here rather than taken
+  # from a Windows host, so the case runs anywhere: two bytes are all the probe
+  # reads.
+  pe="$CASE/captains-shell.exe"
+  printf 'MZ' > "$pe"
+  out=$(probe_shell SHELL="$pe")
+  [ "$out" = "$pe" ] || fail "a value backed by a real executable image must be left alone, got '$out'"
+  # msys resolves a bare name to <name>.exe implicitly and a native launcher does
+  # not, so the probe has to look through that suffix too.
+  out=$(probe_shell SHELL="${pe%.exe}")
+  [ "$out" = "${pe%.exe}" ] || fail "a value whose .exe image exists must be left alone, got '$out'"
+  # The direction `[ -x ]` got wrong: an executable shebang wrapper passes it,
+  # but no native launcher can start a script.
+  wrapper="$CASE/wrapper-shell"
+  printf '#!/bin/sh\nexec /bin/sh "$@"\n' > "$wrapper"
+  chmod +x "$wrapper"
+  [ -x "$wrapper" ] || fail "the wrapper is not executable, so it does not stand in for the case"
+  out=$(probe_shell SHELL="$wrapper")
+  case "$out" in
+    */bash) ;;
+    *) fail "an executable shebang wrapper no native launcher can start was left in place, got '$out'" ;;
+  esac
+  pass "conpty shell integration: SHELL is repaired unless a real executable image stands behind it, so treehouse opens a shell it can actually start"
+
+  # THE ARMING GUARD answers "has THIS shell armed", not "did an ancestor arm".
+  # A shell someone opens by hand with this rcfile, whose own rc files wiped the
+  # inherited carriers, must re-arm; an inherited guard would make it return
+  # early and stay silent, defeating the self-healing the whole design leans on.
+  # The carriers are withheld to stand in for rc files that overwrote them, and
+  # the stripped run above is the control: same withholding, no re-source.
+  rearmed=$(marks_from "env -u PS0 -u PROMPT_COMMAND bash --rcfile '$RC' -i
+true
+exit
+exit
+")
+  [ "${#rearmed}" -gt "${#stripped}" ] \
+    || fail "a hand-opened shell that re-sourced this file did not re-arm (re-sourced '$rearmed' vs stripped '$stripped')"
+  pass "conpty shell integration: the arming guard is per-shell, so a re-sourced nested shell re-arms instead of inheriting silence"
 ) || exit 1
 
 pass "conpty adapter unit tests complete"

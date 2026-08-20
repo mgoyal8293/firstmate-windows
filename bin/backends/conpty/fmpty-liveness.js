@@ -37,15 +37,15 @@
 // irrelevant. That is why this source is robust where the screen heuristic is
 // not.
 //
-// WHICH shell emits them is deliberately not narrowed, because the agent does
-// not run in the shell firstmate armed. `fm-spawn` sends `treehouse get`, and
-// the worktree provider opens a subshell that lives for the whole task, so the
-// agent is launched one level down. The rcfile therefore exports its two hooks
-// and every interactive bash in the session marks itself, which makes the last
-// mark the INNERMOST shell's answer - the same thing tmux reads when it scopes
-// to a pane's foreground process group. Measured on real Windows: without that,
-// the last mark stays `C` from `treehouse get` onward for the task's whole life
-// and `dead` is unreachable, so no stop could ever be proven.
+// WHICH shell emits them is deliberately not narrowed. The rcfile exports its
+// two hooks, so every interactive bash in the session marks itself and the last
+// mark is the INNERMOST shell's answer - the same thing tmux reads when it
+// scopes to a pane's foreground process group. On the firstmate path that is
+// the session shell itself: `fm-spawn` leases the worktree and `cd`s into it on
+// this backend rather than sending a bare `treehouse get`, whose provider
+// subshell used to host the agent one level down and, measured on real Windows,
+// froze the last mark at `C` for the task's whole life whenever that subshell's
+// own rc files reassigned PROMPT_COMMAND.
 //
 // FAIL SAFE WHEN THE SIGNAL IS ABSENT. A session that has emitted no marker -
 // an older Git Bash whose bash predates PS0, a shell that ignored the rcfile, a

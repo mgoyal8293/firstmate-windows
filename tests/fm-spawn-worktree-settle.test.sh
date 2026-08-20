@@ -141,7 +141,181 @@ test_already_settled_pane_costs_one_confirm_sleep() {
   pass "an already-settled pane confirms via the existing inter-poll sleep, not an extra full cycle"
 }
 
+# --- how the worktree is acquired, per backend ------------------------------
+#
+# The line fm-spawn sends to acquire the worktree is not the same on every
+# backend. tmux and friends send a bare `treehouse get`, whose provider opens a
+# SUBSHELL that hosts the task; conpty cannot afford that subshell, because its
+# liveness signal is the session shell's own OSC 133 prompt marks and a nested
+# shell's rc files can destroy the carrier that emits the finished mark, freezing
+# the signal at "a command is running" so `exit` can never prove a stop. There it
+# leases the slot and `cd`s into it in the shell firstmate armed.
+#
+# Both arms are asserted against the text the BACKEND actually received.
+
+# make_acquire_fakebin: a fake tmux that answers the settle loop from a fixed
+# worktree path and appends every line sent with send-keys -l to FM_SENT_LOG.
+make_acquire_fakebin() {  # <dir> <worktree> -> echoes fakebin dir
+  local dir=$1 wt=$2 fakebin
+  fakebin=$(fm_fakebin "$dir")
+  cat > "$fakebin/tmux" <<SH
+#!/usr/bin/env bash
+set -u
+case "\$*" in
+  *"#{pane_current_path}"*) printf '%s\n' "$wt"; exit 0 ;;
+esac
+case "\${1:-}" in
+  display-message) printf 'firstmate\n'; exit 0 ;;
+  send-keys)
+    # send-keys -t TARGET TEXT Enter for a submitted line, -l TEXT for a
+    # literal one. Both carry exactly one text argument; record it.
+    shift
+    text=
+    while [ \$# -gt 0 ]; do
+      case "\$1" in
+        -t) shift; [ \$# -gt 0 ] && shift; continue ;;
+        -l) shift; text=\${1:-}; break ;;
+        Enter) shift; continue ;;
+        *) text=\$1; break ;;
+      esac
+    done
+    [ -n "\$text" ] && printf '%s\n' "\$text" >> "\${FM_SENT_LOG:?}"
+    exit 0 ;;
+  list-windows) exit 0 ;;
+esac
+exit 0
+SH
+  chmod +x "$fakebin/tmux"
+  fm_fake_exit0 "$fakebin" treehouse
+  printf '%s\n' "$fakebin"
+}
+
+# make_conpty_fakebin: the conpty adapter's whole runtime surface is one node
+# client, so a fake `node` stands in for the backend exactly as
+# tests/fm-backend-conpty.test.sh does. Text is delivered by FILE on this
+# backend, so the sent line is recovered from the file the client was handed.
+make_conpty_fakebin() {  # <dir> <worktree> -> echoes fakebin dir
+  local dir=$1 wt=$2 fakebin
+  fakebin=$(fm_fakebin "$dir")
+  # shellcheck disable=SC2016 # deliberate: these expand in the fake, not here.
+  cat > "$fakebin/node" <<SH
+#!/usr/bin/env bash
+set -u
+cmd=\${2:-}
+case "\$cmd" in
+  doctor) printf 'ok\n'; exit 0 ;;
+  exists)
+    # The first probe must miss (create_task refuses a live duplicate), every
+    # later one must hit (the daemon has bound its pipe).
+    n=0
+    [ -f "\${FM_EXISTS_COUNT:?}" ] && n=\$(cat "\${FM_EXISTS_COUNT}")
+    n=\$((n + 1)); printf '%s\n' "\$n" > "\${FM_EXISTS_COUNT}"
+    [ "\$n" -gt 1 ] && { printf 'present\n'; exit 0; }
+    printf 'absent\n'; exit 1 ;;
+  cwd) printf '%s\n' "$wt"; exit 0 ;;
+  send)
+    prev=
+    for a in "\$@"; do
+      if [ "\$prev" = --text-file ]; then
+        # The adapter hands the client a NATIVE path, so translate back when
+        # this host has a translator (WSL and MSYS both do).
+        f=\$a
+        [ -f "\$f" ] || f=\$(wslpath -u "\$a" 2>/dev/null || cygpath -u "\$a" 2>/dev/null || printf '%s' "\$a")
+        cat "\$f" >> "\${FM_SENT_LOG:?}"; printf '\n' >> "\${FM_SENT_LOG}"
+      fi
+      prev=\$a
+    done
+    exit 0 ;;
+esac
+exit 0
+SH
+  chmod +x "$fakebin/node"
+  fm_fake_exit0 "$fakebin" treehouse
+  printf '%s\n' "$fakebin"
+}
+
+# acquire_line: the first line the backend was sent, which is the worktree
+# acquisition - fm-spawn sends nothing before it.
+acquire_line() {  # <sent-log>
+  head -n 1 "$1" 2>/dev/null
+}
+
+make_acquire_case() {  # <name> <id> -> case dir
+  local name=$1 id=$2 case_dir home proj wt
+  case_dir="$TMP_ROOT/$name"
+  home="$case_dir/home"; proj="$case_dir/project"; wt="$case_dir/wt"
+  mkdir -p "$home/data" "$home/projects" "$home/state" "$home/config"
+  printf 'codex\n' > "$home/config/crew-harness"
+  fm_git_worktree "$proj" "$wt" "wt-$name"
+  mkdir -p "$home/data/$id"
+  printf 'brief for %s\n' "$id" > "$home/data/$id/brief.md"
+  touch "$home/state/.last-watcher-beat"
+  printf '%s\n' "$case_dir"
+}
+
+# make_conpty_binroot: a copy of bin/ whose conpty adapter passes its own
+# dependency preflight. The adapter refuses without node-pty installed, and
+# bin/backends/conpty/node_modules is not part of a checkout, so the copy is
+# what makes this arm reachable off Windows. The scripts are the real ones.
+make_conpty_binroot() {  # <case-dir> -> echoes the fm-spawn to run
+  local case_dir=$1
+  mkdir -p "$case_dir/binroot"
+  cp -R "$ROOT/bin" "$case_dir/binroot/bin"
+  mkdir -p "$case_dir/binroot/bin/backends/conpty/node_modules/node-pty"
+  printf '%s\n' "$case_dir/binroot/bin/fm-spawn.sh"
+}
+
+run_acquire_spawn() {  # <case-dir> <fakebin> <spawn> <id> [extra spawn args...]
+  local case_dir=$1 fakebin=$2 spawn=$3 id=$4; shift 4
+  FM_ROOT_OVERRIDE='' FM_HOME="$case_dir/home" \
+    FM_STATE_OVERRIDE="$case_dir/home/state" FM_DATA_OVERRIDE="$case_dir/home/data" \
+    FM_PROJECTS_OVERRIDE="$case_dir/home/projects" FM_CONFIG_OVERRIDE="$case_dir/home/config" \
+    FM_SPAWN_NO_GUARD=1 TMUX="fake,1,0" \
+    FM_SENT_LOG="$case_dir/sent.log" FM_EXISTS_COUNT="$case_dir/exists.count" \
+    FM_BACKEND_CONPTY_ALLOW_NON_WINDOWS=1 \
+    FM_BACKEND_CONPTY_SHELL='C:\fake\bash.exe' \
+    FM_BACKEND_CONPTY_STATE="$case_dir/conpty-state" \
+    PATH="$fakebin:$PATH" \
+    "$spawn" "$id" "$case_dir/project" --mode no-mistakes --yolo off "$@" 2>&1
+}
+
+test_default_backend_sends_bare_treehouse_get() {
+  local case_dir id fakebin out
+  id=acquire-tmux-z1
+  case_dir=$(make_acquire_case acquire-tmux "$id")
+  fakebin=$(make_acquire_fakebin "$case_dir/fake" "$case_dir/wt")
+
+  out=$(run_acquire_spawn "$case_dir" "$fakebin" "$SPAWN" "$id" --backend tmux)
+  assert_contains "$out" "spawned $id" "spawn did not report success"$'\n'"$out"
+  [ "$(acquire_line "$case_dir/sent.log")" = 'treehouse get' ] \
+    || fail "a tmux spawn acquired the worktree with '$(acquire_line "$case_dir/sent.log")', not a bare 'treehouse get'"
+  pass "fm-spawn acquires the worktree with a bare 'treehouse get' on a backend that can host the task in the provider's subshell"
+}
+
+test_conpty_leases_and_cds_in_the_session_shell() {
+  local case_dir id fakebin spawn out line
+  id=acquire-conpty-z2
+  case_dir=$(make_acquire_case acquire-conpty "$id")
+  fakebin=$(make_conpty_fakebin "$case_dir/fake" "$case_dir/wt")
+  spawn=$(make_conpty_binroot "$case_dir")
+
+  out=$(run_acquire_spawn "$case_dir" "$fakebin" "$spawn" "$id" --backend conpty)
+  line=$(acquire_line "$case_dir/sent.log")
+  [ -n "$line" ] || fail "the conpty spawn sent nothing to the session"$'\n'"$out"
+  # The command substitution must reach the SESSION unexpanded - firstmate has no
+  # treehouse of its own to run here - and the lease must be attributable, which
+  # is what makes an abandoned slot traceable to the task that leased it.
+  [ "$line" = "cd \"\$(treehouse get --lease --lease-holder firstmate-$id)\"" ] \
+    || fail "the conpty spawn acquired the worktree with '$line', not the lease-and-cd form"
+  case "$line" in
+    'treehouse get') fail "the conpty spawn still opens a provider subshell" ;;
+  esac
+  pass "fm-spawn leases the worktree and cds into the marked session shell on conpty, so no provider subshell hosts the agent"
+}
+
 test_single_stale_first_read_is_not_accepted
 test_already_settled_pane_costs_one_confirm_sleep
+test_default_backend_sends_bare_treehouse_get
+test_conpty_leases_and_cds_in_the_session_shell
 
 echo "# all fm-spawn-worktree-settle tests passed"

@@ -20,13 +20,25 @@
 #                                            alone gets wrong: the harness is
 #                                            attached but nothing is running it)
 #   2. in the foreground         -> alive
-#   3. under a NESTED shell      -> the mark chain continues, which is the shape
-#                                   every real task has, because the worktree
-#                                   provider opens a subshell that outlives the
-#                                   agent
+#   3. under a NESTED shell      -> the mark chain continues. No firstmate path
+#                                   nests any more (the spawn path leases the
+#                                   worktree and cds into the session shell),
+#                                   but a hand-opened shell must still mark
 #   4. no untagged OSC 133 mark on the transcript, which would mean a harness
 #      had begun emitting its own and could announce "command finished" while it
 #      is alive
+#   5. no TAGGED mark either, while the harness holds the foreground. This is
+#      the one that matters: the carriers are exported into every descendant of
+#      the session shell, so a harness that ran a tool shell as an INTERACTIVE
+#      bash whose output reached the pty would emit a correctly tagged `D` while
+#      it is alive, and the verdict would flip to dead under a live agent
+#
+# THE TOKEN-FREE LAUNCH IS A DESIGN CHOICE, AND IT BOUNDS THIS GUARD. Because no
+# prompt is ever sent, check 5 catches a harness that marks at STARTUP but not
+# one that only marks during a tool call. The structural protection for the
+# latter is that a non-interactive `bash -c` runs neither PS0 nor PROMPT_COMMAND,
+# and no verified harness runs its tool shells any other way (measured for
+# Claude Code 2.1.220: promptMarks did not move across a real Bash tool call).
 #
 # Run it after any harness upgrade, and before trusting the dated per-harness
 # rows in docs/verification/runtime-backends.md "conpty".
@@ -73,6 +85,11 @@ winpath() { cygpath -w "$1" 2>/dev/null || printf '%s' "$1"; }
 # like a POSIX path, and `/exit` becomes an absolute Windows path.
 fmpty() { MSYS2_ARG_CONV_EXCL='*' MSYS_NO_PATHCONV=1 node "$(winpath "$CLIENT")" "$@" --state "$(winpath "$STATE")"; }
 verdict() { fmpty state --id "$1" --plain 2>/dev/null; }
+# The daemon reports its running mark count in the JSON state, which is how a
+# harness emitting marks of its own becomes visible without sending it a prompt.
+prompt_marks() {  # <id>
+  fmpty state --id "$1" 2>/dev/null | sed -n 's/.*"promptMarks":[[:space:]]*\([0-9][0-9]*\).*/\1/p' | tail -1
+}
 type_line() {  # <id> <text>
   fmpty send --id "$1" --text "$2" >/dev/null 2>&1 || fail "send failed for $1"
   fmpty key --id "$1" --key Enter >/dev/null 2>&1 || fail "Enter failed for $1"
@@ -118,7 +135,22 @@ for harness in claude codex opencode grok kimi pi cursor-agent muse; do
   wait_verdict "$id" alive 60 \
     || fail "$harness in the foreground of a nested shell reported '$(verdict "$id")', not alive"
 
-  # 3. No harness may emit an untagged OSC 133 mark of its own.
+  # 3. A live harness must not mark the stream AT ALL while it holds the
+  # foreground. A correctly tagged `D` from a harness's own interactive shell
+  # would read as "the session returned to its prompt" and turn a live agent
+  # into `dead`, which is the one direction that can launch a duplicate agent
+  # onto a live worktree. Counted at the moment it first read alive and again
+  # after it has settled, so a mark emitted at startup is caught.
+  marks_before=$(prompt_marks "$id")
+  [ -n "$marks_before" ] || fail "could not read promptMarks for $harness, so this check proved nothing"
+  sleep 5
+  marks_after=$(prompt_marks "$id")
+  [ "$marks_after" = "$marks_before" ] \
+    || fail "$harness advanced promptMarks from $marks_before to $marks_after while holding the foreground; it is emitting firstmate-tagged marks of its own and a live agent could read as stopped"
+  [ "$(verdict "$id")" = alive ] \
+    || fail "$harness stopped reading alive while it was still in the foreground (now '$(verdict "$id")')"
+
+  # 4. No harness may emit an untagged OSC 133 mark of its own.
   tr=$(fmpty state --id "$id" 2>/dev/null | sed -n 's/.*"transcript":"\([^"]*\)".*/\1/p')
   [ -n "$tr" ] || tr="$STATE/$id/transcript.log"
   if [ -f "$tr" ]; then
@@ -129,7 +161,7 @@ for harness in claude codex opencode grok kimi pi cursor-agent muse; do
 
   fmpty kill --id "$id" >/dev/null 2>&1 || true
   CHECKED=$((CHECKED + 1))
-  pass "conpty liveness against real $harness: backgrounded reads dead, foreground under a nested shell reads alive, and it emits no marks of its own"
+  pass "conpty liveness against real $harness: backgrounded reads dead, foreground under a nested shell reads alive, and it emits no marks of its own - tagged or untagged - while it holds the foreground"
 done
 
 [ "$CHECKED" -gt 0 ] || fail "no verified harness was installed, so this guard proved nothing"

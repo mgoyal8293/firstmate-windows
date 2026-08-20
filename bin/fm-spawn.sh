@@ -2243,9 +2243,32 @@ if [ "$RELAUNCH" -eq 1 ]; then
   fi
   [ "$KIND" = secondmate ] || validate_spawn_worktree "relaunch" "$T"
 elif [ "$KIND" != secondmate ] && [ "$BACKEND" != orca ]; then
-  spawn_send_text_line "$WT_TARGET" 'treehouse get'
+  # conpty acquires the worktree IN the session shell rather than in a provider
+  # subshell. A bare `treehouse get` opens $SHELL and hosts the task in that
+  # child, one level below the shell firstmate armed with its OSC 133 prompt
+  # marks; that child reads the operator's own rc files, and an ordinary
+  # `PROMPT_COMMAND='history -a'` there destroys the finished-mark carrier while
+  # leaving PS0 intact, so the session emits `C` and never `D` and `exit` can
+  # never prove the agent stopped. Leasing the slot and `cd`ing into it keeps
+  # the agent in the marked shell (measured on real Windows: DABCDABCDABCDABC
+  # even with that clobbering rc file), and with no provider process left
+  # attached to the console a session that emits NO mark at all still reaches
+  # `dead` through the fallback's shell-only reading.
+  #
+  # The cost, stated plainly: the pool slot is released by teardown's explicit
+  # `treehouse return --force`, not by a subshell dying, so a crash that never
+  # reaches teardown leaves the slot leased. It is attributable on purpose - the
+  # holder is firstmate-<id> - and one `treehouse return --force <path>` clears
+  # it. The `$( )` must reach the session unexpanded; $ID expands here.
+  if [ "$BACKEND" = conpty ]; then
+    WT_ACQUIRE="treehouse get --lease and cd"
+    spawn_send_text_line "$WT_TARGET" "cd \"\$(treehouse get --lease --lease-holder firstmate-$ID)\""
+  else
+    WT_ACQUIRE="treehouse get"
+    spawn_send_text_line "$WT_TARGET" 'treehouse get'
+  fi
 
-  # Wait for the treehouse subshell: the pane's cwd moves from the project to the worktree.
+  # Wait for the acquisition to land: the pane's cwd moves from the project to the worktree.
   # Target the stable window id, not the name: if the name is ever lost (e.g. an
   # automatic-rename slips through), display-message -t <bad-name> falls back to the
   # active client's window, which would misread firstmate's OWN pane path as the
@@ -2285,11 +2308,11 @@ elif [ "$KIND" != secondmate ] && [ "$BACKEND" != orca ]; then
     sleep 1
   done
   if [ -z "$WT" ]; then
-    echo "error: treehouse get did not enter a worktree within 60s; inspect window $T" >&2
+    echo "error: $WT_ACQUIRE did not enter a worktree within 60s; inspect window $T" >&2
     exit 1
   fi
 
-  validate_spawn_worktree "treehouse get" "$T"
+  validate_spawn_worktree "$WT_ACQUIRE" "$T"
 fi
 if [ "$RELAUNCH" -eq 0 ] && [ "$KIND" != secondmate ]; then
   freshen_spawn_worktree_base "$WT" || exit 1

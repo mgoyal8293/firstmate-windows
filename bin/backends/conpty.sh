@@ -51,12 +51,14 @@
 # session shell is launched with fm-shell-integration.bash as its rcfile, which
 # has bash emit OSC 133 prompt marks; the daemon reads them off the pty stream it
 # already parses and treats "the shell is at a prompt" as tmux treats a
-# foreground group holding nothing but a shell. The rcfile exports its hooks, so
-# the worktree provider's subshell - where a task's agent actually runs - keeps
-# marking too; that is what makes the last mark the innermost shell's answer
-# rather than a stale one from before `treehouse get`. A session that emits no
-# mark - an older bash, or a non-bash session shell - falls back to the process
-# list and the screen, never to a false `dead`.
+# foreground group holding nothing but a shell. The agent runs in that same
+# shell: fm-spawn leases the worktree and `cd`s into it on this backend instead
+# of sending a bare `treehouse get`, whose provider subshell used to host the
+# task one level down and could lose the mark carrier to its own rc files. The
+# rcfile still exports its hooks, so a shell nested by hand keeps marking too and
+# the last mark is the innermost shell's answer. A session that emits no mark -
+# an older bash, or a non-bash session shell - falls back to the process list and
+# the screen, never to a false `dead`.
 #
 # Requires: node (already a universal firstmate tool), the installed
 # dependencies in bin/backends/conpty/node_modules, and a Windows host. The

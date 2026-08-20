@@ -865,6 +865,49 @@ The first reading is also the sparse-screen defect settled on a real terminal: a
 The npm-install shape does not hide a harness from the classifier on this release.
 `@anthropic-ai/claude-code` 2.1.220 installs a native `bin/claude.exe`, and its `cli-wrapper.cjs` fallback - used only when `postinstall` is skipped - `spawnSync`s that same native binary, so `node.exe` is at most its parent and `claude.exe` is always the live process the console list reports.
 
+### Where the agent runs, and the carriers that were rejected, 2026-08-20
+
+Exporting the two carriers is necessary but not sufficient, measured with the real rcfile and a nested shell standing in for the worktree provider's subshell.
+A nested shell reads its own rc files AFTER inheriting them, so an ordinary `PROMPT_COMMAND='history -a'` in `~/.bashrc` destroys the finished-mark carrier and leaves `PS0` alone:
+
+```text
+clean HOME       nested marks: D A B C D C D C D C D A B C
+clobbering HOME  nested marks: D A B C C C C D A B C          <- emits C, never D
+```
+
+The frozen `C` is not the documented fallback: the daemon reads the screen only when the prompt state is `unknown`, so a stale `C` bypasses it and `exit` can never satisfy its postcondition.
+The fix adopted is to remove the nested shell rather than to route around it - `bin/fm-spawn.sh` sends `cd "$(treehouse get --lease --lease-holder firstmate-<id>)"` on this backend - and it is immune to the same rc file:
+
+```text
+lease-and-cd, clobbering HOME  marks: D A B C D A B C D A B C D A B C
+```
+
+Measured on the real Windows host with treehouse 2.1.1, so the arm rests on observation rather than inference:
+
+| Question | Measured |
+|---|---|
+| What does `treehouse get --lease` print? | ONLY the absolute worktree path, on stdout, in Windows form (`C:\Users\johns\.treehouse\demo-099c58\1\demo`), with no CR and no trailing whitespace; every banner goes to stderr. |
+| Does the session shell survive `cd "<that value>"`? | Yes, and the session then reports `/c/Users/johns/.treehouse/demo-099c58/1/demo`, so OSC 0 title discovery reads it exactly as before. |
+| What happens when the lease fails? | The substitution is empty and `cd ""` is a bash no-op returning 0, so the session stays in the project, no wrong directory is ever recorded, and fm-spawn's existing 60s worktree-discovery timeout reports it. |
+| Does the lease need releasing separately? | No. `bin/fm-teardown.sh` already runs `treehouse return --force <dir>`, which releases it - confirmed live: `leased ... (held by fm-cd-probe)` returned to `available`. |
+| Is there a new tool floor? | No. `bin/fm-bootstrap.sh` already requires `treehouse get --lease` for every treehouse-using backend, and `bin/fm-home-seed.sh` already uses `--lease --lease-holder <id>`. |
+
+The second, larger benefit: with no `treehouse.exe` left attached to the console, a session that emits NO mark at all also reaches `dead` through the fallback's shell-only reading, so graceful stop no longer depends on the marks and works for an old bash or a non-bash session shell too.
+The cost is that the pool slot is freed by that explicit return rather than by a subshell dying, so a crash that never reaches teardown leaves a leased slot - attributable by design, since the holder is `firstmate-<id>`.
+
+Carrier alternatives, rejected with evidence so they are not re-tried:
+
+| Candidate | Why it was rejected |
+|---|---|
+| A `DEBUG` trap | Cannot cross the environment at all; a trap is not inherited by a child shell. |
+| An exported `PS0` of the `${PROMPT_COMMAND:=...}` form, self-healing the hook | The assignment does happen in the current shell (confirmed, not assumed), but `:=` is conditional by definition, so a clobber to a non-empty value like `history -a` is never healed - and `PS0` fires at command START, so it cannot express the return to a prompt. |
+| Exported `SHELLOPTS=posix` plus `ENV` pointing at the rcfile | The nested shell still reads the clobbering bashrc: measured `D A B C C C C D A B C`. |
+| Pointing `SHELL` at a shebang wrapper that re-execs bash with the rcfile | Does not run: `treehouse.exe` `CreateProcess`es `$SHELL` as a native Windows program, so it can neither run a script nor word-split the value. Arguments embedded in the `SHELL` value fail for the same reason. |
+| Bash-as-`sh` with `ENV` pointing at the rcfile (the runner-up) | Works - measured `D A B C D A B C D A B C D A B C D A B C` - but puts the crewmate's shell in POSIX mode and makes `$SHELL` read `sh` to every other tool, which is a worse trade than removing the nested shell. |
+
+The `$SHELL` repair probes for a PE image rather than for `[ -x ]`, also measured here: `[ -x /bin/bash ]` is true on Git for Windows AND `treehouse` with `SHELL=/bin/bash` works fine (it opened `/usr/bin/bash` 5.2.37 and the subshell ran normally), so a POSIX-form value is not a hazard and is left alone.
+What `[ -x ]` gets wrong is the other direction: it accepts a shebang wrapper that a native launcher cannot start at all.
+
 ```sh
 tests/fm-backend-conpty.test.sh
 tests/fm-control.test.sh

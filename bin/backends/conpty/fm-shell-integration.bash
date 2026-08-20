@@ -17,32 +17,40 @@
 # environment, aliases, and the OSC 0 title sequence that this backend's
 # worktree discovery depends on all have to survive untouched.
 #
-# THE MARKS FOLLOW THE SESSION INTO A NESTED SHELL, and they have to. A task
-# session does not run its agent in the shell this rcfile armed: `fm-spawn` sends
-# `treehouse get`, and the worktree provider opens a SUBSHELL in the pooled
-# worktree that lives for the whole task, so the agent is launched one level
-# down. That subshell reads its own rc files, not this one. Measured on real
-# Windows: with the marks kept shell-local, the armed outer shell emits `C` when
-# `treehouse get` starts and then nothing for the rest of the task, so the last
-# mark says "a command is running" forever - it never returns to a prompt, and
-# `fm-control exit`'s "the agent stopped" postcondition can never be satisfied.
-#
-# So the two hooks that carry the marks are EXPORTED, and the nested shell
-# continues the chain instead of silencing it. Together they read as the
-# INNERMOST interactive shell's answer, which is exactly what tmux reads off a
-# pane's foreground process group: whoever last spoke is whoever holds the
-# foreground.
+# THE MARKS FOLLOW THE SESSION INTO A NESTED SHELL. The two hooks that carry
+# them are EXPORTED, so an interactive bash opened BY HAND inside the session
+# keeps marking itself instead of going silent, and the last mark reads as the
+# INNERMOST interactive shell's answer - exactly what tmux reads off a pane's
+# foreground process group: whoever last spoke is whoever holds the foreground.
 #
 #   PS0             the `C` mark, printed when a command starts
 #   PROMPT_COMMAND  the `D` mark, printed before the next prompt is drawn
+#
+# NO FIRSTMATE PATH PUTS A SHELL BETWEEN THIS ONE AND THE AGENT. It used to: a
+# bare `treehouse get` opens the pooled worktree in a provider SUBSHELL that
+# lives for the whole task, so the agent started one level down, in a shell that
+# reads its own rc files rather than this one. bin/fm-spawn.sh now acquires the
+# worktree on this backend with `treehouse get --lease` and `cd`s into it in
+# THIS shell, so the agent runs here and no foreign rc file sits between
+# firstmate and the mark.
+#
+# That matters because inheritance is not immunity. A nested shell sources
+# /etc/bash.bashrc and ~/.bashrc AFTER inheriting the carriers, and an ordinary
+# `PROMPT_COMMAND='history -a'` in one of them destroys the finished-mark
+# carrier while leaving PS0 intact: the session then emits `C` and never `D`,
+# and the signal freezes at "a command is running". Measured on real Windows
+# with the provider subshell in place: a clean HOME gave DABCDCDCDCDABC, a
+# clobbering one gave DABCCCCDABC. That is a loud failure to PROVE a stop -
+# `fm-control exit` refuses rather than reporting an unproven transition - never
+# a false stop, and it is now reachable only in a shell someone opened by hand.
 #
 # PS1 is NOT exported, because exporting it does not work here: Git for Windows'
 # /etc/bash.bashrc honours an already-exported PS1, and then sources
 # /etc/profile.d/git-prompt.sh for every non-login interactive shell, which
 # overwrites PS1 unconditionally. PS0 and PROMPT_COMMAND are touched by neither
 # file, which is what makes them the durable carriers. A nested shell whose own
-# rc files DO overwrite them simply emits no marks, and liveness falls back
-# exactly as it does for a session that never armed at all.
+# rc files overwrite BOTH emits no marks at all, and liveness falls back exactly
+# as it does for a session that never armed.
 #
 # THE MARKS ARE TAGGED. Every mark carries `fmpty=1`, and the daemon ignores any
 # OSC 133 mark without it. The harness writes to the same stream, so an
@@ -72,22 +80,36 @@ fi
 
 # SHELL, so the session's own child tools agree with it about what shell this is.
 # A real Git Bash session is a LOGIN shell and /etc/profile sets this; the
-# session shell here is deliberately not one, so an absent or foreign SHELL
-# reaches every tool that consults it. The worktree provider is one such tool and
-# it is on this backend's critical path: `treehouse get` opens $SHELL, and falls
-# back to %COMSPEC% - cmd.exe - when it cannot. Measured on real Windows with
+# session shell here is deliberately not one, so an absent SHELL reaches every
+# tool that consults it. `treehouse get` is one such tool: it opens $SHELL and
+# falls back to %COMSPEC% when it cannot. Measured on real Windows with
 # treehouse 2.1.1: SHELL unset opens cmd.exe, which announces no OSC 0 title (so
-# fm-spawn's worktree discovery never sees the pane leave the project) and can
-# emit no prompt mark (so the chain above stops at the outer shell). An inherited
-# value that does not resolve here is the same hazard wearing a different hat: a
-# firstmate started from WSL exports SHELL=/bin/bash, which is not this host's
-# bash, and the provider then opens a subshell that dies immediately.
+# fm-spawn's worktree discovery never sees the session leave the project) and
+# can emit no prompt mark.
 #
-# Probed rather than assumed, and only ever a fallback: a SHELL that resolves to
-# an executable is the captain's, and is left alone.
-if [ -z "${SHELL:-}" ] || [ ! -x "${SHELL:-}" ]; then
+# THE PROBE ASKS WHAT THE NATIVE CONSUMER ASKS. treehouse.exe CreateProcesses
+# this value: it cannot run a script and it cannot word-split. `[ -x ]` answers
+# a different question - whether THIS msys bash could resolve it - and it
+# wrongly accepts a shebang wrapper no native launcher can start. So the test is
+# that a real Windows executable image stands behind the value: the file, or the
+# file plus the `.exe` msys appends implicitly and a native launcher does not,
+# must begin with the PE magic `MZ`. A POSIX-form value is fine and stays -
+# /bin/bash and /usr/bin/bash are real .exe images, and treehouse is measured to
+# run them.
+#
+# Probed rather than assumed, and only ever a fallback: a SHELL a native
+# launcher can start is the captain's, and is left alone.
+_fm_conpty_native_image() {  # <value>
+  local p=${1:-}
+  [ -n "$p" ] || return 1
+  [ -f "$p" ] || p="$p.exe"
+  [ -f "$p" ] || return 1
+  [ "$(LC_ALL=C head -c 2 "$p" 2>/dev/null)" = MZ ]
+}
+if ! _fm_conpty_native_image "${SHELL:-}"; then
   export SHELL="${BASH:-/usr/bin/bash}"
 fi
+unset -f _fm_conpty_native_image
 
 if [ -n "${_FM_CONPTY_SHELL_INTEGRATION:-}" ]; then
   return 0
@@ -152,10 +174,12 @@ if _fm_conpty_bash_has_ps0; then
   export PROMPT_COMMAND
   unset _fm_conpty_pc_decl _fm_conpty_mark_finished
 
-  # Exported, so a nested shell that does source this file - a hand-started
-  # session, a relaunch - finds the chain already armed and leaves it alone
-  # instead of prepending a second copy of the same mark.
-  export _FM_CONPTY_SHELL_INTEGRATION=1
+  # Deliberately NOT exported. It answers "has THIS shell already armed",
+  # which is what stops a re-source from prepending a second copy of the mark.
+  # An exported answer would be a different claim - "some ancestor armed" - and
+  # a nested shell that inherited it would return early and never re-arm its own
+  # PS0 and PROMPT_COMMAND, defeating the self-healing the design relies on.
+  _FM_CONPTY_SHELL_INTEGRATION=1
 fi
 
 unset -f _fm_conpty_bash_has_ps0
