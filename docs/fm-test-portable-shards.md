@@ -85,7 +85,8 @@ On red run [32142691561](https://github.com/mgoyal8293/firstmate-windows/actions
 This overflow was accumulated serial runtime, not the fork-cost sensitivity behind the watcher-suite flake of the same week; `docs/verification/watcher-arm-test-budgets.md` owns that ruling.
 
 `bin/fm-test-run.sh --check-coverage` reports `unmeasured_serial=<n>` and names any selected serial script still packed at the flat default, so a missing measurement is visible in every CI run rather than surfacing later as an unbalanced shard.
-Read that counter for exactly what it says. It reports whether any selected serial script is packed at the default, so `unmeasured_serial=0` means no script is packed at the default - it does **not** mean the hints are current.
+Read that counter for exactly what it says.
+It reports whether any selected serial script is packed at the default, so `unmeasured_serial=0` means no script is packed at the default - it does **not** mean the hints are current.
 An already-hinted script can quadruple while the count stays at zero, which is what happened here: the lane's script count was stable, the count was zero throughout, and most of the hidden time was in values the guard never looks at.
 Nothing currently detects a stale value on a script that already has a hint; `fm-test-weight-drift-detector` is the filed follow-up that will compare measured durations against the table.
 

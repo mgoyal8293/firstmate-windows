@@ -70,7 +70,8 @@ ARM_READY_TIMEOUT_MS=$((ARM_CHILD_START_MS * 5))
 printf '# arm child start %sms measured, readiness budget %sms\n' \
   "$ARM_CHILD_START_MS" "$ARM_READY_TIMEOUT_MS"
 
-# Per-start budget and per-case slack for every observation window below.
+# Per-start budget, per-case slack and poll cadence for every observation
+# window below.
 #
 # The coupling that broke the readiness budget applies to any window waiting on
 # a chain of cold arm children: a literal iteration count does not move with the
@@ -83,16 +84,76 @@ printf '# arm child start %sms measured, readiness budget %sms\n' \
 # One start is budgeted at the measured readiness budget - five times the worst
 # of five cold starts - so a single unusually slow start cannot exhaust the
 # window. That budget carries its own 500ms floor, which is what keeps a window
-# from collapsing on a workstation where a start costs 14ms; the slack covers
-# module load, lock checks and prompt delivery, which are per case rather than
-# per start. These are upper bounds on waiting, not sleeps: every driver stops
+# from collapsing on a workstation where a start costs 14ms.
+#
+# The slack covers module load, lock checks and prompt delivery, which are per
+# case rather than per start. Those are per-case process costs, so they scale
+# with the machine exactly like the fork cost the per-start term is measured
+# from, and the slack is derived from the same measurement rather than left
+# flat: it is the additive term in every window in this file, so a literal there
+# pins a floor under all of them and is the one term that would not move with
+# the machine. Three cold starts, floored at the 1000ms the CI evidence in
+# docs/verification/watcher-arm-test-budgets.md was collected at, so a loaded
+# runner widens it and no machine narrows it below the measured configuration.
+#
+# A polled window and a settle sleep are NOT the same cost, and this comment
+# governs both. A polled window is an upper bound on waiting: its driver stops
 # the moment its event lands, so a wide window costs nothing when the case
-# passes and only bounds how long a genuine failure takes to report.
+# passes and only bounds how long a genuine failure takes to report. A settle
+# sleep - setTimeout with FM_TEST_ARM_START_BUDGET_MS and no predicate, which is
+# how the negative cases give an unwanted arm child time to record itself - is
+# pure wall clock, paid in full on the passing path too. There are eight of
+# those, so for them a wide budget does NOT cost nothing: about 3s per run of
+# this file on a workstation, 13.1s at the 328ms start measured on run
+# 32255813826, and 32s at the 800ms start in the 16-spinner load curve.
+#
+# Poll cadence is derived from the window it polls rather than left absolute.
+# A fixed 10ms poll inside a derived window makes the failing path noisier the
+# slower the machine gets - 590 to 1300 timer wakeups, plus a filesystem stat
+# on each, on the machine whose load is the thing being measured. Dividing the
+# window instead caps that at FM_TEST_OBSERVE_POLL_DIVISOR wakeups whatever the
+# machine costs. That trades absolute detection granularity for granularity
+# proportional to the window - one 64th of the window being measured - which
+# never approaches the window itself and never widens it, since every deadline
+# is computed from the window and not from the poll.
 #
 # The plugins never read these names; their own budgets come from
 # FM_PI_ARM_READY_TIMEOUT_MS and FM_OPENCODE_ARM_READY_TIMEOUT_MS.
 export FM_TEST_ARM_START_BUDGET_MS="$ARM_READY_TIMEOUT_MS"
-export FM_TEST_OBSERVE_SLACK_MS=1000
+OBSERVE_SLACK_MS=$((ARM_CHILD_START_MS * 3))
+[ "$OBSERVE_SLACK_MS" -ge 1000 ] || OBSERVE_SLACK_MS=1000
+export FM_TEST_OBSERVE_SLACK_MS="$OBSERVE_SLACK_MS"
+export FM_TEST_OBSERVE_POLL_DIVISOR=64
+# Printed for the same reason the readiness budget is: a CI log has to answer
+# "what did this run derive?" without a second run to reproduce the machine.
+printf '# observation slack %sms derived, poll cadence window/%s\n' \
+  "$FM_TEST_OBSERVE_SLACK_MS" "$FM_TEST_OBSERVE_POLL_DIVISOR"
+
+# Shell-side counterparts of the two derivations above, for the one bound in
+# this file that is waited on from bash rather than from a node driver.
+#
+# fm_observe_window_ms <chained child starts> [fixed ms]: the same window the
+# drivers compute, plus any fixed cost the case knows about on top.
+# fm_observe_poll_ms <window ms>: that window divided by the poll divisor.
+# fm_observe_attempts <window ms> <poll ms>: iterations covering the window.
+# fm_ms_to_seconds <ms>: a `sleep` argument, since bash has no ms sleep.
+fm_observe_window_ms() {
+  echo $(( $1 * ARM_READY_TIMEOUT_MS + OBSERVE_SLACK_MS + ${2:-0} ))
+}
+
+fm_observe_poll_ms() {
+  local poll=$(( $1 / FM_TEST_OBSERVE_POLL_DIVISOR ))
+  [ "$poll" -ge 1 ] || poll=1
+  echo "$poll"
+}
+
+fm_observe_attempts() {
+  echo $(( ($1 + $2 - 1) / $2 ))
+}
+
+fm_ms_to_seconds() {
+  printf '%d.%03d\n' $(( $1 / 1000 )) $(( $1 % 1000 ))
+}
 
 # Observation deadline for the recovery cases below.
 #
@@ -105,17 +166,20 @@ export FM_TEST_OBSERVE_SLACK_MS=1000
 # measuring the budget introduced, because a slow runner raises the budget and
 # a literal 500 x 10ms wait does not move with it.
 #
-# These are upper bounds on waiting, not sleeps: every driver polls and stops
-# the moment its event lands, so sizing one from the worst case costs nothing on
-# the passing path and only bounds how long a genuine failure takes to report.
+# These windows are polled, so they are upper bounds on waiting rather than
+# sleeps: every driver stops the moment its event lands, so sizing one from the
+# worst case costs nothing on the passing path and only bounds how long a
+# genuine failure takes to report.
 fm_recovery_deadline_ms() { # <budget expiries> <that case's arm retire budget ms>
   local expiries=$1 retire=$2
   # Per expiry: the readiness budget, the retirement budget that follows it,
   # and the capped retry backoff (FM_WATCH_REARM_RETRY_MAX_MS, 10ms here).
-  # Plus one cold child start per attempt and for the original arm, and 1s for
-  # module load, lock checks and prompt delivery.
+  # Plus one cold child start per attempt and for the original arm, and the
+  # derived per-case slack for module load, lock checks and prompt delivery -
+  # the same term the drivers add, for the same reason it is not a literal
+  # there.
   echo $(( expiries * (ARM_READY_TIMEOUT_MS + retire + 10) \
-           + (expiries + 1) * ARM_CHILD_START_MS + 1000 ))
+           + (expiries + 1) * ARM_CHILD_START_MS + OBSERVE_SLACK_MS ))
 }
 
 install_pi_watch_extension_fixture() {
@@ -216,10 +280,12 @@ if (!notification.includes("started Pi extension arm child")) {
   console.error(notification);
   process.exit(1);
 }
-const promptDeadlineAt = Date.now() + 1 * Number(process.env.FM_TEST_ARM_START_BUDGET_MS)
+const promptWindowMs = 1 * Number(process.env.FM_TEST_ARM_START_BUDGET_MS)
   + Number(process.env.FM_TEST_OBSERVE_SLACK_MS);
+const promptDeadlineAt = Date.now() + promptWindowMs;
+const promptPollMs = Math.ceil(promptWindowMs / Number(process.env.FM_TEST_OBSERVE_POLL_DIVISOR));
 while (!prompt && Date.now() < promptDeadlineAt) {
-  await new Promise((resolve) => setTimeout(resolve, 20));
+  await new Promise((resolve) => setTimeout(resolve, promptPollMs));
 }
 if (!prompt.startsWith("\u2063FIRSTMATE_OP: v1 watcher: ")) {
   console.error(`untyped operational follow-up: ${prompt}`);
@@ -352,10 +418,12 @@ if (/^watcher: healthy\b/.test(redundant.content[0]?.text)) {
 if (!redundant.content[0]?.text.includes("only after a later notification says the cycle is missing, failed, or unhealthy")) {
   throw new Error(`redundant call omitted the repair-only condition: ${redundant.content[0]?.text}`);
 }
-const armDeadlineAt = Date.now() + 1 * Number(process.env.FM_TEST_ARM_START_BUDGET_MS)
+const armWindowMs = 1 * Number(process.env.FM_TEST_ARM_START_BUDGET_MS)
   + Number(process.env.FM_TEST_OBSERVE_SLACK_MS);
+const armDeadlineAt = Date.now() + armWindowMs;
+const armPollMs = Math.ceil(armWindowMs / Number(process.env.FM_TEST_OBSERVE_POLL_DIVISOR));
 while (!existsSync(process.env.FM_ARM_LOG) && Date.now() < armDeadlineAt) {
-  await new Promise((resolve) => setTimeout(resolve, 10));
+  await new Promise((resolve) => setTimeout(resolve, armPollMs));
 }
 if (!existsSync(process.env.FM_ARM_LOG)) throw new Error("initial arm child did not start");
 await new Promise((resolve) => setTimeout(resolve, Number(process.env.FM_TEST_ARM_START_BUDGET_MS)));
@@ -401,10 +469,12 @@ const mod = await import(pathToFileURL(process.env.PLUGIN).href);
 mod.default(pi);
 await tool.execute("tool-call-first", {}, undefined, undefined, {});
 let redundant = null;
-const retryProbeDeadlineAt = Date.now() + 1 * Number(process.env.FM_TEST_ARM_START_BUDGET_MS)
+const retryProbeWindowMs = 1 * Number(process.env.FM_TEST_ARM_START_BUDGET_MS)
   + Number(process.env.FM_TEST_OBSERVE_SLACK_MS);
+const retryProbeDeadlineAt = Date.now() + retryProbeWindowMs;
+const retryProbePollMs = Math.ceil(retryProbeWindowMs / Number(process.env.FM_TEST_OBSERVE_POLL_DIVISOR));
 while (Date.now() < retryProbeDeadlineAt) {
-  await new Promise((resolve) => setTimeout(resolve, 10));
+  await new Promise((resolve) => setTimeout(resolve, retryProbePollMs));
   redundant = await tool.execute("tool-call-during-retry", {}, undefined, undefined, {});
   if (redundant.content[0]?.text.includes("scheduled continuity retry")) break;
 }
@@ -483,14 +553,16 @@ writeFileSync(`${process.env.FM_HOME}/state/.lock`, `${process.pid}\n`);
 const mod = await import(pathToFileURL(process.env.PLUGIN).href);
 mod.default(pi);
 await tool.execute("tool-call-continuity", {}, undefined, undefined, {});
-const successorDeadlineAt = Date.now() + 2 * Number(process.env.FM_TEST_ARM_START_BUDGET_MS)
+const successorWindowMs = 2 * Number(process.env.FM_TEST_ARM_START_BUDGET_MS)
   + Number(process.env.FM_TEST_OBSERVE_SLACK_MS);
+const successorDeadlineAt = Date.now() + successorWindowMs;
+const successorPollMs = Math.ceil(successorWindowMs / Number(process.env.FM_TEST_OBSERVE_POLL_DIVISOR));
 while (Date.now() < successorDeadlineAt) {
   const rows = existsSync(process.env.FM_ARM_LOG)
     ? readFileSync(process.env.FM_ARM_LOG, "utf8").trim().split("\n")
     : [];
   if (rows.length >= 2 && deliveryStarted) break;
-  await new Promise((resolve) => setTimeout(resolve, 10));
+  await new Promise((resolve) => setTimeout(resolve, successorPollMs));
 }
 const rows = readFileSync(process.env.FM_ARM_LOG, "utf8").trim().split("\n");
 if (rows.length !== 2) throw new Error(`expected one successor arm, got ${rows.length}: ${rows.join(" | ")}`);
@@ -501,11 +573,13 @@ await new Promise((resolve) => setTimeout(resolve, Number(process.env.FM_TEST_AR
 const stableRows = readFileSync(process.env.FM_ARM_LOG, "utf8").trim().split("\n");
 if (stableRows.length !== 2) throw new Error(`delivery was confirmed before the prompt succeeded: ${stableRows.join(" | ")}`);
 releaseDelivery();
-const confirmDeadlineAt = Date.now() + 1 * Number(process.env.FM_TEST_ARM_START_BUDGET_MS)
+const confirmWindowMs = 1 * Number(process.env.FM_TEST_ARM_START_BUDGET_MS)
   + Number(process.env.FM_TEST_OBSERVE_SLACK_MS);
+const confirmDeadlineAt = Date.now() + confirmWindowMs;
+const confirmPollMs = Math.ceil(confirmWindowMs / Number(process.env.FM_TEST_OBSERVE_POLL_DIVISOR));
 while (Date.now() < confirmDeadlineAt) {
   if (readFileSync(process.env.FM_ARM_LOG, "utf8").includes("confirmed generation=fixture-generation")) break;
-  await new Promise((resolve) => setTimeout(resolve, 10));
+  await new Promise((resolve) => setTimeout(resolve, confirmPollMs));
 }
 const confirmedRows = readFileSync(process.env.FM_ARM_LOG, "utf8").trim().split("\n");
 if (confirmedRows.filter((row) => row.startsWith("confirmed ")).length !== 1) {
@@ -567,9 +641,11 @@ writeFileSync(`${process.env.FM_HOME}/state/.lock`, `${process.pid}\n`);
 const mod = await import(pathToFileURL(process.env.PLUGIN).href);
 mod.default(pi);
 await tool.execute("tool-call-hung-successor", {}, undefined, undefined, {});
-const deadlineAt = Date.now() + Number(process.env.FM_WAKE_DEADLINE_MS);
+const wakeWindowMs = Number(process.env.FM_WAKE_DEADLINE_MS);
+const deadlineAt = Date.now() + wakeWindowMs;
+const wakePollMs = Math.ceil(wakeWindowMs / Number(process.env.FM_TEST_OBSERVE_POLL_DIVISOR));
 while (!prompt && Date.now() < deadlineAt) {
-  await new Promise((resolve) => setTimeout(resolve, 10));
+  await new Promise((resolve) => setTimeout(resolve, wakePollMs));
 }
 const rows = existsSync(process.env.FM_ARM_LOG)
   ? readFileSync(process.env.FM_ARM_LOG, "utf8").trim().split("\n")
@@ -641,9 +717,11 @@ writeFileSync(`${process.env.FM_HOME}/state/.lock`, `${process.pid}\n`);
 const mod = await import(pathToFileURL(process.env.PLUGIN).href);
 mod.default(pi);
 await tool.execute("tool-call-unretired-successor", {}, undefined, undefined, {});
-const deadlineAt = Date.now() + Number(process.env.FM_WAKE_DEADLINE_MS);
+const wakeWindowMs = Number(process.env.FM_WAKE_DEADLINE_MS);
+const deadlineAt = Date.now() + wakeWindowMs;
+const wakePollMs = Math.ceil(wakeWindowMs / Number(process.env.FM_TEST_OBSERVE_POLL_DIVISOR));
 while (!prompt && Date.now() < deadlineAt) {
-  await new Promise((resolve) => setTimeout(resolve, 10));
+  await new Promise((resolve) => setTimeout(resolve, wakePollMs));
 }
 const rows = existsSync(process.env.FM_ARM_LOG)
   ? readFileSync(process.env.FM_ARM_LOG, "utf8").trim().split("\n")
@@ -717,10 +795,12 @@ const rows = () => existsSync(process.env.FM_ARM_LOG)
   ? readFileSync(process.env.FM_ARM_LOG, "utf8").trim().split("\n")
   : [];
 async function waitFor(predicate, message) {
-  const deadlineAt = Date.now() + Number(process.env.FM_WAKE_DEADLINE_MS);
+  const wakeWindowMs = Number(process.env.FM_WAKE_DEADLINE_MS);
+  const deadlineAt = Date.now() + wakeWindowMs;
+  const wakePollMs = Math.ceil(wakeWindowMs / Number(process.env.FM_TEST_OBSERVE_POLL_DIVISOR));
   while (Date.now() < deadlineAt) {
     if (predicate()) return;
-    await new Promise((resolve) => setTimeout(resolve, 10));
+    await new Promise((resolve) => setTimeout(resolve, wakePollMs));
   }
   if (predicate()) return;
   throw new Error(message);
@@ -741,10 +821,12 @@ await waitFor(
 if (rows().length !== 2) throw new Error(`unretired arm overlapped before fallback: ${rows().join(" | ")}`);
 if (!prompts[0]?.includes("original wake")) throw new Error(`missing original fallback: ${prompts.join(" | ")}`);
 writeFileSync(process.env.FM_RELEASE_FILE, "release\n");
-const lateDeadlineAt = Date.now() + Number(process.env.FM_WAKE_DEADLINE_MS);
+const lateWindowMs = Number(process.env.FM_WAKE_DEADLINE_MS);
+const lateDeadlineAt = Date.now() + lateWindowMs;
+const latePollMs = Math.ceil(lateWindowMs / Number(process.env.FM_TEST_OBSERVE_POLL_DIVISOR));
 while (Date.now() < lateDeadlineAt) {
   if (rows().length >= 3 && (process.env.FM_LATE_KIND !== "actionable" || prompts.some((message) => message.includes("late wake")))) break;
-  await new Promise((resolve) => setTimeout(resolve, 10));
+  await new Promise((resolve) => setTimeout(resolve, latePollMs));
 }
 if (rows().length !== 3) throw new Error(`late close did not restore one successor: ${rows().join(" | ")}`);
 if (process.env.FM_LATE_KIND === "actionable") {
@@ -801,14 +883,16 @@ writeFileSync(`${process.env.FM_HOME}/state/.lock`, `${process.pid}\n`);
 const mod = await import(pathToFileURL(process.env.PLUGIN).href);
 mod.default(pi);
 await tool.execute("tool-call-empty", {}, undefined, undefined, {});
-const successorDeadlineAt = Date.now() + 2 * Number(process.env.FM_TEST_ARM_START_BUDGET_MS)
+const successorWindowMs = 2 * Number(process.env.FM_TEST_ARM_START_BUDGET_MS)
   + Number(process.env.FM_TEST_OBSERVE_SLACK_MS);
+const successorDeadlineAt = Date.now() + successorWindowMs;
+const successorPollMs = Math.ceil(successorWindowMs / Number(process.env.FM_TEST_OBSERVE_POLL_DIVISOR));
 while (Date.now() < successorDeadlineAt) {
   const rows = existsSync(process.env.FM_ARM_LOG)
     ? readFileSync(process.env.FM_ARM_LOG, "utf8").trim().split("\n")
     : [];
   if (rows.length >= 2) break;
-  await new Promise((resolve) => setTimeout(resolve, 10));
+  await new Promise((resolve) => setTimeout(resolve, successorPollMs));
 }
 const rows = readFileSync(process.env.FM_ARM_LOG, "utf8").trim().split("\n");
 if (rows.length !== 2) throw new Error(`clean empty close was ignored: ${rows.join(" | ")}`);
@@ -857,10 +941,12 @@ writeFileSync(`${process.env.FM_HOME}/state/.lock`, `${process.pid}\n`);
 const mod = await import(pathToFileURL(process.env.PLUGIN).href);
 mod.default(pi);
 await tool.execute("tool-call-established-empty", {}, undefined, undefined, {});
-const retryDeadlineAt = Date.now() + 3 * Number(process.env.FM_TEST_ARM_START_BUDGET_MS)
+const retryWindowMs = 3 * Number(process.env.FM_TEST_ARM_START_BUDGET_MS)
   + Number(process.env.FM_TEST_OBSERVE_SLACK_MS);
+const retryDeadlineAt = Date.now() + retryWindowMs;
+const retryPollMs = Math.ceil(retryWindowMs / Number(process.env.FM_TEST_OBSERVE_POLL_DIVISOR));
 while (!prompt && Date.now() < retryDeadlineAt) {
-  await new Promise((resolve) => setTimeout(resolve, 10));
+  await new Promise((resolve) => setTimeout(resolve, retryPollMs));
 }
 const rows = existsSync(process.env.FM_ARM_LOG)
   ? readFileSync(process.env.FM_ARM_LOG, "utf8").trim().split("\n")
@@ -916,10 +1002,12 @@ const other = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], { s
 try {
   writeFileSync(lock, `${other.pid}\n`);
   writeFileSync(process.env.FM_RELEASE_FILE, "release\n");
-  const lockLossDeadlineAt = Date.now() + 2 * Number(process.env.FM_TEST_ARM_START_BUDGET_MS)
+  const lockLossWindowMs = 2 * Number(process.env.FM_TEST_ARM_START_BUDGET_MS)
     + Number(process.env.FM_TEST_OBSERVE_SLACK_MS);
+  const lockLossDeadlineAt = Date.now() + lockLossWindowMs;
+  const lockLossPollMs = Math.ceil(lockLossWindowMs / Number(process.env.FM_TEST_OBSERVE_POLL_DIVISOR));
   while (!prompt.includes("no longer owns the lock") && Date.now() < lockLossDeadlineAt) {
-    await new Promise((resolve) => setTimeout(resolve, 10));
+    await new Promise((resolve) => setTimeout(resolve, lockLossPollMs));
   }
   const rows = readFileSync(process.env.FM_ARM_LOG, "utf8").trim().split("\n");
   if (rows.length !== 1) throw new Error(`successor launched after lock loss: ${rows.join(" | ")}`);
@@ -1003,10 +1091,12 @@ const owned = await callArm();
 if (owned.details?.ok !== true || !owned.details.message.includes("started Pi extension arm child")) {
   throw new Error(`owned lock did not arm: ${JSON.stringify(owned.details)}`);
 }
-const armDeadlineAt = Date.now() + 1 * Number(process.env.FM_TEST_ARM_START_BUDGET_MS)
+const armWindowMs = 1 * Number(process.env.FM_TEST_ARM_START_BUDGET_MS)
   + Number(process.env.FM_TEST_OBSERVE_SLACK_MS);
+const armDeadlineAt = Date.now() + armWindowMs;
+const armPollMs = Math.ceil(armWindowMs / Number(process.env.FM_TEST_OBSERVE_POLL_DIVISOR));
 while (!existsSync(process.env.FM_ARM_LOG) && Date.now() < armDeadlineAt) {
-  await new Promise((resolve) => setTimeout(resolve, 20));
+  await new Promise((resolve) => setTimeout(resolve, armPollMs));
 }
 if (!existsSync(process.env.FM_ARM_LOG)) throw new Error("owned lock did not run the watcher arm");
 EOF
@@ -1065,11 +1155,13 @@ function pidAlive(pid) {
 }
 
 async function waitFor(pred, label, starts = 1) {
-  const deadlineAt = Date.now() + starts * Number(process.env.FM_TEST_ARM_START_BUDGET_MS)
+  const wakeWindowMs = starts * Number(process.env.FM_TEST_ARM_START_BUDGET_MS)
     + Number(process.env.FM_TEST_OBSERVE_SLACK_MS);
+  const deadlineAt = Date.now() + wakeWindowMs;
+  const wakePollMs = Math.ceil(wakeWindowMs / Number(process.env.FM_TEST_OBSERVE_POLL_DIVISOR));
   while (Date.now() < deadlineAt) {
     if (pred()) return;
-    await new Promise((resolve) => setTimeout(resolve, 20));
+    await new Promise((resolve) => setTimeout(resolve, wakePollMs));
   }
   throw new Error(`timeout waiting for ${label}`);
 }
@@ -1242,6 +1334,7 @@ EOF
 
 test_pi_process_exit_cleanup_stops_arm_child() {
   local repo home plugin cleanup_log pid_file out status pid i
+  local cleanup_window_ms cleanup_poll_ms cleanup_attempts cleanup_poll_s
   repo="$TMP_ROOT/pi-process-exit-root"
   home="$TMP_ROOT/pi-process-exit-home"
   cleanup_log="$TMP_ROOT/pi-process-exit-cleaned"
@@ -1276,22 +1369,26 @@ writeFileSync(`${process.env.FM_HOME}/state/.lock`, `${process.pid}\n`);
 const mod = await import(pathToFileURL(process.env.PLUGIN).href);
 mod.default(pi);
 await tool.execute("tool-call-exit", {}, undefined, undefined, {});
-const childDeadlineAt = Date.now() + 1 * Number(process.env.FM_TEST_ARM_START_BUDGET_MS)
+const childWindowMs = 1 * Number(process.env.FM_TEST_ARM_START_BUDGET_MS)
   + Number(process.env.FM_TEST_OBSERVE_SLACK_MS);
+const childDeadlineAt = Date.now() + childWindowMs;
+const childPollMs = Math.ceil(childWindowMs / Number(process.env.FM_TEST_OBSERVE_POLL_DIVISOR));
 while (!existsSync(process.env.FM_CHILD_PID_FILE) && Date.now() < childDeadlineAt) {
-  await new Promise((resolve) => setTimeout(resolve, 20));
+  await new Promise((resolve) => setTimeout(resolve, childPollMs));
 }
 if (!existsSync(process.env.FM_CHILD_PID_FILE)) throw new Error("arm child did not start");
 const firstChild = readFileSync(process.env.FM_CHILD_PID_FILE, "utf8").trim();
 await handlers.get("session_shutdown")?.({ type: "session_shutdown" }, {});
 await handlers.get("session_start")?.({ type: "session_start" }, {});
 await tool.execute("tool-call-replacement", {}, undefined, undefined, {});
-const replacementDeadlineAt = Date.now() + 1 * Number(process.env.FM_TEST_ARM_START_BUDGET_MS)
+const replacementWindowMs = 1 * Number(process.env.FM_TEST_ARM_START_BUDGET_MS)
   + Number(process.env.FM_TEST_OBSERVE_SLACK_MS);
+const replacementDeadlineAt = Date.now() + replacementWindowMs;
+const replacementPollMs = Math.ceil(replacementWindowMs / Number(process.env.FM_TEST_OBSERVE_POLL_DIVISOR));
 while (Date.now() < replacementDeadlineAt) {
   const currentChild = readFileSync(process.env.FM_CHILD_PID_FILE, "utf8").trim();
   if (currentChild !== firstChild) break;
-  await new Promise((resolve) => setTimeout(resolve, 20));
+  await new Promise((resolve) => setTimeout(resolve, replacementPollMs));
 }
 if (readFileSync(process.env.FM_CHILD_PID_FILE, "utf8").trim() === firstChild) {
   throw new Error("replacement arm child did not start");
@@ -1302,9 +1399,21 @@ EOF
   status=$?
   expect_driver_ok "$status" "Pi process exit must run the watcher cleanup fallback" "$out"
   pid=$(cat "$pid_file")
+  # Wall-clock bound on a child-process wait, so it is derived like every other
+  # bound of that class in this file rather than left a literal - not because it
+  # had failed. The fixture body is `while :; do sleep 1; done`, so the TERM
+  # trap is deferred by at most one `sleep 1` plus the arm child's own start:
+  # about 1.8s at an 800ms fork cost, against the literal 250 x 20ms = 5s this
+  # replaces, which is roughly 2.8x and had not been observed reaching a false
+  # red. The literal is the problem regardless, because 1s of it is fixed and
+  # the rest moves with the machine while 5000 does not.
+  cleanup_window_ms=$(fm_observe_window_ms 1 1000)
+  cleanup_poll_ms=$(fm_observe_poll_ms "$cleanup_window_ms")
+  cleanup_attempts=$(fm_observe_attempts "$cleanup_window_ms" "$cleanup_poll_ms")
+  cleanup_poll_s=$(fm_ms_to_seconds "$cleanup_poll_ms")
   i=0
-  while [ "$i" -lt 250 ] && ! grep -qx "$pid" "$cleanup_log" 2>/dev/null; do
-    sleep 0.02
+  while [ "$i" -lt "$cleanup_attempts" ] && ! grep -qx "$pid" "$cleanup_log" 2>/dev/null; do
+    sleep "$cleanup_poll_s"
     i=$((i + 1))
   done
   grep -qx "$pid" "$cleanup_log" 2>/dev/null || fail "Pi process-exit fallback did not deliver TERM to the replacement arm child"
@@ -1363,10 +1472,12 @@ const hooks = await mod.FmPrimaryWatchArm({
 });
 writeFileSync(`${process.env.FM_HOME}/state/.lock`, `${process.pid}\n`);
 await hooks.event({ event: { type: "session.idle", properties: { sessionID: "session-test" } } });
-const armDeadlineAt = Date.now() + 1 * Number(process.env.FM_TEST_ARM_START_BUDGET_MS)
+const armWindowMs = 1 * Number(process.env.FM_TEST_ARM_START_BUDGET_MS)
   + Number(process.env.FM_TEST_OBSERVE_SLACK_MS);
+const armDeadlineAt = Date.now() + armWindowMs;
+const armPollMs = Math.ceil(armWindowMs / Number(process.env.FM_TEST_OBSERVE_POLL_DIVISOR));
 while (!existsSync(process.env.FM_ARM_LOG) && Date.now() < armDeadlineAt) {
-  await new Promise((resolve) => setTimeout(resolve, 20));
+  await new Promise((resolve) => setTimeout(resolve, armPollMs));
 }
 if (!existsSync(process.env.FM_ARM_LOG)) {
   console.error("watch arm did not run");
@@ -1414,10 +1525,12 @@ const hooks = await mod.FmPrimaryWatchArm({
 });
 writeFileSync(`${process.env.FM_HOME}/state/.lock`, `${process.pid}\n`);
 await hooks.event({ event: { type: "session.idle", properties: { sessionID: "session-test" } } });
-const armDeadlineAt = Date.now() + 1 * Number(process.env.FM_TEST_ARM_START_BUDGET_MS)
+const armWindowMs = 1 * Number(process.env.FM_TEST_ARM_START_BUDGET_MS)
   + Number(process.env.FM_TEST_OBSERVE_SLACK_MS);
+const armDeadlineAt = Date.now() + armWindowMs;
+const armPollMs = Math.ceil(armWindowMs / Number(process.env.FM_TEST_OBSERVE_POLL_DIVISOR));
 while (!existsSync(process.env.FM_ARM_LOG) && Date.now() < armDeadlineAt) {
-  await new Promise((resolve) => setTimeout(resolve, 20));
+  await new Promise((resolve) => setTimeout(resolve, armPollMs));
 }
 if (!existsSync(process.env.FM_ARM_LOG)) {
   console.error("watch arm did not run");
@@ -1482,10 +1595,12 @@ if (existsSync(process.env.FM_ARM_LOG)) {
 }
 writeFileSync(`${process.env.FM_HOME}/state/.lock`, `${process.pid}\n`);
 await hooks.event(event);
-const armDeadlineAt = Date.now() + 1 * Number(process.env.FM_TEST_ARM_START_BUDGET_MS)
+const armWindowMs = 1 * Number(process.env.FM_TEST_ARM_START_BUDGET_MS)
   + Number(process.env.FM_TEST_OBSERVE_SLACK_MS);
+const armDeadlineAt = Date.now() + armWindowMs;
+const armPollMs = Math.ceil(armWindowMs / Number(process.env.FM_TEST_OBSERVE_POLL_DIVISOR));
 while (!existsSync(process.env.FM_ARM_LOG) && Date.now() < armDeadlineAt) {
-  await new Promise((resolve) => setTimeout(resolve, 20));
+  await new Promise((resolve) => setTimeout(resolve, armPollMs));
 }
 if (!existsSync(process.env.FM_ARM_LOG)) {
   console.error("watch arm did not run after the session lock matched");
@@ -1603,14 +1718,16 @@ const hooks = await mod.FmPrimaryWatchArm({
 const event = { event: { type: "session.idle", properties: { sessionID: "session-test" } } };
 writeFileSync(`${process.env.FM_HOME}/state/.lock`, `${process.pid}\n`);
 await hooks.event(event);
-const successorDeadlineAt = Date.now() + 2 * Number(process.env.FM_TEST_ARM_START_BUDGET_MS)
+const successorWindowMs = 2 * Number(process.env.FM_TEST_ARM_START_BUDGET_MS)
   + Number(process.env.FM_TEST_OBSERVE_SLACK_MS);
+const successorDeadlineAt = Date.now() + successorWindowMs;
+const successorPollMs = Math.ceil(successorWindowMs / Number(process.env.FM_TEST_OBSERVE_POLL_DIVISOR));
 while (Date.now() < successorDeadlineAt) {
   const rows = existsSync(process.env.FM_ARM_LOG)
     ? readFileSync(process.env.FM_ARM_LOG, "utf8").trim().split("\n")
     : [];
   if (rows.length >= 2 && prompts >= 1) break;
-  await new Promise((resolve) => setTimeout(resolve, 10));
+  await new Promise((resolve) => setTimeout(resolve, successorPollMs));
 }
 const rows = readFileSync(process.env.FM_ARM_LOG, "utf8").trim().split("\n");
 if (rows.length !== 2) throw new Error(`expected one successor arm, got ${rows.length}: ${rows.join(" | ")}`);
@@ -1621,11 +1738,13 @@ await new Promise((resolve) => setTimeout(resolve, Number(process.env.FM_TEST_AR
 const stableRows = readFileSync(process.env.FM_ARM_LOG, "utf8").trim().split("\n");
 if (stableRows.length !== 2) throw new Error(`delivery was confirmed before the prompt succeeded: ${stableRows.join(" | ")}`);
 releasePrompt();
-const confirmDeadlineAt = Date.now() + 1 * Number(process.env.FM_TEST_ARM_START_BUDGET_MS)
+const confirmWindowMs = 1 * Number(process.env.FM_TEST_ARM_START_BUDGET_MS)
   + Number(process.env.FM_TEST_OBSERVE_SLACK_MS);
+const confirmDeadlineAt = Date.now() + confirmWindowMs;
+const confirmPollMs = Math.ceil(confirmWindowMs / Number(process.env.FM_TEST_OBSERVE_POLL_DIVISOR));
 while (Date.now() < confirmDeadlineAt) {
   if (readFileSync(process.env.FM_ARM_LOG, "utf8").includes("confirmed generation=fixture-generation")) break;
-  await new Promise((resolve) => setTimeout(resolve, 10));
+  await new Promise((resolve) => setTimeout(resolve, confirmPollMs));
 }
 const confirmedRows = readFileSync(process.env.FM_ARM_LOG, "utf8").trim().split("\n");
 if (confirmedRows.filter((row) => row.startsWith("confirmed ")).length !== 1) {
@@ -1692,14 +1811,16 @@ const hooks = await mod.FmPrimaryWatchArm({
 });
 writeFileSync(`${process.env.FM_HOME}/state/.lock`, `${process.pid}\n`);
 await hooks.event({ event: { type: "session.idle", properties: { sessionID: "session-test" } } });
-const preReadyDeadlineAt = Date.now() + 2 * Number(process.env.FM_TEST_ARM_START_BUDGET_MS)
+const preReadyWindowMs = 2 * Number(process.env.FM_TEST_ARM_START_BUDGET_MS)
   + Number(process.env.FM_TEST_OBSERVE_SLACK_MS);
+const preReadyDeadlineAt = Date.now() + preReadyWindowMs;
+const preReadyPollMs = Math.ceil(preReadyWindowMs / Number(process.env.FM_TEST_OBSERVE_POLL_DIVISOR));
 while (Date.now() < preReadyDeadlineAt) {
   const rows = existsSync(process.env.FM_ARM_LOG)
     ? readFileSync(process.env.FM_ARM_LOG, "utf8").trim().split("\n")
     : [];
   if (rows.length >= 2 && prompts.some((message) => message.includes("original wake"))) break;
-  await new Promise((resolve) => setTimeout(resolve, 10));
+  await new Promise((resolve) => setTimeout(resolve, preReadyPollMs));
 }
 const rows = readFileSync(process.env.FM_ARM_LOG, "utf8").trim().split("\n");
 if (rows.length !== 2) throw new Error(`pre-ready successor was replaced before its close: ${rows.join(" | ")}`);
@@ -1707,12 +1828,14 @@ if (!prompts.some((message) => message.includes("original wake"))) throw new Err
 await new Promise((resolve) => setTimeout(resolve, Number(process.env.FM_TEST_ARM_START_BUDGET_MS)));
 if (existsSync(process.env.FM_PRE_READY_RETIRED_FILE)) throw new Error("pre-ready actionable successor was retired before its close");
 writeFileSync(process.env.FM_PRE_READY_RELEASE_FILE, "release\n");
-const preReadySuccessorDeadlineAt = Date.now() + 1 * Number(process.env.FM_TEST_ARM_START_BUDGET_MS)
+const preReadySuccessorWindowMs = 1 * Number(process.env.FM_TEST_ARM_START_BUDGET_MS)
   + Number(process.env.FM_TEST_OBSERVE_SLACK_MS);
+const preReadySuccessorDeadlineAt = Date.now() + preReadySuccessorWindowMs;
+const preReadySuccessorPollMs = Math.ceil(preReadySuccessorWindowMs / Number(process.env.FM_TEST_OBSERVE_POLL_DIVISOR));
 while (Date.now() < preReadySuccessorDeadlineAt) {
   const successorRows = readFileSync(process.env.FM_ARM_LOG, "utf8").trim().split("\n");
   if (successorRows.length >= 3 && prompts.some((message) => message.includes("pre-ready successor wake"))) break;
-  await new Promise((resolve) => setTimeout(resolve, 10));
+  await new Promise((resolve) => setTimeout(resolve, preReadySuccessorPollMs));
 }
 const stableRows = readFileSync(process.env.FM_ARM_LOG, "utf8").trim().split("\n");
 if (stableRows.length !== 3) throw new Error(`pre-ready close did not create exactly one successor: ${stableRows.join(" | ")}`);
@@ -1774,9 +1897,11 @@ const hooks = await mod.FmPrimaryWatchArm({
 });
 writeFileSync(`${process.env.FM_HOME}/state/.lock`, `${process.pid}\n`);
 await hooks.event({ event: { type: "session.idle", properties: { sessionID: "session-test" } } });
-const deadlineAt = Date.now() + Number(process.env.FM_WAKE_DEADLINE_MS);
+const wakeWindowMs = Number(process.env.FM_WAKE_DEADLINE_MS);
+const deadlineAt = Date.now() + wakeWindowMs;
+const wakePollMs = Math.ceil(wakeWindowMs / Number(process.env.FM_TEST_OBSERVE_POLL_DIVISOR));
 while (!prompt && Date.now() < deadlineAt) {
-  await new Promise((resolve) => setTimeout(resolve, 10));
+  await new Promise((resolve) => setTimeout(resolve, wakePollMs));
 }
 const rows = existsSync(process.env.FM_ARM_LOG)
   ? readFileSync(process.env.FM_ARM_LOG, "utf8").trim().split("\n")
@@ -1850,9 +1975,11 @@ const hooks = await mod.FmPrimaryWatchArm({
 });
 writeFileSync(`${process.env.FM_HOME}/state/.lock`, `${process.pid}\n`);
 await hooks.event({ event: { type: "session.idle", properties: { sessionID: "session-test" } } });
-const deadlineAt = Date.now() + Number(process.env.FM_WAKE_DEADLINE_MS);
+const wakeWindowMs = Number(process.env.FM_WAKE_DEADLINE_MS);
+const deadlineAt = Date.now() + wakeWindowMs;
+const wakePollMs = Math.ceil(wakeWindowMs / Number(process.env.FM_TEST_OBSERVE_POLL_DIVISOR));
 while (!prompt && Date.now() < deadlineAt) {
-  await new Promise((resolve) => setTimeout(resolve, 10));
+  await new Promise((resolve) => setTimeout(resolve, wakePollMs));
 }
 const rows = existsSync(process.env.FM_ARM_LOG)
   ? readFileSync(process.env.FM_ARM_LOG, "utf8").trim().split("\n")
@@ -1925,10 +2052,12 @@ const rows = () => existsSync(process.env.FM_ARM_LOG)
   ? readFileSync(process.env.FM_ARM_LOG, "utf8").trim().split("\n")
   : [];
 async function waitFor(predicate, message) {
-  const deadlineAt = Date.now() + Number(process.env.FM_WAKE_DEADLINE_MS);
+  const wakeWindowMs = Number(process.env.FM_WAKE_DEADLINE_MS);
+  const deadlineAt = Date.now() + wakeWindowMs;
+  const wakePollMs = Math.ceil(wakeWindowMs / Number(process.env.FM_TEST_OBSERVE_POLL_DIVISOR));
   while (Date.now() < deadlineAt) {
     if (predicate()) return;
-    await new Promise((resolve) => setTimeout(resolve, 10));
+    await new Promise((resolve) => setTimeout(resolve, wakePollMs));
   }
   if (predicate()) return;
   throw new Error(message);
@@ -1952,10 +2081,12 @@ await waitFor(
 if (rows().length !== 2) throw new Error(`unretired arm overlapped before fallback: ${rows().join(" | ")}`);
 if (!prompts[0]?.includes("original wake")) throw new Error(`missing original fallback: ${prompts.join(" | ")}`);
 writeFileSync(process.env.FM_RELEASE_FILE, "release\n");
-const lateDeadlineAt = Date.now() + Number(process.env.FM_WAKE_DEADLINE_MS);
+const lateWindowMs = Number(process.env.FM_WAKE_DEADLINE_MS);
+const lateDeadlineAt = Date.now() + lateWindowMs;
+const latePollMs = Math.ceil(lateWindowMs / Number(process.env.FM_TEST_OBSERVE_POLL_DIVISOR));
 while (Date.now() < lateDeadlineAt) {
   if (rows().length >= 3 && (process.env.FM_LATE_KIND !== "actionable" || prompts.some((message) => message.includes("late wake")))) break;
-  await new Promise((resolve) => setTimeout(resolve, 10));
+  await new Promise((resolve) => setTimeout(resolve, latePollMs));
 }
 if (rows().length !== 3) throw new Error(`late close did not restore one successor: ${rows().join(" | ")}`);
 if (process.env.FM_LATE_KIND === "actionable") {
@@ -2014,14 +2145,16 @@ const hooks = await mod.FmPrimaryWatchArm({
 });
 writeFileSync(`${process.env.FM_HOME}/state/.lock`, `${process.pid}\n`);
 await hooks.event({ event: { type: "session.idle", properties: { sessionID: "session-test" } } });
-const successorDeadlineAt = Date.now() + 2 * Number(process.env.FM_TEST_ARM_START_BUDGET_MS)
+const successorWindowMs = 2 * Number(process.env.FM_TEST_ARM_START_BUDGET_MS)
   + Number(process.env.FM_TEST_OBSERVE_SLACK_MS);
+const successorDeadlineAt = Date.now() + successorWindowMs;
+const successorPollMs = Math.ceil(successorWindowMs / Number(process.env.FM_TEST_OBSERVE_POLL_DIVISOR));
 while (Date.now() < successorDeadlineAt) {
   const rows = existsSync(process.env.FM_ARM_LOG)
     ? readFileSync(process.env.FM_ARM_LOG, "utf8").trim().split("\n")
     : [];
   if (rows.length >= 2) break;
-  await new Promise((resolve) => setTimeout(resolve, 10));
+  await new Promise((resolve) => setTimeout(resolve, successorPollMs));
 }
 const rows = readFileSync(process.env.FM_ARM_LOG, "utf8").trim().split("\n");
 if (rows.length !== 2) throw new Error(`clean empty close was ignored: ${rows.join(" | ")}`);
@@ -2071,10 +2204,12 @@ const hooks = await mod.FmPrimaryWatchArm({
 });
 writeFileSync(`${process.env.FM_HOME}/state/.lock`, `${process.pid}\n`);
 await hooks.event({ event: { type: "session.idle", properties: { sessionID: "session-test" } } });
-const retryDeadlineAt = Date.now() + 3 * Number(process.env.FM_TEST_ARM_START_BUDGET_MS)
+const retryWindowMs = 3 * Number(process.env.FM_TEST_ARM_START_BUDGET_MS)
   + Number(process.env.FM_TEST_OBSERVE_SLACK_MS);
+const retryDeadlineAt = Date.now() + retryWindowMs;
+const retryPollMs = Math.ceil(retryWindowMs / Number(process.env.FM_TEST_OBSERVE_POLL_DIVISOR));
 while (!prompt && Date.now() < retryDeadlineAt) {
-  await new Promise((resolve) => setTimeout(resolve, 10));
+  await new Promise((resolve) => setTimeout(resolve, retryPollMs));
 }
 const rows = existsSync(process.env.FM_ARM_LOG)
   ? readFileSync(process.env.FM_ARM_LOG, "utf8").trim().split("\n")
@@ -2128,20 +2263,24 @@ const hooks = await mod.FmPrimaryWatchArm({
 const lock = `${process.env.FM_HOME}/state/.lock`;
 writeFileSync(lock, `${process.pid}\n`);
 const eventPromise = hooks.event({ event: { type: "session.idle", properties: { sessionID: "session-test" } } });
-const armDeadlineAt = Date.now() + 1 * Number(process.env.FM_TEST_ARM_START_BUDGET_MS)
+const armWindowMs = 1 * Number(process.env.FM_TEST_ARM_START_BUDGET_MS)
   + Number(process.env.FM_TEST_OBSERVE_SLACK_MS);
+const armDeadlineAt = Date.now() + armWindowMs;
+const armPollMs = Math.ceil(armWindowMs / Number(process.env.FM_TEST_OBSERVE_POLL_DIVISOR));
 while (!existsSync(process.env.FM_ARM_LOG) && Date.now() < armDeadlineAt) {
-  await new Promise((resolve) => setTimeout(resolve, 10));
+  await new Promise((resolve) => setTimeout(resolve, armPollMs));
 }
 const other = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], { stdio: "ignore" });
 try {
   writeFileSync(lock, `${other.pid}\n`);
   writeFileSync(process.env.FM_RELEASE_FILE, "release\n");
   await eventPromise;
-  const lockLossDeadlineAt = Date.now() + 2 * Number(process.env.FM_TEST_ARM_START_BUDGET_MS)
+  const lockLossWindowMs = 2 * Number(process.env.FM_TEST_ARM_START_BUDGET_MS)
     + Number(process.env.FM_TEST_OBSERVE_SLACK_MS);
+  const lockLossDeadlineAt = Date.now() + lockLossWindowMs;
+  const lockLossPollMs = Math.ceil(lockLossWindowMs / Number(process.env.FM_TEST_OBSERVE_POLL_DIVISOR));
   while (!prompt.includes("no longer owns the lock") && Date.now() < lockLossDeadlineAt) {
-    await new Promise((resolve) => setTimeout(resolve, 10));
+    await new Promise((resolve) => setTimeout(resolve, lockLossPollMs));
   }
   const rows = readFileSync(process.env.FM_ARM_LOG, "utf8").trim().split("\n");
   if (rows.length !== 1) throw new Error(`successor launched after lock loss: ${rows.join(" | ")}`);
@@ -2206,10 +2345,12 @@ const guardHooks = await guardMod.FmPrimaryTurnendGuard({
 });
 writeFileSync(`${process.env.FM_HOME}/state/.lock`, `${process.pid}\n`);
 await guardHooks.event({ event: { type: "session.idle", properties: { sessionID: "session-test" } } });
-const armDeadlineAt = Date.now() + 1 * Number(process.env.FM_TEST_ARM_START_BUDGET_MS)
+const armWindowMs = 1 * Number(process.env.FM_TEST_ARM_START_BUDGET_MS)
   + Number(process.env.FM_TEST_OBSERVE_SLACK_MS);
+const armDeadlineAt = Date.now() + armWindowMs;
+const armPollMs = Math.ceil(armWindowMs / Number(process.env.FM_TEST_OBSERVE_POLL_DIVISOR));
 while (!existsSync(process.env.FM_ARM_LOG) && Date.now() < armDeadlineAt) {
-  await new Promise((resolve) => setTimeout(resolve, 20));
+  await new Promise((resolve) => setTimeout(resolve, armPollMs));
 }
 if (!existsSync(process.env.FM_ARM_LOG)) {
   console.error("watch arm did not run");
@@ -2280,10 +2421,12 @@ const guardHooks = await guardMod.FmPrimaryTurnendGuard({
 });
 writeFileSync(`${process.env.FM_HOME}/state/.lock`, `${process.pid}\n`);
 await guardHooks.event({ event: { type: "session.idle", properties: { sessionID: "session-test" } } });
-const guardDeadlineAt = Date.now() + 2 * Number(process.env.FM_TEST_ARM_START_BUDGET_MS)
+const guardWindowMs = 2 * Number(process.env.FM_TEST_ARM_START_BUDGET_MS)
   + Number(process.env.FM_TEST_OBSERVE_SLACK_MS);
+const guardDeadlineAt = Date.now() + guardWindowMs;
+const guardPollMs = Math.ceil(guardWindowMs / Number(process.env.FM_TEST_OBSERVE_POLL_DIVISOR));
 while (!existsSync(process.env.FM_GUARD_LOG) && Date.now() < guardDeadlineAt) {
-  await new Promise((resolve) => setTimeout(resolve, 20));
+  await new Promise((resolve) => setTimeout(resolve, guardPollMs));
 }
 if (!existsSync(process.env.FM_ARM_LOG)) {
   console.error("watch arm did not run");

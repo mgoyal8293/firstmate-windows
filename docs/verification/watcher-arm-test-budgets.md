@@ -183,7 +183,36 @@ ok - Pi established clean closes stop at the configured retry limit
 ok - OpenCode established clean closes stop at the configured retry limit
 ```
 
-The negative windows moved too - the ones that watch for an arm that must not appear. A 100ms settle cannot observe an unwanted child that needs 300ms to record itself, so those windows were widest exactly where they were least able to catch anything; each is now one start budget. That costs about three seconds of wall clock per run of this file on a workstation, which the shard weights pick up at their next refresh.
+The negative windows moved too - the ones that watch for an arm that must not appear.
+A 100ms settle cannot observe an unwanted child that needs 300ms to record itself, so those windows were widest exactly where they were least able to catch anything; each is now one start budget.
+Those eight are settle sleeps rather than polled windows, so unlike every other window in the file they are paid in full on the passing path, and the file's comment block says so where a reader will hit it.
+
+The additive term moved for the same reason as the multiplicative one.
+`FM_TEST_OBSERVE_SLACK_MS` covers module load, lock checks and prompt delivery, which are per-case process costs and scale with the machine exactly like fork cost, so leaving it a flat 1000 pinned a floor under every window in the file - the one term that would not move with the machine.
+It is now three measured cold starts, floored at the 1000ms this evidence was collected at, so a loaded runner widens it and no machine narrows it below the configuration measured above.
+
+Poll cadence is derived from the window too.
+A derived window polled at a fixed 10ms gets noisier the slower the machine is: 590 wakeups at the 328ms start measured here and about 1300 at 800ms, each with a `readFileSync` or `existsSync` behind it, on the machine whose load is the thing being measured.
+Each poll is now the window divided by `FM_TEST_OBSERVE_POLL_DIVISOR`, which holds it at 64 wakeups per window on any machine.
+That buys detection granularity proportional to the window - one 64th of it - instead of an absolute 10ms, and it widens nothing, because every deadline is still computed from the window rather than from the poll.
+
+The last bound of this class was waited on from bash rather than from a node driver: a literal 250 x 20ms giving 5s to observe the arm child's TERM trap appending to the cleanup log.
+It is derived now for the same reason as its siblings, as `fm_observe_window_ms 1 1000` - one cold start plus the 1s the fixture's own `while :; do sleep 1; done` defers the trap by.
+It was not derived because it had failed: the deferral is about 1.8s at an 800ms fork cost, roughly 2.8x inside the literal, and no false red on it was ever observed.
+On a workstation that derivation narrows the bound from 5s to 2.5s, which is accepted and unmeasured - only the wider direction was ever measured here, so the narrowing is recorded rather than widened back, and the margin it keeps is 2.4x against a deferral that is 1s fixed plus one measured start.
+
+### The weight hint this change knowingly staled
+
+`bin/fm-test-run.sh` packs `tests/fm-pi-watch-extension.test.sh` at 27802 ms.
+That hint now understates by 12-31 s, and the derivation is the eight settle sleeps: literals summing to 870 ms were replaced by 8 x `FM_TEST_ARM_START_BUDGET_MS`, which is 8 x 1640 = 13120 ms at the 328 ms start measured on run 32255813826 (delta 12.3 s) and 8 x 4000 = 32000 ms at the 800 ms start in the load curve (delta 31.1 s).
+The polled windows add nothing to that figure on the passing path, by construction.
+
+That is not a job-cap risk for the lane.
+The worst portable serial shard measures 11.67 minutes of script time against a `timeout-minutes: 15` cap, and this file sits in one shard, so the worst case is 11.67 min + 31.1 s = 12.19 min, still about 1.23x under the cap with runner setup and checkout on top.
+It is recorded here rather than left for the reader to reconstruct because `docs/fm-test-portable-shards.md` argues in the same breath that a stale hint past the cap costs a cancelled job with no verdict.
+
+`bin/fm-test-run.sh --check-coverage` will not catch this one, and that is the point worth writing down: `unmeasured_serial=0` means no selected serial script is packed at the flat default, not that the hints are current.
+This file already had a hint, so the guard never looked at its value - the same blind spot that let the lane overflow accumulate, and the reason `fm-test-weight-drift-detector` is filed as the follow-up that compares measured durations against the table.
 
 ## Why the guard plugins guard their stdin write
 
