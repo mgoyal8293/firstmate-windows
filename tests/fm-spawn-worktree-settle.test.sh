@@ -195,12 +195,16 @@ SH
 # tests/fm-backend-conpty.test.sh does. Text is delivered by FILE on this
 # backend, so the sent line is recovered from the file the client was handed.
 make_conpty_fakebin() {  # <dir> <worktree> -> echoes fakebin dir
-  local dir=$1 wt=$2 fakebin
+  local dir=$1 wt=$2 fakebin real_node
   fakebin=$(fm_fakebin "$dir")
+  real_node=$(command -v node || true)
   # shellcheck disable=SC2016 # deliberate: these expand in the fake, not here.
   cat > "$fakebin/node" <<SH
 #!/usr/bin/env bash
 set -u
+# Only the conpty CLIENT is faked. fm-spawn also runs node as a plain JSON
+# reader (the lease-release helper), and that must be the real interpreter.
+if [ "\${1:-}" = -e ]; then exec "$real_node" "\$@"; fi
 cmd=\${2:-}
 case "\$cmd" in
   doctor) printf 'ok\n'; exit 0 ;;
@@ -230,8 +234,29 @@ esac
 exit 0
 SH
   chmod +x "$fakebin/node"
-  fm_fake_exit0 "$fakebin" treehouse
+  make_recording_treehouse "$fakebin"
   printf '%s\n' "$fakebin"
+}
+
+# make_recording_treehouse: a treehouse that records every invocation and answers
+# `status --json` from the pool the case declares. `status --json` and
+# `return --force --if-lease-holder` are the two shapes fm-spawn's abort path
+# uses; the exit code of `return` is what the case varies.
+make_recording_treehouse() {  # <fakebin>
+  cat > "$1/treehouse" <<'SH'
+#!/usr/bin/env bash
+set -u
+{ printf 'treehouse'; for a in "$@"; do printf '\x1f%s' "$a"; done; printf '\n'; } >> "${FM_TREEHOUSE_LOG:?}"
+case "${1:-}" in
+  status)
+    printf '[{"name":"1","path":"%s","status":"leased","lease_holder":"%s","processes":[]}]\n' \
+      "${FM_FAKE_LEASED_PATH:-}" "${FM_FAKE_LEASE_HOLDER:-}"
+    exit 0 ;;
+  return) exit "${FM_FAKE_RETURN_EXIT:-0}" ;;
+esac
+exit 0
+SH
+  chmod +x "$1/treehouse"
 }
 
 # acquire_line: the first line the backend was sent, which is the worktree
@@ -272,6 +297,9 @@ run_acquire_spawn() {  # <case-dir> <fakebin> <spawn> <id> [extra spawn args...]
     FM_PROJECTS_OVERRIDE="$case_dir/home/projects" FM_CONFIG_OVERRIDE="$case_dir/home/config" \
     FM_SPAWN_NO_GUARD=1 TMUX="fake,1,0" \
     FM_SENT_LOG="$case_dir/sent.log" FM_EXISTS_COUNT="$case_dir/exists.count" \
+    FM_TREEHOUSE_LOG="$case_dir/treehouse.log" \
+    FM_FAKE_LEASED_PATH="${FM_FAKE_LEASED_PATH:-}" FM_FAKE_LEASE_HOLDER="${FM_FAKE_LEASE_HOLDER:-}" \
+    FM_FAKE_RETURN_EXIT="${FM_FAKE_RETURN_EXIT:-0}" \
     FM_BACKEND_CONPTY_ALLOW_NON_WINDOWS=1 \
     FM_BACKEND_CONPTY_SHELL='C:\fake\bash.exe' \
     FM_BACKEND_CONPTY_STATE="$case_dir/conpty-state" \
@@ -310,12 +338,80 @@ test_conpty_leases_and_cds_in_the_session_shell() {
   case "$line" in
     'treehouse get') fail "the conpty spawn still opens a provider subshell" ;;
   esac
+  # A spawn that SUCCEEDS must keep its lease: the record now carries worktree=,
+  # so teardown is what returns it.
+  case "$(cat "$case_dir/treehouse.log" 2>/dev/null || true)" in
+    *return*) fail "a successful conpty spawn released its own worktree lease" ;;
+  esac
   pass "fm-spawn leases the worktree and cds into the marked session shell on conpty, so no provider subshell hosts the agent"
+}
+
+# THE LEASE OUTLIVES ITS ACQUIRER, so the acquirer has to hand it back when it
+# aborts. Every other backend gets this free: `treehouse get`'s subshell holds
+# the slot and drops it when the endpoint dies. Here the abort happens before the
+# record exists, so fm-teardown cannot reclaim it either, and a finite pool would
+# be consumed one slot per failed spawn.
+#
+# The abort is triggered where a real one is cheapest to reproduce: the session
+# settles into a directory that is not an isolated git worktree, which is exactly
+# what validate_spawn_worktree refuses.
+make_abort_case() {  # <name> <id> -> case dir
+  local case_dir
+  case_dir=$(make_acquire_case "$1" "$2")
+  mkdir -p "$case_dir/not-a-worktree" "$case_dir/leased-slot"
+  printf '%s\n' "$case_dir"
+}
+
+treehouse_return_call() {  # <treehouse-log>
+  grep -F "$(printf '\x1f')return$(printf '\x1f')" "$1" 2>/dev/null || true
+}
+
+test_aborted_conpty_spawn_returns_its_own_lease() {
+  local case_dir id fakebin spawn out status call us
+  id=acquire-conpty-abort-z3
+  case_dir=$(make_abort_case acquire-conpty-abort "$id")
+  export FM_FAKE_LEASED_PATH="$case_dir/leased-slot" FM_FAKE_LEASE_HOLDER="firstmate-$id" FM_FAKE_RETURN_EXIT=0
+  fakebin=$(make_conpty_fakebin "$case_dir/fake" "$case_dir/not-a-worktree")
+  spawn=$(make_conpty_binroot "$case_dir")
+
+  out=$(run_acquire_spawn "$case_dir" "$fakebin" "$spawn" "$id" --backend conpty)
+  status=$?
+  [ "$status" -ne 0 ] || fail "the spawn should have aborted on a worktree that is not isolated"$'\n'"$out"
+  call=$(treehouse_return_call "$case_dir/treehouse.log")
+  [ -n "$call" ] || fail "the aborted conpty spawn never returned its lease"$'\n'"$out"
+  us=$(printf '\x1f')
+  # Found by THIS task's holder label, not by the rejected directory: the slot
+  # the pool reports is the one handed back, and --if-lease-holder is what stops
+  # the abort from ever taking another task's slot.
+  assert_contains "$call" "${us}return${us}--force${us}--if-lease-holder${us}firstmate-$id${us}$case_dir/leased-slot" \
+    "the release did not name the leased slot and its holder"
+  pass "an aborted conpty spawn hands its worktree lease back, holder-scoped, before the task record exists"
+}
+
+test_unreleasable_lease_prints_the_operator_command() {
+  local case_dir id fakebin spawn out status
+  id=acquire-conpty-stuck-z4
+  case_dir=$(make_abort_case acquire-conpty-stuck "$id")
+  export FM_FAKE_LEASED_PATH="$case_dir/leased-slot" FM_FAKE_LEASE_HOLDER="firstmate-$id" FM_FAKE_RETURN_EXIT=1
+  fakebin=$(make_conpty_fakebin "$case_dir/fake" "$case_dir/not-a-worktree")
+  spawn=$(make_conpty_binroot "$case_dir")
+
+  out=$(run_acquire_spawn "$case_dir" "$fakebin" "$spawn" "$id" --backend conpty)
+  status=$?
+  export FM_FAKE_RETURN_EXIT=0
+  [ "$status" -ne 0 ] || fail "the spawn should have aborted on a worktree that is not isolated"$'\n'"$out"
+  # A failed abort is worse than a leaked slot, so the release stays best-effort
+  # and the operator gets the exact command instead of a failure.
+  assert_contains "$out" "treehouse return --force --if-lease-holder firstmate-$id $case_dir/leased-slot" \
+    "a lease that could not be released did not print the command to release it"
+  pass "a lease the abort cannot release is reported with the exact one-line command, not swallowed and not fatal"
 }
 
 test_single_stale_first_read_is_not_accepted
 test_already_settled_pane_costs_one_confirm_sleep
 test_default_backend_sends_bare_treehouse_get
 test_conpty_leases_and_cds_in_the_session_shell
+test_aborted_conpty_spawn_returns_its_own_lease
+test_unreleasable_lease_prints_the_operator_command
 
 echo "# all fm-spawn-worktree-settle tests passed"

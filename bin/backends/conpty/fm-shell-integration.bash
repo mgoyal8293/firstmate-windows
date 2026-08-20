@@ -81,11 +81,17 @@ fi
 # SHELL, so the session's own child tools agree with it about what shell this is.
 # A real Git Bash session is a LOGIN shell and /etc/profile sets this; the
 # session shell here is deliberately not one, so an absent SHELL reaches every
-# tool that consults it. `treehouse get` is one such tool: it opens $SHELL and
-# falls back to %COMSPEC% when it cannot. Measured on real Windows with
-# treehouse 2.1.1: SHELL unset opens cmd.exe, which announces no OSC 0 title (so
-# fm-spawn's worktree discovery never sees the session leave the project) and
-# can emit no prompt mark.
+# tool that consults it. `treehouse get` opens $SHELL and falls back to
+# %COMSPEC% when it cannot; measured on real Windows with treehouse 2.1.1, SHELL
+# unset gets cmd.exe, which announces no OSC 0 title and can emit no prompt
+# mark.
+#
+# This is DEFENSIVE, not load-bearing for the spawn path. fm-spawn acquires the
+# worktree on this backend with `treehouse get --lease` inside a command
+# substitution, which opens no shell at all, so worktree discovery reads this
+# shell's own `cd` and $SHELL cannot break it. What the repair still protects is
+# every other tool in the session that opens $SHELL, and a hand-run
+# `treehouse get`.
 #
 # THE PROBE ASKS WHAT THE NATIVE CONSUMER ASKS. treehouse.exe CreateProcesses
 # this value: it cannot run a script and it cannot word-split. `[ -x ]` answers
@@ -111,10 +117,6 @@ if ! _fm_conpty_native_image "${SHELL:-}"; then
 fi
 unset -f _fm_conpty_native_image
 
-if [ -n "${_FM_CONPTY_SHELL_INTEGRATION:-}" ]; then
-  return 0
-fi
-
 # The PS0 floor, checked rather than assumed. BASH_VERSINFO is unset in a
 # non-bash shell, which lands in the same "arm nothing" branch.
 _fm_conpty_bash_has_ps0() {
@@ -130,15 +132,30 @@ _fm_conpty_bash_has_ps0() {
   return 1
 }
 
+# EACH CARRIER IS ARMED IDEMPOTENTLY, AND EACH ANSWERS FOR ITSELF. The question
+# asked before every prepend is "does THIS carrier already hold firstmate's
+# mark", read off the carrier rather than off a bookkeeping variable. A variable
+# cannot answer it correctly in both directions at once: unexported it says
+# nothing about a nested shell that inherited the carriers (which then prepends a
+# second copy of the finished mark, one more per nesting level, doubling the
+# per-prompt bytes and inflating the promptMarks counter), and exported it makes
+# a nested shell whose own rc files WIPED the carriers return early and never
+# re-arm. Reading the carrier is right for both: a re-source adds nothing, and a
+# clobbered carrier heals.
 if _fm_conpty_bash_has_ps0; then
-  # C: a command has started, so a command owns the foreground.
+  # C: a command has started, so a command owns the foreground. A plain
+  # assignment, so it needs no guard of its own.
   PS0='\e]133;C;fmpty=1\a'
   export PS0
+
   # A and B bracket the prompt itself. Both are wrapped in \[ \] so bash counts
   # them as zero-width: an unwrapped escape sequence in PS1 corrupts readline's
   # idea of the line length, which would misplace the cursor the composer
   # classifier reads.
-  PS1='\[\e]133;A;fmpty=1\a\]'"${PS1:-\\s-\\v\\\$ }"'\[\e]133;B;fmpty=1\a\]'
+  case "${PS1:-}" in
+    *'133;A;fmpty=1'*) ;;
+    *) PS1='\[\e]133;A;fmpty=1\a\]'"${PS1:-\\s-\\v\\\$ }"'\[\e]133;B;fmpty=1\a\]' ;;
+  esac
 
   # D fires before the next prompt is drawn, and is the one mark a nested shell
   # must be able to emit on its own, so it is written as a self-contained command
@@ -162,24 +179,22 @@ if _fm_conpty_bash_has_ps0; then
       # SC2178/SC2128: this branch is the only one that reads PROMPT_COMMAND as
       # an array, and it runs only when `declare -p` proved it is one.
       # shellcheck disable=SC2178,SC2128
-      _fm_conpty_pc_joined=$(printf '%s; ' "${PROMPT_COMMAND[@]}")
-      PROMPT_COMMAND="$_fm_conpty_mark_finished; ${_fm_conpty_pc_joined%; }"
-      unset _fm_conpty_pc_joined
+      _fm_conpty_pc_now=$(printf '%s; ' "${PROMPT_COMMAND[@]}")
+      _fm_conpty_pc_now=${_fm_conpty_pc_now%; }
       ;;
     *)
       # shellcheck disable=SC2178,SC2128
-      PROMPT_COMMAND="$_fm_conpty_mark_finished${PROMPT_COMMAND:+; $PROMPT_COMMAND}"
+      _fm_conpty_pc_now=${PROMPT_COMMAND:-}
       ;;
   esac
-  export PROMPT_COMMAND
-  unset _fm_conpty_pc_decl _fm_conpty_mark_finished
-
-  # Deliberately NOT exported. It answers "has THIS shell already armed",
-  # which is what stops a re-source from prepending a second copy of the mark.
-  # An exported answer would be a different claim - "some ancestor armed" - and
-  # a nested shell that inherited it would return early and never re-arm its own
-  # PS0 and PROMPT_COMMAND, defeating the self-healing the design relies on.
-  _FM_CONPTY_SHELL_INTEGRATION=1
+  case "$_fm_conpty_pc_now" in
+    *"$_fm_conpty_mark_finished"*) ;;
+    *)
+      PROMPT_COMMAND="$_fm_conpty_mark_finished${_fm_conpty_pc_now:+; $_fm_conpty_pc_now}"
+      export PROMPT_COMMAND
+      ;;
+  esac
+  unset _fm_conpty_pc_decl _fm_conpty_pc_now _fm_conpty_mark_finished
 fi
 
 unset -f _fm_conpty_bash_has_ps0

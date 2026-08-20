@@ -717,7 +717,8 @@ The portable classifier regression is `tests/fm-backend-cmux.test.sh`.
 ## conpty
 
 The compatibility floor is Windows 10 1809 (ConPTY's own floor) with Node 20.
-Active live evidence is a manual pass recorded on 2026-08-18 against Windows 10.0.26200, Node v22.18.0, node-pty 1.1.0, @xterm/headless 6.0.0, and a real Claude Code 2.1.220, extended on 2026-08-19 by the foreground-liveness and control-plane pass below (same host, Git for Windows 2.50.1 with bash 5.2.37, treehouse 2.1.1).
+Active live evidence is a manual pass recorded on 2026-08-18 against Windows 10.0.26200, Node v22.18.0, node-pty 1.1.0, @xterm/headless 6.0.0, and a real Claude Code 2.1.220, extended on 2026-08-20 by the foreground-liveness and control-plane pass below (same host, Git for Windows 2.50.1 with bash 5.2.37, treehouse 2.1.1).
+The 2026-08-19 block that precedes it is retained as history and is **superseded**: it was measured on a spawn topology that no longer exists.
 The Windows CI lane in `.github/workflows/windows-ci.yml` carries only the portable regression `tests/fm-backend-conpty.test.sh` - which now covers the adapter with a faked session client, the liveness decision table with real node, and the mark chain with real bash - so this live evidence stays a recorded manual pass rather than a gate that reruns on every change.
 The backend capability matrix is covered portably by `tests/fm-control.test.sh`, and the real-harness half of the liveness proof is the opt-in `tests/fm-conpty-liveness-live-e2e.test.sh`.
 The later whole-system pass on this backend - session lock, spawn, supervision, landing, teardown, and restart in one run - is recorded in [`../windows.md`](../windows.md#run-end-to-end-on-windows) and is not repeated here.
@@ -787,7 +788,12 @@ Unknowns the spike left open, resolved here:
 | Scrollback limits | Exact and bounded. With `--scrollback 500` and 2000 emitted lines, the buffer held 540 rows (500 scrollback plus a 40-row viewport) and capture returned exactly those. The durable transcript held all 2000. While Claude holds the alternate screen the buffer type is `alternate` and no scrollback exists at all, matching tmux on an alt-screen pane. |
 | Behaviour across a Windows sign-out | **Not verified by a live sign-out.** Measured: the daemon, its shell, and the agent all run in interactive logon SessionId 4, alongside only a `services` session 0, so Windows' session teardown at logoff ends them. Separately verified: the pipe namespace is machine-global, not session-scoped - an unrelated process listed all live `fmpty-*` pipes among 340 - so the control surface is not the limiting factor. A live sign-out would have terminated the session running the verification itself; `docs/conpty-backend.md` carries the exact two-minute test to settle it. |
 
-### Foreground liveness and the control plane, 2026-08-19
+### Foreground liveness and the control plane, 2026-08-19 (SUPERSEDED topology)
+
+**Everything in this block was measured while `fm-spawn` sent a bare `treehouse get`, so the agent ran inside the worktree provider's subshell.**
+That topology no longer exists on this backend: the spawn path now leases the worktree and `cd`s into the session shell, so no provider subshell hosts the task and no `treehouse.exe` stays attached to the console.
+The end-to-end control-verb evidence here is therefore **not** evidence for the shipped path - the 2026-08-20 block below re-measures it.
+What remains valid and is not re-measured: the `windowsHide` finding, the untagged-mark counts, and the npm-install shape.
 
 The prompt-mark chain reaches the shell that actually hosts the agent.
 `fm-spawn` sends `treehouse get`, and the worktree provider opens a subshell that lives for the whole task, so the agent runs one level below the shell firstmate armed.
@@ -892,8 +898,10 @@ Measured on the real Windows host with treehouse 2.1.1, so the arm rests on obse
 | Does the lease need releasing separately? | No. `bin/fm-teardown.sh` already runs `treehouse return --force <dir>`, which releases it - confirmed live: `leased ... (held by fm-cd-probe)` returned to `available`. |
 | Is there a new tool floor? | No. `bin/fm-bootstrap.sh` already requires `treehouse get --lease` for every treehouse-using backend, and `bin/fm-home-seed.sh` already uses `--lease --lease-holder <id>`. |
 
-The second, larger benefit: with no `treehouse.exe` left attached to the console, a session that emits NO mark at all also reaches `dead` through the fallback's shell-only reading, so graceful stop no longer depends on the marks and works for an old bash or a non-bash session shell too.
-The cost is that the pool slot is freed by that explicit return rather than by a subshell dying, so a crash that never reaches teardown leaves a leased slot - attributable by design, since the holder is `firstmate-<id>`.
+The second benefit, stated no more strongly than it was measured: `treehouse.exe` used to stay attached for the task's whole life and count as `sawOther`, so the mark-less fallback's only `dead` arm (`sawShell && !sawOther`, with no harness name at all) was UNREACHABLE and every mark-less session ended at "no harness and not shell-only".
+With nothing but shells attached that arm is reachable again, so a mark-less session does reach `dead` - one poll after the harness process itself leaves the console list, as measured in (2e) below.
+It still cannot report `dead` while a harness lingers attached, which is the safe direction, and closing exactly that gap immediately is what the marks buy.
+The cost is that the pool slot is freed by an explicit return rather than by a subshell dying; `fm-teardown` and fm-spawn's own abort path both perform it, so what is left is a crash that reaches neither - and that leaves a leased slot, attributable by design, since the holder is `firstmate-<id>`.
 
 Carrier alternatives, rejected with evidence so they are not re-tried:
 
@@ -907,6 +915,101 @@ Carrier alternatives, rejected with evidence so they are not re-tried:
 
 The `$SHELL` repair probes for a PE image rather than for `[ -x ]`, also measured here: `[ -x /bin/bash ]` is true on Git for Windows AND `treehouse` with `SHELL=/bin/bash` works fine (it opened `/usr/bin/bash` 5.2.37 and the subshell ran normally), so a POSIX-form value is not a hazard and is left alone.
 What `[ -x ]` gets wrong is the other direction: it accepts a shebang wrapper that a native launcher cannot start at all.
+
+`-U` on the CR guard's `grep` is load-bearing, not decoration, measured on one CRLF file on this host: `LC_ALL=C grep -Uq $'\r'` DETECTS the CR and a plain `grep -q $'\r'` MISSES it, because msys reads the file in text mode otherwise.
+The same translation is why `tests/fm-backend-conpty.test.sh` checks its own CRLF fixture by byte count rather than by reading a line back and looking for the CR.
+
+### The shipped spawn path, end to end on real Windows, 2026-08-20
+
+Same host and versions as above, against a real Claude Code 2.1.220, with the pipeline's own head synced onto the rig.
+This is the lease-and-cd path that ships; it replaces the 2026-08-19 end-to-end block.
+
+**(2a) All three control verbs, on a task spawned by `bin/fm-spawn.sh --backend conpty --harness claude`.**
+Note what is no longer in the process list:
+
+```text
+spawned ctlprobe harness=claude kind=ship mode=local-only yolo=off window=fm-firstmate-1923369c-ctlprobe worktree=/c/Users/johns/.treehouse/demo-099c58/1/demo
+recorded: worktree=/c/Users/johns/.treehouse/demo-099c58/1/demo backend=conpty conpty_session=fm-firstmate-1923369c-ctlprobe
+alive why="harness process claude.exe and a foreground command running"
+prompt=running promptMark=C promptMarks=12
+procs=[claude.exe, sh.exe, bash.exe, bash.exe]   <- no treehouse.exe: the provider subshell is gone
+interrupt-delivered ctlprobe harness=claude backend=conpty verified=agent-alive cancel=unconfirmed
+stopped ctlprobe harness=claude backend=conpty endpoint=fm-firstmate-1923369c-ctlprobe worktree=/c/Users/johns/.treehouse/demo-099c58/1/demo
+relaunched ctlprobe harness=claude from=claude model=default effort=default backend=conpty endpoint=fm-firstmate-1923369c-ctlprobe worktree=/c/Users/johns/.treehouse/demo-099c58/1/demo
+```
+
+`fm-control exit` returned in 9 s, the endpoint read `present`, and the leased worktree was still on disk.
+The shared classifier - `fm_backend_agent_state conpty <endpoint>`, the same entry point fm-control uses - read `dead`.
+
+**(2b) The divergence the console process list alone gets wrong**, sampled faster than fm-control's own wait by sending the harness's exit command straight through the adapter:
+
+```text
+1 alive prompt=running    mark=C procs=claude.exe sh.exe bash.exe bash.exe
+2 alive prompt=running    mark=C procs=claude.exe sh.exe bash.exe bash.exe
+3 dead  prompt=at-prompt  mark=D procs=claude.exe sh.exe bash.exe bash.exe
+4 dead  prompt=at-prompt  mark=B procs=claude.exe sh.exe bash.exe bash.exe
+5 dead  prompt=at-prompt  mark=B procs=claude.exe sh.exe bash.exe bash.exe
+6 dead  prompt=at-prompt  mark=B procs=bash.exe bash.exe
+```
+
+Three consecutive reads say `dead` while `claude.exe` is still attached to the console.
+Only the shell's mark establishes that, and that is the whole justification for the mark source.
+
+**(2c) The operator idiom that motivated the change**, on a real ConPTY session whose HOME carries `PROMPT_COMMAND="history -a"`:
+
+```text
+A  the armed session shell - the path firstmate now uses
+   fresh, nothing running       state=dead       prompt=at-prompt  mark=B  marks=3
+   foreground command running   state=ambiguous  prompt=running    mark=C  marks=4
+   command finished             state=dead       prompt=at-prompt  mark=B  marks=7
+B  a shell NESTED inside it - the shape the lease removed, kept as the counterfactual
+   nested shell at its prompt   state=ambiguous  prompt=running    mark=C  marks=8
+   foreground command running   state=ambiguous  prompt=running    mark=C  marks=9
+   command finished             state=ambiguous  prompt=running    mark=C  marks=9  <- frozen: C, never D
+   back in the armed shell      state=dead       prompt=at-prompt  mark=B  marks=13
+tagged mark sequence on the stream: D A B C D A B C C C D A B   untagged: 0
+```
+
+`ambiguous` in A and B is only because that rig has no harness attached; the prompt column is what is being measured.
+Two facts follow: the armed shell is immune to the clobbering rc file, and the residual is bounded by the life of a hand-opened nested shell and recovers the moment you leave it - a loud failure to prove a stop, never a false stop.
+
+**(2d) Teardown under the lease:**
+
+```text
+pool before: 1 leased ~\.treehouse\demo-099c58\1\demo (held by firstmate-ctlprobe)
+teardown: reaping leaked worktree process(es) for ctlprobe: 2354
+teardown: force-killing leaked worktree process(es) for ctlprobe: 2354
+Worktree returned to pool.
+teardown ctlprobe complete
+pool after: 1 available
+endpoint after teardown: absent
+```
+
+The behaviour change, recorded honestly: under the lease the SESSION SHELL is itself a process sitting in the worktree, so teardown's existing reaper is what clears it before the return.
+It worked unchanged - `bin/fm-teardown.sh` needed no conpty arm - and the holder label is what makes the leased row attributable in `treehouse status`.
+
+**(2e) The fallback with the marker source genuinely absent** (no `--rcfile`, so `promptMarks` is 0 rather than merely quiet), with a real bare claude:
+
+```text
+fresh session     state=dead   prompt=unknown marks=0 screen=shell   procs=bash.exe bash.exe
+real claude, bare state=alive  prompt=unknown marks=0 screen=agent   procs=claude.exe sh.exe bash.exe bash.exe
+after /exit t+01  state=alive  prompt=unknown marks=0 screen=unknown procs=claude.exe sh.exe bash.exe bash.exe
+after /exit t+02  state=dead   prompt=unknown marks=0 screen=shell   procs=bash.exe bash.exe
+```
+
+This is the measurement behind the narrowed claim above: `dead` arrives only once `claude.exe` has left the console list, one poll later, not while it lingers.
+
+**(2f) The strengthened opt-in guard on the real host.**
+`FM_CONPTY_LIVENESS_LIVE=1 tests/fm-conpty-liveness-live-e2e.test.sh` exited 0 with 2 ok and 0 not ok, claude checked, and no OSC 133 mark of its own - tagged or untagged - while it held the foreground.
+One cosmetic wart, recorded rather than hidden: the shared temp cleanup cannot remove the killed session's directory on Windows ("Device or resource busy"), printed after the assertions, with no effect on the exit status.
+
+**Two suites fail on this Windows host for reasons that predate this branch.**
+Both were rerun at the pre-change base commit `1baa477` on the same host and produced the identical single failure each, so they are host facts and not this change's:
+
+| Suite | Result on this host | The failing case |
+|---|---|---|
+| `tests/fm-control.test.sh` | 27 ok, 1 not ok | muse's cancelled terminal acknowledgement |
+| `tests/fm-spawn-worktree-settle.test.sh` | 1 ok, 1 not ok | the already-settled pane confirmation is slower than the single inter-poll sleep on this host |
 
 ```sh
 tests/fm-backend-conpty.test.sh

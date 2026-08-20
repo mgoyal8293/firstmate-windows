@@ -651,6 +651,8 @@ ORCA_ABORT_CLEANUP=0
 ORCA_WORKTREE_ID=
 ORCA_TERMINAL=
 CONPTY_SESSION=
+CONPTY_LEASE_ABORT_CLEANUP=0
+CONPTY_LEASE_HOLDER=
 HERDR_PROJECTION_ABORT_CLEANUP=0
 HERDR_PROJECTION_ABORT_SESSION=
 HERDR_PROJECTION_ABORT_TASK_PANE=
@@ -691,6 +693,50 @@ parse_orca_worktree_result() {
   else
     ORCA_TERMINAL=
   fi
+}
+
+# conpty_release_spawn_lease: give back the pool slot this spawn leased, on the
+# abort path where the record teardown would read does not exist yet.
+#
+# Only this backend needs it, and only because the lease is what makes the slot
+# outlive its acquirer: everywhere else `treehouse get`'s subshell holds the slot
+# and releases it when the endpoint dies, so an aborted spawn leaked nothing.
+#
+# The slot is found by THIS task's holder label rather than by $WT, because the
+# abort can happen before the cwd poll ever landed - and because a $WT that
+# validate_spawn_worktree rejected is not a slot to hand back anyway.
+# `--if-lease-holder` is what makes the return safe to automate: treehouse
+# refuses it unless that holder still holds the lease, so this can never take
+# another task's slot.
+#
+# Best-effort by design. A failed abort is worse than a leaked slot, so when the
+# release cannot be made this prints the exact one-line command instead of
+# failing.
+conpty_release_spawn_lease() {  # <holder>
+  local holder=$1 path=
+  [ -n "$holder" ] || return 0
+  if command -v treehouse >/dev/null 2>&1 && command -v node >/dev/null 2>&1; then
+    path=$( cd "${PROJ_ABS:-.}" 2>/dev/null && treehouse status --json 2>/dev/null | node -e '
+      let s = "";
+      process.stdin.on("data", function (d) { s += d; });
+      process.stdin.on("end", function () {
+        try {
+          const rows = JSON.parse(s);
+          const hit = (Array.isArray(rows) ? rows : []).find(function (r) {
+            return r && r.lease_holder === process.argv[1] && r.path;
+          });
+          if (hit) process.stdout.write(String(hit.path));
+        } catch (e) { /* no readable pool: fall through to the printed hint */ }
+      });
+    ' "$holder" ) || path=
+  fi
+  [ -n "$path" ] || path=${WT:-}
+  if [ -n "$path" ] \
+     && ( cd "${PROJ_ABS:-.}" 2>/dev/null && treehouse return --force --if-lease-holder "$holder" "$path" ) >/dev/null 2>&1; then
+    return 0
+  fi
+  echo "warning: task $ID's worktree lease was not released; the slot stays leased to $holder until you run: treehouse return --force --if-lease-holder $holder ${path:-<path from 'treehouse status'>}" >&2
+  return 0
 }
 
 spawn_abort_cleanup() {
@@ -764,6 +810,10 @@ spawn_abort_cleanup() {
         fi
       fi
     fi
+  fi
+  if [ "$CONPTY_LEASE_ABORT_CLEANUP" = 1 ]; then
+    CONPTY_LEASE_ABORT_CLEANUP=0
+    conpty_release_spawn_lease "$CONPTY_LEASE_HOLDER" || true
   fi
   if [ "$SPAWN_TASK_LOCK_HELD" = 1 ]; then
     SPAWN_TASK_LOCK_HELD=0
@@ -2251,18 +2301,24 @@ elif [ "$KIND" != secondmate ] && [ "$BACKEND" != orca ]; then
   # leaving PS0 intact, so the session emits `C` and never `D` and `exit` can
   # never prove the agent stopped. Leasing the slot and `cd`ing into it keeps
   # the agent in the marked shell (measured on real Windows: DABCDABCDABCDABC
-  # even with that clobbering rc file), and with no provider process left
-  # attached to the console a session that emits NO mark at all still reaches
-  # `dead` through the fallback's shell-only reading.
+  # even with that clobbering rc file). It also un-blocks the mark-less
+  # fallback: `treehouse.exe` used to stay attached for the task's whole life
+  # and count as sawOther, so that table's only `dead` arm was unreachable;
+  # with nothing but shells attached it is reachable again once the harness
+  # itself leaves the console list.
   #
-  # The cost, stated plainly: the pool slot is released by teardown's explicit
-  # `treehouse return --force`, not by a subshell dying, so a crash that never
-  # reaches teardown leaves the slot leased. It is attributable on purpose - the
-  # holder is firstmate-<id> - and one `treehouse return --force <path>` clears
-  # it. The `$( )` must reach the session unexpanded; $ID expands here.
+  # The cost, stated plainly: the pool slot is released by an explicit
+  # `treehouse return --force`, not by a subshell dying. fm-teardown does that
+  # once the record exists and this script's own abort path does it before then
+  # (conpty_release_spawn_lease), so what is left is a crash that reaches
+  # neither - and that leaves the slot leased, attributable on purpose because
+  # the holder is firstmate-<id>. The `$( )` must reach the session unexpanded;
+  # $ID expands here.
   if [ "$BACKEND" = conpty ]; then
     WT_ACQUIRE="treehouse get --lease and cd"
-    spawn_send_text_line "$WT_TARGET" "cd \"\$(treehouse get --lease --lease-holder firstmate-$ID)\""
+    CONPTY_LEASE_HOLDER="firstmate-$ID"
+    CONPTY_LEASE_ABORT_CLEANUP=1
+    spawn_send_text_line "$WT_TARGET" "cd \"\$(treehouse get --lease --lease-holder $CONPTY_LEASE_HOLDER)\""
   else
     WT_ACQUIRE="treehouse get"
     spawn_send_text_line "$WT_TARGET" 'treehouse get'
@@ -2777,6 +2833,9 @@ if [ "$SPAWN_TASK_SET_LOCK_HELD" = 1 ]; then
   fm_lock_release "$SPAWN_TASK_SET_LOCK"
 fi
 [ "$BACKEND" = orca ] && ORCA_ABORT_CLEANUP=0
+# The record now carries worktree=, so fm-teardown can reclaim the leased slot;
+# the abort path's own release is only for the window before this point.
+CONPTY_LEASE_ABORT_CLEANUP=0
 
 sq_brief=$(shell_quote "$BRIEF")
 sq_turnend=$(shell_quote "$TURNEND")

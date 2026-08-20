@@ -361,13 +361,20 @@ SH
   # awk, not `sed -i 's/$/\r/'`: bare -i and a \r replacement are both GNU
   # extensions, and on a BSD sed the copy would silently stay LF and fail this
   # case against a correct implementation.
+  crorig="$ROOT/bin/backends/conpty/fm-shell-integration.bash"
   crcopy="$CASE/repo/bin/backends/conpty/fm-shell-integration.bash"
-  awk '{ printf "%s\r\n", $0 }' "$ROOT/bin/backends/conpty/fm-shell-integration.bash" > "$crcopy" \
+  awk '{ printf "%s\r\n", $0 }' "$crorig" > "$crcopy" \
     || fail "could not build the CR-bearing copy"
-  case "$(head -n 1 "$crcopy")" in
-    *$'\r') ;;
-    *) fail "the copy carries no CR, so this case would pass without exercising the guard" ;;
-  esac
+  # Self-check by BYTE COUNT: a CRLF copy is exactly one byte per line longer
+  # than its LF original. Reading a line back and looking for the CR does not
+  # work here - msys opens the file in text mode and strips it, so on Windows
+  # that check reports "no CR" for a file od -c shows as CRLF and the case then
+  # fails against a correct implementation. Not the implementation's own
+  # `grep -Uq` predicate either, which would make this circular.
+  crexpect=$(( $(wc -c < "$crorig") + $(wc -l < "$crorig") ))
+  crgot=$(( $(wc -c < "$crcopy") ))
+  [ "$crgot" -eq "$crexpect" ] \
+    || fail "the copy is $crgot bytes, not the $crexpect a CRLF rewrite produces, so this case would prove nothing"
   FM_BACKEND_CONPTY_ROOT="$CASE/repo"
 
   cat > "$CASE/fakebin/node" <<'SH'
@@ -631,8 +638,9 @@ line two'
   [ "${out%%|*}" = alive ] || fail "a harness with a foreground command running is alive, got $out"
 
   # No harness and the shell at a prompt is the postcondition bin/fm-control.sh
-  # exit proves. It has to be reachable with a nested shell and the worktree
-  # provider still attached, neither of which is a shell-only process list.
+  # exit proves. It has to be reachable while other non-shell processes are still
+  # attached to the console - a lingering harness child, a tool the operator
+  # started - none of which is a shell-only process list.
   out=$(verdict "$(facts '"agentName":"","sawShell":true,"sawOther":true,"prompt":"at-prompt"')")
   [ "${out%%|*}" = dead ] || fail "an agent-free session at a prompt must be dead, got $out"
 
@@ -718,10 +726,13 @@ line two'
 #
 # bin/backends/conpty/fm-shell-integration.bash is bash, so its behaviour is
 # portable and belongs in CI even though the daemon that reads its output is not.
-# What matters here is not that the marks exist but WHERE they come from: a task
-# session runs its agent inside the worktree provider's subshell, so a mark
-# scheme that stops at the shell firstmate armed would leave the last mark saying
-# "a command is running" for the whole task and no stop could ever be proven.
+# What matters here is not that the marks exist but WHERE they come from. The
+# firstmate path keeps the agent in the shell this file arms - fm-spawn leases
+# the worktree and `cd`s into it rather than letting `treehouse get` host the
+# task in a subshell - and these cases pin that the innermost shell is always the
+# one answering, including in a shell someone opens by hand, where a mark scheme
+# that stopped at the outer shell would leave the last mark saying "a command is
+# running" and no stop could ever be proven.
 (
   CASE="$TMP_ROOT/shell-integration"; mkdir -p "$CASE"
   RC="$ROOT/bin/backends/conpty/fm-shell-integration.bash"
@@ -785,9 +796,9 @@ exit
   esac
   pass "conpty shell integration: a nested shell continues the mark chain, and stops marking when the carriers are withheld"
 
-  # SHELL is what the worktree provider opens its subshell with. An absent or
-  # unresolvable value is replaced, a working one is the operator's and is left
-  # alone.
+  # SHELL is what any tool in the session opens a shell with - `treehouse get`
+  # run by hand, and anything else that consults it. An absent or unusable value
+  # is replaced, a working one is the operator's and is left alone.
   # Tagged and extracted, not read as the whole of stdout: a distribution's own
   # /etc/bash.bashrc may print a banner into an interactive shell, and this file
   # deliberately sources it.
@@ -847,7 +858,26 @@ exit
 ")
   [ "${#rearmed}" -gt "${#stripped}" ] \
     || fail "a hand-opened shell that re-sourced this file did not re-arm (re-sourced '$rearmed' vs stripped '$stripped')"
-  pass "conpty shell integration: the arming guard is per-shell, so a re-sourced nested shell re-arms instead of inheriting silence"
+
+  # AND IT MUST NOT ARM TWICE. With the carriers inherited the mark is already
+  # in this shell's PROMPT_COMMAND, so re-sourcing must add nothing: a second
+  # copy would emit two D marks per prompt, one more per nesting level, doubling
+  # the per-prompt bytes and inflating the promptMarks counter the live guard and
+  # the recorded transcript counts read. Same script twice, the only difference
+  # being whether the nested shell re-sources this file.
+  plain=$(marks_from 'bash -i
+true
+exit
+exit
+')
+  resourced=$(marks_from "bash --rcfile '$RC' -i
+true
+exit
+exit
+")
+  [ "$(printf '%s' "$plain" | tr -cd D | wc -c)" = "$(printf '%s' "$resourced" | tr -cd D | wc -c)" ] \
+    || fail "re-sourcing with the carriers already armed added marks (plain '$plain' vs re-sourced '$resourced')"
+  pass "conpty shell integration: each carrier is armed idempotently, so a re-source heals a wiped one and duplicates nothing"
 ) || exit 1
 
 pass "conpty adapter unit tests complete"
