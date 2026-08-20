@@ -1163,6 +1163,7 @@ async function waitFor(pred, label, starts = 1) {
     if (pred()) return;
     await new Promise((resolve) => setTimeout(resolve, wakePollMs));
   }
+  if (pred()) return;
   throw new Error(`timeout waiting for ${label}`);
 }
 

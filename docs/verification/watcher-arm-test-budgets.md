@@ -196,6 +196,34 @@ A derived window polled at a fixed 10ms gets noisier the slower the machine is: 
 Each poll is now the window divided by `FM_TEST_OBSERVE_POLL_DIVISOR`, which holds it at 64 wakeups per window on any machine.
 That buys detection granularity proportional to the window - one 64th of it - instead of an absolute 10ms, and it widens nothing, because every deadline is still computed from the window rather than from the poll.
 
+### Which windows got tighter, and why that is accepted
+
+Deriving every window from one measurement moved most of them in both directions at once, and on a fast machine most of the movement is inward.
+The narrower direction is unmeasured - only the wider direction was ever exercised, by the load campaigns above - and it is accepted deliberately rather than reversed, because reversing it would mean re-introducing a literal and that is the defect being fixed.
+All 33 polled windows in the file are listed below at the 14ms fork cost of the workstation, where a start budget is its 500ms floor and the slack is its 1000ms floor.
+
+| Before | After | Count | Change |
+|---|---|---:|---|
+| `250 x 20ms` = 5000ms | 1500ms (one start) | 9 | 3.3x narrower |
+| `250 x 20ms` = 5000ms | 2000ms (two starts) | 1 | 2.5x narrower |
+| `500 x 10ms` = 5000ms | 1558ms (`fm_recovery_deadline_ms 1 20`) | 6 | 3.2x narrower |
+| `500 x 10ms` = 5000ms | 2000ms (two starts) | 1 | 2.5x narrower |
+| `500 x 10ms` = 5000ms | 1500ms (one start) | 1 | 3.3x narrower |
+| `500 x 10ms` = 5000ms | 5586ms (`fm_recovery_deadline_ms 3 1000`) | 2 | 1.1x wider |
+| `250 x 10ms` = 2500ms | 2000ms (two starts) | 6 | 1.25x narrower |
+| `250 x 10ms` = 2500ms | 1500ms (one start) | 1 | 1.67x narrower |
+| `250 x 10ms` = 2500ms | 2500ms (three starts) | 2 | unchanged |
+| `100 x 10ms` = 1000ms | 1500ms (one start) | 4 | 1.5x wider |
+
+So 25 of the 33 node windows are tighter on a workstation than the literals they replace, 6 are wider and 2 are unchanged.
+The widest single narrowing is 3.3x, on the nine one-start waits that observe an arm child recording its first row: the external-healthy prompt wait, the owned-lock arm wait, the process-exit child and replacement waits, the three OpenCode arm-log waits, the guard-coordination arm wait, and `waitFor`'s former `attempts = 250` default.
+The two windows that widened by design are the hung-successor recovery deadlines, which are the ones that were actually crossing on CI.
+
+The narrowing is a property of a fast machine, not of the fix.
+A one-start window is `5 x start + max(1000, 3 x start)`, so it is below the 5000ms literal it replaced for any measured start under 625ms and above it beyond that.
+At the 328ms start measured on run 32255813826 a one-start window is 2640ms, still 1.9x tighter than the literal; at the 800ms start in the load curve it is 6400ms, 1.3x wider.
+That is the intended shape - the events these windows wait for are one cold child start, so a machine that forks in 14ms should not be given 5s to notice - but no campaign has scored the tighter direction, so it is recorded here as accepted and unmeasured rather than presented as measured.
+
 The last bound of this class was waited on from bash rather than from a node driver: a literal 250 x 20ms giving 5s to observe the arm child's TERM trap appending to the cleanup log.
 It is derived now for the same reason as its siblings, as `fm_observe_window_ms 1 1000` - one cold start plus the 1s the fixture's own `while :; do sleep 1; done` defers the trap by.
 It was not derived because it had failed: the deferral is about 1.8s at an 800ms fork cost, roughly 2.8x inside the literal, and no false red on it was ever observed.
