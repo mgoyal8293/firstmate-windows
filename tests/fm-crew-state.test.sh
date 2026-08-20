@@ -52,7 +52,7 @@ fm_git_identity fmtest fmtest@example.invalid
 # came from. Scaled in a Windows arm so the Linux tripwire keeps its sensitivity.
 NM_TIMEOUT_WALL_LIMIT=5
 case "$(uname -s)" in
-  MINGW*|MSYS*) NM_TIMEOUT_WALL_LIMIT=25 ;;
+  MINGW*|MSYS*|CYGWIN*) NM_TIMEOUT_WALL_LIMIT=25 ;;
 esac
 
 # A real git repo checked out on <branch>, so the helper's branch attribution
@@ -161,7 +161,7 @@ make_no_timeout_toolbin() {  # <dir> -> echoes toolbin path
     real=$(command -v "$tool" || true)
     [ -n "$real" ] || fail "missing tool for no-timeout path: $tool"
     case "$(uname -s)" in
-      MINGW*|MSYS*)
+      MINGW*|MSYS*|CYGWIN*)
         printf '#!%s\nexec "%s" "$@"\n' "$shell" "$real" > "$tb/$tool"
         chmod +x "$tb/$tool"
         ;;

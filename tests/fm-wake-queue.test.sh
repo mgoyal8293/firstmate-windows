@@ -24,7 +24,7 @@ TMP_ROOT=$(fm_test_tmproot fm-wake-tests)
 # giving Windows the same ~2.5x headroom over its own measured worst case.
 WATCHER_EXIT_LIMIT=40
 case "$(uname -s)" in
-  MINGW*|MSYS*) WATCHER_EXIT_LIMIT=300 ;;
+  MINGW*|MSYS*|CYGWIN*) WATCHER_EXIT_LIMIT=300 ;;
 esac
 
 

@@ -1133,6 +1133,126 @@ assert len(doc["scripts"])==3
   pass "aggregate-json merges lane timing artifacts"
 }
 
+# The Microsoft Store ships a `python3` alias that RESOLVES on PATH, prints an
+# install advert, and exits 49. `command -v python3` therefore reported success
+# and every subsequent call failed, which took out whole Windows runs rather than
+# degrading - so fm_test_python3 probes by EXECUTING and asking for the major
+# version. Both halves matter: `-c 'pass'` also succeeds under Python 2, and the
+# timing payloads are Python-3-only.
+#
+# Reproducible on any host, which is why this is a real regression test and not a
+# Windows-gated one: a stub that resolves and exits non-zero is the whole fixture.
+# Measured against the pre-fix logic, `command -v python3` selects that stub and
+# now_ms emits the advert TEXT where a millisecond count belongs.
+#
+# What this asserts is the INVARIANT, not one of the two legitimate outcomes,
+# because which one you get depends on whether the host has a real `python` to
+# fall back to: with an interpreter the artifact is written and valid, without one
+# `--json` refuses by name (rc 2, "requires a working python3"). Both are correct.
+# The defect being fenced out is the third possibility - trusting the broken
+# interpreter, so the advert reaches the timing surface or a corrupt artifact is
+# written - and every assertion below holds in either legitimate branch.
+test_python3_probe_rejects_a_resolvable_but_broken_interpreter() {
+  local tmp stub json out rc dur
+  tmp=$(mktemp -d "${TMPDIR:-/tmp}/fm-test-run-py3probe.XXXXXX")
+  stub="$tmp/stub"
+  json="$tmp/timing.json"
+  out="$tmp/out.txt"
+  mkdir -p "$stub"
+  cat >"$stub/python3" <<'SH'
+#!/usr/bin/env bash
+echo "Python was not found; run without arguments to install from the Microsoft Store."
+exit 49
+SH
+  chmod +x "$stub/python3"
+  cat >"$tmp/ok.test.sh" <<'SH'
+#!/usr/bin/env bash
+echo "ok - fixture"
+exit 0
+SH
+  chmod +x "$tmp/ok.test.sh"
+
+  set +e
+  PATH="$stub:$PATH" "$RUNNER" --json "$json" "$tmp/ok.test.sh" >"$out" 2>"$tmp/err.txt"
+  rc=$?
+  set -e
+
+  # 1. The advert must never reach any output surface, whichever branch is taken.
+  ! grep -qi 'Microsoft Store' "$out" \
+    || { rm -rf "$tmp"; fail "the broken interpreter's output leaked into the timing stream"; }
+  if [ -f "$json" ]; then
+    ! grep -qi 'Microsoft Store' "$json" \
+      || { rm -rf "$tmp"; fail "the broken interpreter's output leaked into the artifact"; }
+  fi
+
+  # 2. The suite itself still ran, and every duration it reported is an integer -
+  #    which is precisely what the pre-fix probe turned into advert text.
+  grep -q '^ok - fixture$' "$out" \
+    || { rm -rf "$tmp"; fail "the fixture did not run: $(cat "$out")"; }
+  grep -Eq '^FM_TEST_END .+ exit=0 duration_ms=[0-9]+ gate_skip=false$' "$out" \
+    || { rm -rf "$tmp"; fail "END line has no integer duration_ms: $(grep '^FM_TEST_END' "$out")"; }
+  grep -Eq '^FM_TEST_SUMMARY total=1 failed=0 skipped_gate=0 duration_ms=[0-9]+$' "$out" \
+    || { rm -rf "$tmp"; fail "summary has no integer duration_ms: $(grep '^FM_TEST_SUMMARY ' "$out")"; }
+
+  # 3. Exactly one of the two legitimate outcomes, and never a corrupt artifact.
+  if [ "$rc" -eq 0 ]; then
+    [ -f "$json" ] || { rm -rf "$tmp"; fail "runner reported success but wrote no artifact"; }
+    dur=$(sed -n 's/.*"duration_ms"[[:space:]]*:[[:space:]]*\([0-9-]*\).*/\1/p' "$json" | head -1)
+    case "$dur" in
+      ''|*[!0-9]*) rm -rf "$tmp"; fail "artifact duration_ms is not a non-negative integer: '$dur'" ;;
+    esac
+  else
+    grep -q 'requires a working python3' "$tmp/err.txt" \
+      || { rm -rf "$tmp"; fail "refused for an unexplained reason (rc=$rc): $(cat "$tmp/err.txt")"; }
+    [ ! -f "$json" ] \
+      || { rm -rf "$tmp"; fail "refused to emit a valid artifact but left one behind"; }
+  fi
+  rm -rf "$tmp"
+  pass "python3 probe rejects a resolvable but broken interpreter"
+}
+
+# Git Bash's default locale made `comm` reject input that `sort` had produced,
+# because the two disagreed on collation - so every comm input and every comm in
+# run_coverage_guard is pinned to LC_ALL=C.
+#
+# Honest limit, stated because it decides the shape of this test: the collation
+# DIFFERENCE itself cannot be provoked on a host carrying only C, C.utf8 and
+# POSIX, and installing a locale is not this suite's business. So rather than a
+# test that would pass whether or not the pin exists - which is worse than no
+# test - this executes the real guard through a recording `comm` on PATH and
+# holds the invariant the fix actually established: no comm in the guard runs on
+# an unpinned collation. Drop a single LC_ALL=C and this fails by name.
+test_coverage_guard_pins_every_comm_to_a_c_collation() {
+  local tmp stub log real unpinned n
+  real=$(command -v comm) || fail "comm must be resolvable to test the coverage guard"
+  tmp=$(mktemp -d "${TMPDIR:-/tmp}/fm-test-run-commpin.XXXXXX")
+  stub="$tmp/stub"
+  log="$tmp/lc.log"
+  mkdir -p "$stub"
+  # Records the collation it was handed, then behaves exactly like comm so the
+  # guard reaches its real verdict rather than being altered by observation.
+  cat >"$stub/comm" <<SH
+#!/usr/bin/env bash
+printf '%s\n' "\${LC_ALL-UNSET}" >>"$log"
+exec "$real" "\$@"
+SH
+  chmod +x "$stub/comm"
+
+  # LC_ALL deliberately unset in the parent, so an unpinned call records UNSET
+  # instead of quietly inheriting a value that would mask the defect.
+  env -u LC_ALL PATH="$stub:$PATH" "$RUNNER" --check-coverage >"$tmp/out.txt" 2>&1 \
+    || { rm -rf "$tmp"; fail "coverage guard must pass: $(cat "$tmp/out.txt")"; }
+
+  [ -s "$log" ] \
+    || { rm -rf "$tmp"; fail "the guard invoked no comm at all - this test would prove nothing"; }
+  n=$(grep -c . "$log")
+  unpinned=$(grep -vFx 'C' "$log" | sort -u | tr '\n' ' ')
+  [ -z "$unpinned" ] \
+    || { rm -rf "$tmp"; fail "$n comm calls, some on an unpinned collation: $unpinned"; }
+  rm -rf "$tmp"
+  pass "coverage guard pins every comm to a C collation ($n calls)"
+}
+
 test_list_all_exact_suite_coverage
 test_family_selection
 test_single_script_selection
@@ -1140,6 +1260,8 @@ test_changed_file_selection_is_conservative
 test_changed_dependency_selection_and_unmapped_failure
 test_empty_selection_emits_summary
 test_timing_markers_and_json
+test_python3_probe_rejects_a_resolvable_but_broken_interpreter
+test_coverage_guard_pins_every_comm_to_a_c_collation
 test_aggregate_exit_behavior
 test_gate_skip_accounting
 test_fail_on_gate_skip_token

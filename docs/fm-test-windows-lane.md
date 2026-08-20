@@ -240,6 +240,37 @@ rather than a different archive name.
 Measured: **rc=0 in 5m35s** for 304 shell files plus 5 workflow files, with
 `fm-lint.sh` at its 2-worker cap.
 
+### The `unzip` dependency is measured, not assumed
+
+Those extract arms hard-require `unzip`, and both exit with
+`need unzip to extract` when it is missing - so `windows-lint` would die at its
+first install step. Review flagged that dependency as unverified, correctly: the
+claim was asserted in a comment with no evidence behind it. It is measured on both
+surfaces that matter.
+
+| surface | `unzip` | commonly suggested substitutes |
+|---|---|---|
+| `windows-latest` runner | present - proven by the run below | - |
+| Git for Windows (`MINGW64_NT-10.0-26200`) | `/usr/bin/unzip`, UnZip 6.00 | `bsdtar` **absent**, `7z` **absent** |
+
+On the runner it is proven by the Windows CI run that first went green:
+run `32273090934`, job `Lint (Windows)` (`96133978008`). `Install pinned
+ShellCheck` and `Install pinned actionlint` both succeeded, and the job log then
+records both binaries *executing* and reporting their own versions -
+`fm-lint.sh: ShellCheck 0.11.0 (pinned 0.11.0)` and
+`fm-lint-workflows.sh: actionlint 1.7.12 (pinned 1.7.12)`. A `.exe` that ran is
+proof its zip was extracted, so that single run evidences the whole arm.
+
+A fallback onto `bsdtar`, `7z`, or `python -m zipfile` was considered and
+**rejected**: it would trade a dependency measured present on both surfaces for
+ones measured absent on both, and add an untested path to a step that
+demonstrably works. On this repo `python` availability is itself a probe this port
+had to fix, since Windows' Store alias resolves on PATH and exits 49 - so
+`python -m zipfile` is the weakest of the three.
+
+Recorded here because a reviewer raised this as unverified on inputs that predated
+run `32273090934`; the evidence postdates the review rather than contradicting it.
+
 ## Lane composition
 
 Measured by running all 98 candidate scripts serially from a frozen checkout
