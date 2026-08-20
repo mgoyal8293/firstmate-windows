@@ -280,9 +280,9 @@ test_matrix_herdr_halfblock_rule_bounds_bare_wrap() {
   # also what lets the LC_ALL=C half of assert_screen mean anything here.
   plain=$'transcript\n ▄▄▄▄▄▄▄▄\n  → Add a follow-up\n ▀▀▀▀▀▀▀▀\n  Cursor Grok 4.5 High · 6.7%   Run Everything\n  ~/wt · 64cdd3a'
   # The closing rule must bound the region, so the footer below is not input.
-  fm_composer_row_has_edge " $(printf '▀▀▀')" \
+  fm_composer_row_has_edge " ▀▀▀" \
     || fail "a half-block rule row must count as a structural edge"
-  fm_composer_row_has_edge " $(printf '▄▄▄')" \
+  fm_composer_row_has_edge " ▄▄▄" \
     || fail "the upper half-block rule must count as a structural edge"
   # Non-vacuousness: the footer rows really are non-blank content that would be
   # swallowed if the rule did not bound the region.
