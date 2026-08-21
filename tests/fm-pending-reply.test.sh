@@ -19,6 +19,11 @@
 #  10. fm-send secondmate path embeds corr and creates durable pending records
 #  11. Backend busy/idle observation works through the shared busy abstraction
 #      used by Pi/Claude secondmate backends (no conversation scrape)
+#  12. Sender liveness survives a `ps` that rejects -o (the MSYS case), and a
+#      record written by the previous reader's format is still verified correctly,
+#      in that format, without the liveness read rewriting the record, and the
+#      fallback for one this platform cannot verify at all defers only within its
+#      bound before escalating
 set -u
 
 # shellcheck source=tests/lib.sh
@@ -201,7 +206,7 @@ test_recovery_attempt_is_never_reinjected() {
   fm_pending_reply_mark_turn_completed "$state" "$live_corr" request
   live_rec=$(fm_pending_reply_path "$state" "$live_corr")
   live_pid=${BASHPID:-$$}
-  live_identity=$(fm_pending_reply_pid_identity "$live_pid") \
+  live_identity=$(fm_pending_reply_tagged_identity "$live_pid") \
     || fail "live sender identity should be observable"
   fm_pending_reply_set "$live_rec" recovery_attempted_epoch 2500 || fail "live attempt precommit failed"
   fm_pending_reply_set "$live_rec" recovery_sender_pid "$live_pid" || fail "live sender pid commit failed"
@@ -1088,6 +1093,234 @@ test_failed_send_discards_undelivered_expectation() {
 
 # --- run --------------------------------------------------------------------
 
+# --- 12. sender identity: broken ps, and the previous stored format ----------
+
+# A `ps` shaped like MSYS's: it rejects the -o fields outright, which is what
+# made the sender identity unreadable on Git for Windows.
+fakebin_ps_rejecting_o() {  # <dir> -> fakebin
+  local fb="$1/ps-rejects-o"
+  mkdir -p "$fb"
+  cat > "$fb/ps" <<'SH'
+#!/usr/bin/env bash
+for a in "$@"; do
+  case "$a" in
+    -o) printf 'ps: unknown option -- o\n' >&2; exit 1 ;;
+  esac
+done
+printf '  PID TTY          TIME CMD\n'
+exit 0
+SH
+  chmod +x "$fb/ps"
+  printf '%s\n' "$fb"
+}
+
+# A /proc holding the Linux-shaped per-pid stat and cmdline that Cygwin/MSYS also
+# expose, so the MSYS runtime shape is exercised on Linux, Windows and macOS
+# alike rather than only where the host happens to have a real /proc.
+# The parenthesised comm field deliberately contains a ')' and a space, because
+# stat field 22 can only be located after the LAST such delimiter.
+fake_proc_root_for_pid() {  # <pid> [starttime] -> root
+  local pid=$1 starttime=${2:-987654} root
+  root="$TMP_ROOT/fake-proc-$pid-$RANDOM"
+  mkdir -p "$root/$pid"
+  printf '%s (bash ) x) S 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 %s 20 21 22\n' \
+    "$pid" "$starttime" > "$root/$pid/stat"
+  printf 'bash\0/path with spaces/fm-send.sh\0--flag\0' > "$root/$pid/cmdline"
+  printf '%s\n' "$root"
+}
+
+# The identity exactly as the previous reader in bin/fm-pending-reply-lib.sh
+# wrote it, or empty where this platform's ps cannot produce that form at all.
+legacy_stored_identity() {  # <pid>
+  COLUMNS=10000 LC_ALL=C ps -p "$1" -o lstart= -o command= 2>/dev/null
+}
+
+test_sender_liveness_survives_a_ps_that_rejects_o() {
+  local home state fb corr rec hook_log lines saved_path proc_root
+  # Dynamically scoped rather than exported: every read below happens in this
+  # shell, and the fixture must not leak into any later case.
+  local FM_PROC_ROOT_OVERRIDE
+  home=$(setup_parent ps-rejects-o)
+  state="$home/state"
+  fb=$(fakebin_ps_rejecting_o "$TMP_ROOT")
+  proc_root=$(fake_proc_root_for_pid "$$")
+  hook_log="$TMP_ROOT/ps-rejects-o.log"
+  : > "$hook_log"
+  # shellcheck disable=SC2329 # Invoked through FM_PENDING_REPLY_SEND_HOOK.
+  msys_hook() { printf '%s\n' "$2" >> "$hook_log"; }
+  export -f msys_hook
+  export FM_PENDING_REPLY_SEND_HOOK=msys_hook
+  export FM_PENDING_REPLY_NOW=4000
+
+  # Prove the stub really does break the -o form the previous reader depended on.
+  [ -z "$(PATH="$fb:$PATH" legacy_stored_identity "$$")" ] \
+    || fail "ps stub must reject -o so this exercises the MSYS failure"
+
+  # Installed in this shell, not a subshell: the recorded sender identity is the
+  # identity of the process that calls send_recovery, and a subshell's pid dies
+  # with it, which would read as a dead sender for reasons unrelated to ps.
+  saved_path=$PATH
+  PATH="$fb:$PATH"
+  # The whole MSYS runtime shape, not just its ps: a /proc that answers the fields
+  # Cygwin exposes, standing in for the host's own so this runs anywhere.
+  FM_PROC_ROOT_OVERRIDE=$proc_root
+  fm_pending_reply_tagged_identity "$$" >/dev/null \
+    || fail "sender identity must still be readable where ps rejects -o"
+
+  corr=$(fm_pending_reply_create "$home" "$state" hibit "msys sender")
+  fm_pending_reply_mark_delivered "$state" "$corr"
+  fm_pending_reply_mark_turn_completed "$state" "$corr" request
+  rec=$(fm_pending_reply_path "$state" "$corr")
+  fm_pending_reply_send_recovery "$state" "$corr" \
+    || fail "the one recovery attempt must be sent where ps rejects -o"
+  lines=$(wc -l < "$hook_log" | tr -d ' ')
+  [ "$lines" = 1 ] || fail "recovery should have been delivered exactly once, got $lines"
+  [ "$(phase_of "$state" "$corr")" = recovery_sent ] \
+    || fail "recovery should have reached recovery_sent, got $(phase_of "$state" "$corr")"
+  [ -n "$(fm_pending_reply_get "$rec" recovery_sender_identity)" ] \
+    || fail "a committed recovery attempt must record a sender identity"
+
+  # And the read back: a live sender is alive, a pid the process table cannot see
+  # is not, with the same broken ps in place for both.
+  fm_pending_reply_set "$rec" phase recovery_sending || fail "could not stage recovery_sending"
+  fm_pending_reply_set "$rec" recovery_delivery_outcome "" || fail "could not clear the outcome"
+  fm_pending_reply_sender_alive "$rec" \
+    || fail "a live sender must read as alive where ps rejects -o"
+  fm_pending_reply_tick_one "$state" "$corr" unknown \
+    || fail "tick over a live sender failed"
+  [ "$(phase_of "$state" "$corr")" = recovery_sending ] \
+    || fail "a live sender must not be reconciled as an interrupted attempt, got $(phase_of "$state" "$corr")"
+  fm_pending_reply_set "$rec" recovery_sender_pid 2147483646 || fail "could not stage a dead pid"
+  fm_pending_reply_sender_alive "$rec" \
+    && fail "an unreadable pid must not read as a live sender"
+
+  PATH=$saved_path
+  unset FM_PENDING_REPLY_SEND_HOOK
+  pass "sender liveness works where ps rejects -o, so the one recovery is sent and reconciled"
+}
+
+test_previous_format_sender_identity_is_verified() {
+  local home state corr rec legacy fb saved_path proc_root
+  local FM_PROC_ROOT_OVERRIDE
+  home=$(setup_parent legacy-identity)
+  state="$home/state"
+  export FM_PENDING_REPLY_NOW=4100
+  corr=$(fm_pending_reply_create "$home" "$state" hibit "legacy identity")
+  fm_pending_reply_mark_delivered "$state" "$corr"
+  fm_pending_reply_mark_turn_completed "$state" "$corr" request
+  rec=$(fm_pending_reply_path "$state" "$corr")
+  legacy=$(legacy_stored_identity "$$")
+  fm_pending_reply_set "$rec" recovery_attempted_epoch 4100 || fail "attempt precommit failed"
+  fm_pending_reply_set "$rec" recovery_sender_pid "$$" || fail "sender pid commit failed"
+  fm_pending_reply_set "$rec" recovery_sender_identity "$legacy" || fail "legacy identity commit failed"
+  fm_pending_reply_set "$rec" phase recovery_sending || fail "sending phase precommit failed"
+
+  if [ -n "$legacy" ]; then
+    # A record written by the previous reader must still read as a live sender,
+    # rather than mismatching the new format and escalating a healthy send.
+    fm_pending_reply_sender_alive "$rec" \
+      || fail "a record in the previous identity format must still read as alive"
+    fm_pending_reply_tick_one "$state" "$corr" unknown || fail "tick over a legacy record failed"
+    [ "$(phase_of "$state" "$corr")" = recovery_sending ] \
+      || fail "a legacy record's live sender must not be reconciled as interrupted, got $(phase_of "$state" "$corr")"
+    # Reading liveness must never write: the record keeps its own format, so a
+    # concurrent resolver holding the per-correlation lock cannot lose a field to
+    # an unlocked rewrite from this path.
+    [ "$(fm_pending_reply_get "$rec" recovery_sender_identity)" = "$legacy" ] \
+      || fail "a liveness read must leave the stored identity byte-identical"
+    fm_pending_reply_sender_alive "$rec" \
+      || fail "a second read of the same legacy record must still read as alive"
+
+    # The negative half: a legacy identity belonging to some other process is a
+    # dead or reused sender and must still reconcile as an interrupted attempt.
+    fm_pending_reply_set "$rec" recovery_sender_identity "Mon Jan  1 00:00:00 2001 /some/other/process" \
+      || fail "could not stage a mismatching legacy identity"
+    fm_pending_reply_set "$rec" phase recovery_sending || fail "could not restage recovery_sending"
+    fm_pending_reply_sender_alive "$rec" \
+      && fail "a legacy identity that does not match the running process must not read as alive"
+    pass "a record in the previous identity format is verified against that format without being rewritten"
+  else
+    pass "previous-format verification skipped: this platform's ps cannot produce that form"
+  fi
+
+  # Where the previous reader cannot run at all (the MSYS case), an untagged
+  # record can never be matched, so it must fall back to a liveness probe rather
+  # than declare a live sender dead.
+  fb=$(fakebin_ps_rejecting_o "$TMP_ROOT")
+  proc_root=$(fake_proc_root_for_pid "$$")
+  fm_pending_reply_set "$rec" recovery_sender_pid "$$" || fail "could not restage the live pid"
+  fm_pending_reply_set "$rec" recovery_sender_identity "Mon Jan  1 00:00:00 2001 /some/other/process" \
+    || fail "could not stage an unverifiable legacy identity"
+  saved_path=$PATH
+  PATH="$fb:$PATH"
+  # The /proc half of that runtime too, so the defer this asserts is one the
+  # running platform can actually produce rather than one only Linux can.
+  FM_PROC_ROOT_OVERRIDE=$proc_root
+  fm_pending_reply_sender_alive "$rec" \
+    || fail "an unverifiable legacy record must defer rather than declare a live sender dead"
+  fm_pending_reply_set "$rec" recovery_sender_pid 2147483646 || fail "could not stage a dead pid"
+  fm_pending_reply_sender_alive "$rec" \
+    && fail "an unverifiable legacy record with a gone pid must read as dead, not defer forever"
+  PATH=$saved_path
+  pass "an unverifiable previous-format record defers on a live pid and concludes on a gone one"
+}
+
+# The fallback above is bare pid liveness, which cannot tell the original sender
+# from whatever process has since inherited its pid, so the defer it grants is
+# bounded rather than indefinite. Within the bound the record keeps waiting; past
+# it the delivery is called unknown and the record escalates exactly once, because
+# an unresolved record that waits forever has silently expired.
+test_unverifiable_previous_format_record_defers_only_within_its_bound() {
+  local home state corr rec fb saved_path proc_root escalations
+  local FM_PROC_ROOT_OVERRIDE
+  home=$(setup_parent unverifiable-bound)
+  state="$home/state"
+  fb=$(fakebin_ps_rejecting_o "$TMP_ROOT")
+  proc_root=$(fake_proc_root_for_pid "$$")
+  export FM_PENDING_REPLY_NOW=5000
+  export FM_PENDING_REPLY_UNVERIFIABLE_SENDER_SECS=900
+  corr=$(fm_pending_reply_create "$home" "$state" hibit "unverifiable bound")
+  fm_pending_reply_mark_delivered "$state" "$corr"
+  fm_pending_reply_mark_turn_completed "$state" "$corr" request
+  rec=$(fm_pending_reply_path "$state" "$corr")
+  fm_pending_reply_set "$rec" recovery_attempted_epoch 5000 || fail "attempt precommit failed"
+  fm_pending_reply_set "$rec" recovery_sender_pid "$$" || fail "sender pid commit failed"
+  fm_pending_reply_set "$rec" recovery_sender_identity "Mon Jan  1 00:00:00 2001 /some/other/process" \
+    || fail "could not stage an unverifiable previous-format identity"
+  fm_pending_reply_set "$rec" phase recovery_sending || fail "sending phase precommit failed"
+
+  saved_path=$PATH
+  PATH="$fb:$PATH"
+  FM_PROC_ROOT_OVERRIDE=$proc_root
+
+  export FM_PENDING_REPLY_NOW=5899
+  fm_pending_reply_sender_alive "$rec" \
+    || fail "within the bound an unverifiable record must still defer on a live sender pid"
+  fm_pending_reply_tick_one "$state" "$corr" unknown || fail "tick within the bound failed"
+  [ "$(phase_of "$state" "$corr")" = recovery_sending ] \
+    || fail "within the bound the record must stay at recovery_sending, got $(phase_of "$state" "$corr")"
+
+  export FM_PENDING_REPLY_NOW=5900
+  fm_pending_reply_sender_alive "$rec" \
+    && fail "past the bound a pid this platform cannot verify must stop reading as the sender"
+  fm_pending_reply_tick_one "$state" "$corr" unknown || fail "tick past the bound failed"
+  [ "$(fm_pending_reply_get "$rec" recovery_delivery_outcome)" = unknown ] \
+    || fail "past the bound the recovery delivery must be recorded unknown"
+  [ "$(phase_of "$state" "$corr")" = escalated ] \
+    || fail "past the bound the record must escalate, got $(phase_of "$state" "$corr")"
+  export FM_PENDING_REPLY_NOW=99999
+  fm_pending_reply_tick_one "$state" "$corr" unknown || fail "later tick past the bound failed"
+  [ "$(phase_of "$state" "$corr")" = escalated ] || fail "the record must stay escalated"
+  escalations=$(grep -Fc "blocked [key=pending-reply-$corr]:" "$state/hibit.status")
+  [ "$escalations" = 1 ] \
+    || fail "an expired unverifiable record must escalate exactly once, got $escalations"
+  [ -f "$rec" ] || fail "escalating must never delete the unresolved record"
+
+  PATH=$saved_path
+  unset FM_PENDING_REPLY_UNVERIFIABLE_SENDER_SECS
+  pass "an unverifiable previous-format record defers only within its bound, then escalates once"
+}
+
 test_normal_correlated_reply_resolves_once
 test_completed_turn_no_report_triggers_one_recovery
 test_recovery_attempt_is_never_reinjected
@@ -1117,5 +1350,8 @@ test_tick_skips_terminal_and_reuses_target_observation
 test_correlations_reuse_only_for_matching_open_task
 test_tick_end_to_end_missed_then_escalate
 test_failed_send_discards_undelivered_expectation
+test_sender_liveness_survives_a_ps_that_rejects_o
+test_previous_format_sender_identity_is_verified
+test_unverifiable_previous_format_record_defers_only_within_its_bound
 
 printf 'ok - all pending-reply tests passed\n'

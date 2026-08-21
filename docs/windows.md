@@ -11,7 +11,7 @@ WSL runs upstream firstmate unchanged and needs none of this.
 
 ## What is fixed here
 
-Four failures stopped firstmate before any of its own logic was reached.
+Five failures stopped firstmate before any of its own logic was reached.
 Each is fixed at exactly one owner:
 
 | Failure | Owner | Substitute |
@@ -20,13 +20,16 @@ Each is fixed at exactly one owner:
 | MSYS `ps` rejects `-o`, so every process-table read fails on call one | `bin/fm-proc-lib.sh` | `fm_proc_field` reads the `/proc/<pid>/{ppid,pgid,sid,exename,cmdline}` files, with `ps -o` as the non-`/proc` fallback. Fixes harness detection, teardown, the watcher and the process-event runner; does **not** by itself fix the session lock - see "How the session lock is owned" below |
 | `lsof` is absent, so teardown reaps nothing - and Windows then physically refuses to delete the worktree the unreaped agent sits in | `bin/fm-teardown.sh`, `bin/fm-lock-lib.sh` | a bounded `/proc/*/cwd` (and `/proc/*/fd`) scan, which also sees the native Windows children MSYS spawned |
 | `chmod` is a no-op on `noacl` mounts, so no PR can be merged and no watcher check can be armed | `bin/fm-pr-lib.sh` | the exact-mode assertion is capability-gated; see the security note below |
+| A stored process identity was read through `ps -o lstart= -o command=` in a second place, so a secondmate's missed-report guard could never read its own sender | `bin/fm-proc-lib.sh` | `fm_pid_identity` moved here from `bin/fm-wake-lib.sh` and `bin/fm-pending-reply-lib.sh`'s private copy is gone. The pending-reply record now tags the stored identity's format and verifies an untagged one against the reader that wrote it, so records already on disk are not read as dead senders |
 
 There is no tmux on Windows either, so multi-agent work runs on the ConPTY
 session provider (`bin/backends/conpty.sh`, [`conpty-backend.md`](conpty-backend.md)).
 It is an experimental spawn backend and is never chosen by runtime
 auto-detection - select it explicitly with `config/backend`.
 
-`bin/fm-proc-lib.sh` is the one owner of both process-table reads and platform capability.
+`bin/fm-proc-lib.sh` owns the process-table reads and platform capability, including the `fm_pid_identity` that callers store next to a pid and compare later.
+The fifth row was produced by a second copy of that read: it kept working on Linux, so nothing surfaced until MSYS answered it with nothing.
+One narrower variant remains outside that owner, `task_process_identity` in `bin/fm-teardown.sh`, which is the same `/proc` stat field-22 parse with a `ps -o lstart=` fallback but prints its own shape and omits the cmdline, and it is outside the scope of this change.
 Prefer capability detection over a platform name wherever the question is really "does this work here?" - `/proc` presence, chmod round-trip, symlink creation.
 Reserve the `uname -s` arms for behaviour that is genuinely platform-specific.
 
@@ -144,6 +147,21 @@ Before `bin/fm-claude-sessionend-release.sh` existed, that restart case was
 measured as REFUSED a minute after the first session had exited, which would
 have left a Windows home read-only for four hours after every ordinary quit.
 
+#### The process-identity read
+
+Git for Windows bash 5.2.37(1)-release on MINGW64_NT-10.0-26200:
+
+| Case | Result |
+|---|---|
+| The previous reader's form, `COLUMNS=10000 LC_ALL=C ps -p <pid> -o lstart= -o command=` | rejected, exit 1 |
+| `/proc/<pid>/stat` and `/proc/<pid>/cmdline` | both readable |
+| Before this change | the sender identity is unreadable, the one recovery attempt is refused with nothing sent, and the record stays at `awaiting_report` |
+| With this change | the identity reads in the form `fm-pid-identity.v1 proc-starttime=<ticks> cmdline-hex=<hex>`, the recovery is delivered, the record reaches `recovery_sent`, a live sender reads as alive, and a pid the process table cannot see reads as dead |
+| An untagged record within the `FM_PENDING_REPLY_UNVERIFIABLE_SENDER_SECS` bound (900s default) | defers, stays at `recovery_sending`, and the stored identity is byte-identical afterwards because a liveness read never rewrites it |
+| An untagged record past that bound | reads as dead, reaches `escalated`, and opens exactly one escalation |
+| The sender-identity, previous-format migration and bounded-defer cases of `tests/fm-pending-reply.test.sh` on that host | pass |
+| The `fm_pid_identity` case in `tests/fm-windows-portability.test.sh` on that host | passes |
+
 ### A second wedge in the same layer: symlink target spelling
 
 Native symlinks made `ln -s` a real link, but MSYS resolves the stored Windows
@@ -259,5 +277,4 @@ A Windows operator meets them in this order.
 
 - Relay's artifact writes (`x_mode_write_if_changed` in `bin/fm-bootstrap.sh`) still assert exact modes directly. Relay is off unless the home opts in.
 - Away mode's daemon launch (`bin/fm-afk-launch.sh`) is unexamined on Windows.
-- `fm_pending_reply_pid_identity` (`bin/fm-pending-reply-lib.sh`) still reads sender liveness through `ps -o lstart= -o command=`, which MSYS answers with nothing, so a secondmate's pending reply reads its sender as dead there. The fleet's `/proc` identity (`fm_pid_identity`) is the right substitute but lives in `bin/fm-wake-lib.sh`, which that file sources only inside one function; wiring it needs an owner move rather than a local patch.
 - The macOS-only surfaces (`bin/backends/herdr.sh`, `bin/fm-remote-job-*.sh`, muse) are deliberately out of scope.
