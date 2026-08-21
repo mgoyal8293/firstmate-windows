@@ -237,12 +237,18 @@ test_proc_cwd_scan_matches_a_mount_aliased_cwd_spelling() {
   dir=$(fm_test_tmproot fm-proc-cwd-alias) || fail "cwd-alias: could not create a fixture root"
   # `mnt` is the spelling the caller passes; `long` is the spelling /proc answers
   # in. They are the same location as far as the stub mount table is concerned.
-  mkdir -p "$dir/mnt/wt/sub" "$dir/long/wt/sub" "$dir/stub"
+  mkdir -p "$dir/mnt/wt/sub" "$dir/long/wt/sub" "$dir/stub" "$dir/elsewhere"
   proc="$dir/proc"
   # 4242 sits under the aliased spelling; 4243 sits somewhere else entirely and
   # must never be claimed by the widening.
   mkdir -p "$proc/4242" "$proc/4243"
+  # A missing target is a silent dangling link on POSIX but a hard `ln -s`
+  # failure under MSYS winsymlinks:nativestrict, so it is asserted on every host.
+  [ -e "$dir/long/wt/sub" ] \
+    || fail "cwd-alias: link target does not exist: $dir/long/wt/sub"
   ln -s "$dir/long/wt/sub" "$proc/4242/cwd" || fail "cwd-alias: could not stage the aliased cwd link"
+  [ -e "$dir/elsewhere" ] \
+    || fail "cwd-alias: link target does not exist: $dir/elsewhere"
   ln -s "$dir/elsewhere" "$proc/4243/cwd" || fail "cwd-alias: could not stage the unrelated cwd link"
 
   cat > "$dir/stub/cygpath" <<STUB
