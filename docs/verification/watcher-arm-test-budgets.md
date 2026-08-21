@@ -232,11 +232,24 @@ On a workstation that derivation narrows the bound from 5s to 2.5s, which is acc
 ### The weight hint this change knowingly staled
 
 `bin/fm-test-run.sh` packs `tests/fm-pi-watch-extension.test.sh` at 27802 ms.
-That hint now understates by 12-31 s, and the derivation is the eight settle sleeps: literals summing to 870 ms were replaced by 8 x `FM_TEST_ARM_START_BUDGET_MS`, which is 8 x 1640 = 13120 ms at the 328 ms start measured on run 32255813826 (delta 12.3 s) and 8 x 4000 = 32000 ms at the 800 ms start in the load curve (delta 31.1 s).
-The polled windows add nothing to that figure on the passing path, by construction.
+That hint now understates by about 29-76 s, and the derivation has two terms, not one.
+Both are pure wall clock paid in full on the passing path, and they are additive because they belong to different cases.
 
-That is not a job-cap risk for the lane.
-The worst portable serial shard measures 11.67 minutes of script time against a `timeout-minutes: 15` cap, and this file sits in one shard, so the worst case is 11.67 min + 31.1 s = 12.19 min, still about 1.23x under the cap with runner setup and checkout on top.
+The first term is the eight settle sleeps: literals summing to 870 ms were replaced by 8 x `FM_TEST_ARM_START_BUDGET_MS`, which is 8 x 1640 = 13120 ms at the 328 ms start measured on run 32255813826 (delta 12.3 s) and 8 x 4000 = 32000 ms at the 800 ms start in the load curve (delta 31.1 s).
+
+The second term is the arm-readiness budget itself, on the negative-recovery cases that spend it rather than poll it.
+Six call sites moved `FM_PI_ARM_READY_TIMEOUT_MS` / `FM_OPENCODE_ARM_READY_TIMEOUT_MS` off the literal 250 ms onto the derived `ARM_READY_TIMEOUT_MS`, which is `ARM_CHILD_START_MS x 5` with a 500 ms floor.
+Those are the hung-successor cases, and as the comment above `fm_recovery_deadline_ms` states, they can only conclude *by the budget expiring* - the successor never reports ready - so every one of those expiries is spent in full exactly like a settle sleep.
+There are 12 per run of the file: 3 at `tests/fm-pi-watch-extension.test.sh:618`, 1 at `:696`, 1 at `:778` across 2 loop iterations (`for kind in actionable non-actionable`), 3 at `:1875`, 1 at `:1955`, and 1 at `:2039` across 2 iterations.
+Each expiry grew by `ARM_READY_TIMEOUT_MS - 250`, so the term is 12 x 1390 = 16.7 s at the 328 ms start measured on run 32255813826 and 12 x 3750 = 45.0 s at the 800 ms start in the load curve.
+
+Summed, that is about 29 s at the CI-measured start and about 76 s at the load-curve maximum.
+The *polled* windows - and only those - add nothing to the figure on the passing path, by construction: a polled driver stops the moment its event lands, so its window bounds how long a failure takes to report rather than spending time when the case passes.
+That distinction is exactly why the readiness expiries count and the windows wrapped around them do not.
+
+That is still not a job-cap risk for the lane, on a margin thinner than the settle-sleep term alone implied.
+The worst portable serial shard measures 11.67 minutes of script time against a `timeout-minutes: 15` cap, and this file sits in one shard, so the worst case is 11.67 min + 76.1 s = 12.94 min, about 1.16x under the cap with runner setup and checkout on top.
+No `.github/workflows/ci.yml` change and no timeout change is needed.
 It is recorded here rather than left for the reader to reconstruct because `docs/fm-test-portable-shards.md` argues in the same breath that a stale hint past the cap costs a cancelled job with no verdict.
 
 `bin/fm-test-run.sh --check-coverage` will not catch this one, and that is the point worth writing down: `unmeasured_serial=0` means no selected serial script is packed at the flat default, not that the hints are current.
