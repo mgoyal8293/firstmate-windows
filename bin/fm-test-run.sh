@@ -1055,9 +1055,30 @@ run_coverage_guard() {
     log "coverage guard: portable serial scripts with no measured duration, packed at ${PORTABLE_SERIAL_DEFAULT_WEIGHT_MS}ms (docs/fm-test-portable-shards.md owns the refresh):"
     cat "$tmp/unhinted" >&2
   fi
-  printf 'FM_TEST_COVERAGE_WINDOWS ok windows=%s windows_shards=%s\n' \
+  # Windows lane members packed at the default weight because nothing measured
+  # them, reported by count AND name for the same reason the serial lane reports
+  # its own: an unmeasured member is what unbalances a shard, and a Windows shard
+  # that overruns its cap is cancelled with no verdict rather than merely slow.
+  #
+  # It bites harder here than on the serial lane. list_windows and
+  # windows_weight_hints are two hand-maintained parallel lists, and this lane's
+  # admission rule is that a test joins once it is measured green on Windows
+  # (docs/fm-test-windows-lane.md), so a member with no hint is one admitted
+  # without the measurement its own rule requires.
+  #
+  # Same limit as the serial counter: this counts only members packed at the
+  # default, so a zero says no member is unhinted, NOT that the hints are current.
+  windows_weight_hints | cut -d' ' -f1 | LC_ALL=C sort -u >"$tmp/windows_hinted"
+  LC_ALL=C comm -23 "$tmp/windows" "$tmp/windows_hinted" >"$tmp/windows_unhinted"
+
+  printf 'FM_TEST_COVERAGE_WINDOWS ok windows=%s windows_shards=%s unmeasured_windows=%s\n' \
     "$(wc -l <"$tmp/windows" | tr -d ' ')" \
-    "$WINDOWS_SHARDS"
+    "$WINDOWS_SHARDS" \
+    "$(wc -l <"$tmp/windows_unhinted" | tr -d ' ')"
+  if [ -s "$tmp/windows_unhinted" ]; then
+    log "coverage guard: windows lane members with no measured duration, packed at ${WINDOWS_DEFAULT_WEIGHT_MS}ms (docs/fm-test-windows-lane.md owns the refresh):"
+    cat "$tmp/windows_unhinted" >&2
+  fi
   rm -rf "$tmp"
   return 0
 }
