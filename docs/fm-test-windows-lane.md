@@ -354,10 +354,11 @@ slower than the machine these numbers came from.
 
 The 14-18x headline is a central tendency, not a constant: measured per script it
 spans roughly 10x to 24x. The Linux column below is measured on this WSL2
-development box by a full-suite run at head `c96c301` (all four scripts are
-byte-identical at the current head); the Git Bash column is this lane's own
-measured Windows weights. The two columns come from different machines, so read
-the ratios as the size of the fork-cost gap rather than a controlled
+development box by a full-suite run at head `c96c301`; the Git Bash column is
+this lane's own measured Windows weights. That head is a pre-rebase tip of this
+branch, so a fresh clone will not resolve it, but all four scripts are
+byte-identical at the current head. The two columns come from different machines,
+so read the ratios as the size of the fork-cost gap rather than a controlled
 single-machine comparison.
 
 | script | Linux | Git Bash | ratio |
@@ -436,8 +437,8 @@ assertion compares integer `$SECONDS`, so a true 4.605s reads as `elapsed=5` and
 `[ 5 -lt 5 ]` is false. That was the whole failure. 25s is deliberately more than
 parity headroom because the Windows figure is far less stable - a 34% spread
 across three runs against 1.4% on Linux - and a GitHub Windows runner is slower
-than the machine these came from. Scaled in a `MINGW*|MSYS*` arm so the Linux
-tripwire keeps its 5s sensitivity. With the bound neutralised the script is
+than the machine these came from. Scaled in a Windows `uname -s` arm so the
+Linux tripwire keeps its 5s sensitivity. With the bound neutralised the script is
 **rc=0, 49 ok / 0 not ok** on Git Bash, so this bound was the single remaining
 Windows failure in the file and the exec-wrapper fix holds.
 
