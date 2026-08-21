@@ -747,6 +747,53 @@ SH
   pass "bootstrap: install conpty-backend-deps runs the documented npm install in the backend directory"
 }
 
+test_conpty_backend_deps_install_survives_awkward_path() {
+  local case_dir dir out status
+  # The Windows target makes a checkout path holding a space or an apostrophe
+  # ordinary ("D:\Kiran's Work\firstmate"). `install` evals the printed hint, so
+  # an unescaped path makes bash die on a quoting error before npm ever runs. Drive
+  # the real subcommand against such a path and assert npm actually ran there.
+  case_dir="$TMP_ROOT/conpty-deps-install-awkward"
+  dir="$case_dir/Kiran's Work/back ends/conpty"
+  mkdir -p "$dir" "$case_dir/fakebin"
+  cat > "$case_dir/fakebin/npm" <<'SH'
+#!/usr/bin/env bash
+printf 'INSTALLED-IN:%s\n' "$PWD"
+SH
+  chmod +x "$case_dir/fakebin/npm"
+  out=$(FM_BACKEND_CONPTY_DIR="$dir" PATH="$case_dir/fakebin:$BASE_PATH" \
+    "$ROOT/bin/fm-bootstrap.sh" install conpty-backend-deps 2>&1)
+  status=$?
+  [ "$status" -eq 0 ] \
+    || fail "install conpty-backend-deps should succeed on a path with a space and an apostrophe, got status $status: $out"
+  assert_contains "$out" "INSTALLED-IN:$dir" \
+    "install conpty-backend-deps must run npm inside a backend directory whose path holds a space and an apostrophe"
+  pass "bootstrap: install conpty-backend-deps runs npm in a backend directory whose path needs quoting"
+}
+
+test_conpty_backend_deps_install_reports_failure() {
+  local case_dir out status
+  # A failed install must not exit 0: the whole point of the diagnostic is that a
+  # home which cannot spawn is never reported fixed, and the captain approving the
+  # install has to see it fail.
+  case_dir="$TMP_ROOT/conpty-deps-install-fails"
+  mkdir -p "$case_dir/conpty" "$case_dir/fakebin"
+  cat > "$case_dir/fakebin/npm" <<'SH'
+#!/usr/bin/env bash
+echo "npm ERR! network unreachable" >&2
+exit 1
+SH
+  chmod +x "$case_dir/fakebin/npm"
+  out=$(FM_BACKEND_CONPTY_DIR="$case_dir/conpty" PATH="$case_dir/fakebin:$BASE_PATH" \
+    "$ROOT/bin/fm-bootstrap.sh" install conpty-backend-deps 2>&1)
+  status=$?
+  [ "$status" -ne 0 ] \
+    || fail "install conpty-backend-deps must not exit 0 when the install command fails, got: $out"
+  assert_contains "$out" "install of conpty-backend-deps failed" \
+    "a failed install must say so"
+  pass "bootstrap: a failed backend-dependency install fails loudly instead of reporting success"
+}
+
 test_herdr_install_requires_manual_action() {
   local out status
   out=$("$ROOT/bin/fm-bootstrap.sh" install herdr 2>&1)
@@ -1312,6 +1359,8 @@ test_herdr_install_requires_manual_action
 test_conpty_backend_dependency_is_detected
 test_conpty_dependency_check_is_scoped_to_conpty
 test_conpty_backend_deps_install_command_is_executable
+test_conpty_backend_deps_install_survives_awkward_path
+test_conpty_backend_deps_install_reports_failure
 test_cmux_bundled_cli_satisfies_dependency
 test_unknown_backend_reports_invalid_configuration
 test_json_backends_require_jq_not_tmux

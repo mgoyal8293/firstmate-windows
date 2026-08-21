@@ -306,7 +306,8 @@ This section is the single owner of that universal toolchain list; backend guide
 In that list, no-mistakes runs the validation pipeline, gh-axi, chrome-devtools-axi, and lavish-axi cover GitHub, browser, and rich-review operations, and tasks-axi plus quota-axi back backlog mutations and quota-aware array dispatch.
 The per-backend delta is required only for the backend resolved from `FM_BACKEND`, then `config/backend`, then runtime auto-detection, then default `tmux`, so a home is never told to install a tool an inactive backend or feature would need.
 That delta is owned in code by `fm_backend_required_tools` in `bin/fm-backend.sh`: the resolved backend's own session-provider CLI (`tmux`, `herdr`, `zellij`, `orca`, or `cmux`), `jq` for the JSON-emitting experimental adapters (`herdr`, `zellij`, `cmux`) whose spawn and liveness paths parse the backend's JSON output, and the `treehouse` worktree provider for every session-provider-only backend (`tmux`, `herdr`, `zellij`, `cmux`, `conpty`).
-conpty has no session-provider CLI to install and needs no `jq`, so its delta is `treehouse` alone; its daemon ships with firstmate and runs on the universal `node`.
+conpty has no session-provider CLI to install and needs no `jq`, so its `PATH` delta is `treehouse` alone; its daemon ships with firstmate and runs on the universal `node`.
+conpty's remaining dependency is not a `PATH` command at all but an npm install inside the backend's own directory, so `fm_backend_required_dependency` in `bin/fm-backend.sh` owns it as a sibling hook and bootstrap probes it with the backend's own spawn-time preflight rather than a presence check.
 Backend tool availability uses the adapter's own executable resolver, so bootstrap and spawn agree on supported non-`PATH` locations such as cmux's bundled CLI.
 An unknown resolved backend emits `BACKEND_INVALID` and blocks dispatch instead of silently dropping its dependency delta or falling back to tmux.
 Orca provides both the task worktree and terminal endpoint (see "Runtime backend" above), so `backend=orca` requires only `orca` on top of the universal toolchain and skips both `treehouse` and every other backend's session CLI.
@@ -318,6 +319,7 @@ An absent or incompatible `tasks-axi` reports `MISSING: tasks-axi (install: npm 
 An absent or incompatible `gh-axi` reports `MISSING: gh-axi (install: npm install -g gh-axi && gh-axi setup hooks)`.
 An absent or incompatible `lavish-axi` reports `MISSING: lavish-axi (install: npm install -g lavish-axi && lavish-axi setup hooks)`.
 An absent or too-old `quota-axi` reports `MISSING: quota-axi (install: npm install -g quota-axi)`; firstmate cannot resolve a profile array without a compatible binary.
+A `backend=conpty` home whose daemon dependencies are absent or unloadable reports `MISSING: conpty-backend-deps` with the npm install command for the backend directory, so a home that cannot spawn is never reported healthy; [`conpty-backend.md`](conpty-backend.md) owns that setup detail.
 Bootstrap also reports a `TANGLE:` line when `FM_ROOT` is on a named non-default branch; follow the printed checkout remediation rather than treating it as an installable tool problem.
 In a read-only session that did not get the fleet lock, the same line is advisory and omits the checkout command.
 The locked session-start deferred network stage runs bootstrap's best-effort project clone refresh through `fm-fleet-sync.sh`.

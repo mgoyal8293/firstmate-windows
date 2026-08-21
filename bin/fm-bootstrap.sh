@@ -753,6 +753,15 @@ secondmate_handoff_detect() {
   done
 }
 
+# Single-quote escaping for a string this script's `install` subcommand evals,
+# matching the shell_quote in bin/fm-spawn.sh and bin/fm-brief.sh. Single quotes
+# rather than double so `$` and backticks in a path stay literal.
+shell_quote() {
+  printf "'"
+  printf '%s' "$1" | sed "s/'/'\\\\''/g"
+  printf "'"
+}
+
 install_cmd() {
   # Windows arm first: brew does not exist there, so the generic hint named a
   # package manager the host cannot have. Confirmed live on Windows, where every
@@ -775,10 +784,11 @@ install_cmd() {
   fi
   case "$1" in
     # Not a package: the ConPTY session daemon's pinned runtime dependencies,
-    # installed once inside the backend's own directory. See
-    # docs/conpty-backend.md "Setup".
+    # installed once inside the backend's own directory, which the backend itself
+    # owns and resolves. See docs/conpty-backend.md "Setup".
     conpty-backend-deps)
-      echo "(cd '${FM_BACKEND_CONPTY_DIR:-$FM_ROOT/bin/backends/conpty}' && npm install --omit=dev)"
+      fm_backend_source conpty >/dev/null 2>&1 || return 1
+      echo "(cd $(shell_quote "$FM_BACKEND_CONPTY_DIR") && npm install --omit=dev)"
       ;;
     tmux|node|git|gh|curl|jq|orca|zellij) echo "brew install $1  # or the platform's package manager" ;;
     cmux) echo "brew install --cask cmux  # or see https://cmux.com" ;;
@@ -1136,7 +1146,10 @@ if [ "${1:-}" = "install" ]; then
     fi
     cmd=${cmd%%  #*}
     echo "installing $t: $cmd"
-    eval "$cmd"
+    if ! eval "$cmd"; then
+      echo "error: install of $t failed: $cmd" >&2
+      exit 1
+    fi
   done
   exit 0
 fi
