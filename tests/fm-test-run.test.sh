@@ -399,19 +399,14 @@ unmeasured_serial_count() { # <coverage guard stdout>
 }
 
 test_unmeasured_serial_report_names_the_unhinted_script() {
-  local sandbox out err rc f baseline count expected
+  local sandbox out err rc baseline count expected
   # The report the guard added is only exercised against a lane that actually
   # contains an unmeasured script. A sandbox root gives it one: the runner
   # resolves its own root from its location and derives the serial lane from
   # tests/*.test.sh, so a copy beside a mirrored inventory drives the real guard
   # and one added script is the only difference between the two runs below.
-  sandbox=$(fm_test_tmproot fm-test-run-unmeasured) || fail "could not create sandbox root"
-  mkdir -p "$sandbox/bin" "$sandbox/tests"
-  cp "$RUNNER" "$sandbox/bin/fm-test-run.sh"
-  cp "$ROOT/bin/fm-test-isolation-proof.sh" "$sandbox/bin/fm-test-isolation-proof.sh"
-  for f in "$ROOT"/tests/*.test.sh; do
-    : > "$sandbox/tests/$(basename "$f")"
-  done
+  sandbox=$(coverage_guard_sandbox fm-test-run-unmeasured) \
+    || fail "could not create sandbox root"
 
   # Baseline first, so the assertion is the delta this case creates and not the
   # production tree's own hint coverage. A newly added test legitimately has no
@@ -582,11 +577,23 @@ windows_coverage_field() {  # <coverage guard stdout> <field>
   '
 }
 
+# The guard reads its unhinted members out as a diagnostic block: a `log` header
+# line, then the names. Both lane reporters print that same shape, so the windows
+# one has to be isolated before its names mean anything - the probe below is a
+# real file in the sandbox, so the derived serial lane reports it too.
+windows_unhinted_block() {  # <coverage guard stderr>
+  printf '%s\n' "$1" | awk '
+    index($0, "windows lane members with no measured duration") { inblock = 1; next }
+    inblock && /^fm-test-run: / { inblock = 0 }
+    inblock { print }
+  '
+}
+
 # A sandbox root the REAL guard runs in: the runner resolves its own root from
 # its location, so a copy beside a mirrored inventory drives the production code
-# path while one edit below is the only difference from the shipped tree. Same
-# construction as test_unmeasured_serial_report_names_the_unhinted_script.
-windows_guard_sandbox() {  # <slug> -> echoes sandbox root
+# path while one edit is the only difference from the shipped tree. Shared by the
+# serial and windows coverage cases, so the mirrored shape stays one definition.
+coverage_guard_sandbox() {  # <slug> -> echoes sandbox root
   local sandbox f
   sandbox=$(fm_test_tmproot "$1") || return 1
   mkdir -p "$sandbox/bin" "$sandbox/tests" || return 1
@@ -633,10 +640,10 @@ test_windows_coverage_report_counts_the_shipped_lane() {
 }
 
 test_unmeasured_windows_report_names_the_unhinted_member() {
-  local sandbox runner out err rc baseline count expected probe hinted
+  local sandbox runner out err rc baseline count expected probe hinted block
   probe=tests/fm-zzz-windows-probe.test.sh
   hinted=tests/fm-decision-hold-lifecycle.test.sh
-  sandbox=$(windows_guard_sandbox fm-test-run-unmeasured-windows) \
+  sandbox=$(coverage_guard_sandbox fm-test-run-unmeasured-windows) \
     || fail "could not create sandbox root"
   runner="$sandbox/bin/fm-test-run.sh"
 
@@ -682,8 +689,13 @@ test_unmeasured_windows_report_names_the_unhinted_member() {
   # member.
   [ "$count" = "$expected" ] \
     || fail "one unhinted member must raise unmeasured_windows from $baseline to $expected, got $count: $out"
-  printf '%s\n' "$err" | grep -Fq "$probe" \
-    || fail "guard must name the unhinted windows member on stderr: $err"
+  # Bound to the windows reporter's own listing: naming is a separate claim from
+  # counting, and stderr as a whole cannot tell the two reporters apart.
+  printf '%s\n' "$err" | grep -Fq 'windows lane members with no measured duration' \
+    || fail "guard must print its windows unhinted listing: $err"
+  block=$(windows_unhinted_block "$err")
+  printf '%s\n' "$block" | grep -Fqx "$probe" \
+    || fail "the windows listing must name the unhinted member, got '$block': $err"
   # And a measured member must not be swept in with it.
   printf '%s\n' "$err" | grep -Fq "$hinted" \
     && fail "guard named a measured windows member as unmeasured: $err"
@@ -696,7 +708,7 @@ test_windows_shards_must_cover_the_windows_lane() {
   # The lightest lane member, so dropping it cannot empty a shard and trip the
   # earlier empty-shard refusal instead of the partition check under test.
   dropped=tests/fm-gitignore-config.test.sh
-  sandbox=$(windows_guard_sandbox fm-test-run-windows-partition) \
+  sandbox=$(coverage_guard_sandbox fm-test-run-windows-partition) \
     || fail "could not create sandbox root"
   runner="$sandbox/bin/fm-test-run.sh"
 
