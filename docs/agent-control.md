@@ -95,7 +95,7 @@ Switching harness is therefore one ordinary relaunch rather than a separate mech
 - A backend that cannot deliver the harness's interrupt key, or the composer clear that key needs, is refused rather than sent a different key.
   Orca's terminal API exposes only an interrupt and an Enter, so it can deliver neither Escape nor Ctrl+U.
 - `exit` and `relaunch` require a backend with a recovery-grade agent-state classifier - tmux and herdr - because without one the "the agent stopped" postcondition cannot be proven.
-  zellij, orca, and cmux are refused rather than reported as successful blind.
+  zellij, orca, and cmux are refused rather than reported as successful blind, and conpty is refused too because that table does not name it (see the capability matrix below).
 - An ambiguous or unreadable endpoint state refuses.
   Only a positively classified state acts.
 - `fm-spawn --relaunch` independently refuses unless the recorded endpoint is positively agent-free and its shell is sitting in the recorded worktree, so a replacement can never join a live agent or start outside the copy holding the work.
@@ -111,6 +111,9 @@ Backend capability comes from each adapter's real surface, not from a policy cho
 | zellij | yes | yes | yes | yes | no |
 | cmux | yes | yes | yes | yes | no |
 | orca | no | yes | yes | no | no |
+
+conpty has no row because neither table in `bin/fm-control-lib.sh` names it, so `interrupt`, `exit`, and `relaunch` all refuse on that backend.
+That exclusion is stale rather than a missing surface, and [`conpty-backend.md`](conpty-backend.md) "Active limits" owns why and the tracker for closing it.
 
 Per-harness interrupt keys, repeat counts, composer clears, exit commands, and supported task kinds live in `bin/fm-control-lib.sh` and are exercised for every verified harness by `tests/fm-control.test.sh`.
 The empirical basis for each adapter's value is the `harness-adapters` skill's verification record for that adapter.
