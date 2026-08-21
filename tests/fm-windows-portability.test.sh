@@ -18,6 +18,9 @@
 #      native symlink back in a DIFFERENT spelling from the one it was given,
 #      which is the second way that validation can never match and every lock
 #      spins forever.
+#   5. fm_pid_identity is served from this same file, because a stored process
+#      identity is another `ps -o` read: a second copy elsewhere in bin/ answered
+#      nothing on MSYS while this one answers from /proc.
 #
 # The remaining blocker - the private-file mode assertion - is a security
 # boundary and has its own file: tests/fm-pr-private-file-mode.test.sh.
@@ -301,6 +304,65 @@ test_lock_points_to_owner_still_accepts_an_exact_readlink_answer() {
   pass "fm_lock_points_to_owner: the strict readlink compare remains the primary, unresolved verdict"
 }
 
+# --- 5. process identity ----------------------------------------------------
+
+# A /proc with the Linux-shaped per-pid stat and cmdline that Cygwin/MSYS also
+# expose. The parenthesised comm field deliberately contains a ')' and a space,
+# because field 22 can only be located after the LAST such delimiter.
+fake_proc_identity() {  # <root> <pid> <starttime>
+  local root=$1 pid=$2 starttime=$3
+  mkdir -p "$root/$pid"
+  printf '%s (bash ) x) S 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 %s 20 21 22\n' \
+    "$pid" "$starttime" > "$root/$pid/stat"
+  printf 'bash\0/path with spaces/fm-send.sh\0--flag\0' > "$root/$pid/cmdline"
+}
+
+test_pid_identity_is_served_by_this_file_from_proc() {
+  local root fakebin first second reused
+  root=$(fm_test_tmproot fm-pid-identity) || fail "pid-identity: could not create a fixture root"
+  fakebin="$root/bin"
+  mkdir -p "$fakebin"
+  # MSYS `ps` shape: -o is rejected outright, so a caller that depends on it gets
+  # nothing at all. This is what made a stored process identity unreadable there.
+  cat > "$fakebin/ps" <<'SH'
+#!/usr/bin/env bash
+for a in "$@"; do
+  case "$a" in
+    -o) printf 'ps: unknown option -- o\n' >&2; exit 1 ;;
+  esac
+done
+exit 0
+SH
+  chmod +x "$fakebin/ps"
+  fake_proc_identity "$root/proc" 4242 987654
+  # Exported here, unlike the in-process cases above, because each read below runs
+  # in a child shell that sources only the library under test.
+  export FM_PROC_ROOT_OVERRIDE="$root/proc"
+
+  # Sourcing bin/fm-proc-lib.sh alone must be enough: it is the one owner of this
+  # read, so no caller has to pull in a second library to ask the question.
+  first=$(PATH="$fakebin:$PATH" bash -c '. "$1"; fm_pid_identity "$2"' _ "$ROOT/bin/fm-proc-lib.sh" 4242) \
+    || fail "pid-identity: fm-proc-lib.sh did not answer for a pid with a readable /proc"
+  case "$first" in
+    *starttime=987654*cmdline-hex=*) : ;;
+    *) fail "pid-identity: expected parsed starttime field 22 plus the full cmdline, got '$first'" ;;
+  esac
+  second=$(PATH="$fakebin:$PATH" bash -c '. "$1"; fm_pid_identity "$2"' _ "$ROOT/bin/fm-proc-lib.sh" 4242)
+  [ "$second" = "$first" ] \
+    || fail "pid-identity: two reads of the same process must match ('$first' vs '$second')"
+
+  fake_proc_identity "$root/proc" 4242 987655
+  reused=$(PATH="$fakebin:$PATH" bash -c '. "$1"; fm_pid_identity "$2"' _ "$ROOT/bin/fm-proc-lib.sh" 4242)
+  [ "$reused" != "$first" ] || fail "pid-identity: a reused pid must not keep the old identity"
+
+  # And the same library sourced through bin/fm-wake-lib.sh, which every watcher
+  # and lock check reaches it by, must answer identically rather than from a copy.
+  [ "$(FM_STATE_OVERRIDE="$root/state" PATH="$fakebin:$PATH" bash -c '. "$1"; fm_pid_identity "$2"' _ "$ROOT/bin/fm-wake-lib.sh" 4242)" = "$reused" ] \
+    || fail "pid-identity: the wake library must serve the same answer as its owner"
+  unset FM_PROC_ROOT_OVERRIDE
+  pass "fm_pid_identity: bin/fm-proc-lib.sh answers from /proc where ps rejects -o, and detects pid reuse"
+}
+
 test_proc_field_reads_msys_layout
 test_proc_field_falls_back_to_ps_where_proc_is_absent
 test_proc_field_rejects_bad_input
@@ -311,3 +373,4 @@ test_proc_cwd_scan_finds_processes_rooted_under_a_directory
 test_proc_cwd_scan_reports_scan_failure_distinctly
 test_lock_same_path_resolves_a_mount_alias_only_through_cygpath
 test_lock_points_to_owner_still_accepts_an_exact_readlink_answer
+test_pid_identity_is_served_by_this_file_from_proc
