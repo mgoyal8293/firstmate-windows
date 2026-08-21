@@ -19,6 +19,7 @@ Prerequisites:
 - Node 20 or newer, already part of firstmate's universal toolchain.
 - The daemon's pinned runtime dependencies, installed once: `npm install --omit=dev` in `bin/backends/conpty`.
   They are not vendored because node-pty ships a platform-specific prebuilt binary.
+  That prebuilt `win32-x64` binding is also why the install needs no Visual Studio or node-gyp toolchain on Windows.
 - Git for Windows, for the shell each task session starts in.
 - The universal harness and toolchain requirements in [`configuration.md`](configuration.md#toolchain).
 

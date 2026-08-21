@@ -60,8 +60,8 @@ call site.
 - Select the ConPTY session provider: put `conpty` in this home's `config/backend`.
   There is no tmux on Windows, and the default `tmux` backend cannot spawn anything here.
 - Install the ConPTY daemon's pinned runtime dependencies: `npm install --omit=dev` in `bin/backends/conpty`.
-  They are not vendored, so a fresh clone has none and no task can spawn until they are installed; it takes about six seconds and needs no compiler, because node-pty ships a prebuilt `win32-x64` binding.
-  [`conpty-backend.md`](conpty-backend.md) owns the rest of that backend's setup.
+  They are not vendored, so a fresh clone has none and no task can spawn until they are installed.
+  [`conpty-backend.md`](conpty-backend.md) owns the rest of that backend's setup, including why the install needs no compiler.
 - Run `bin/fm-bootstrap.sh`. It proves all of the above and prints a `PLATFORM:` line naming the exact remedy when the symlink or Developer Mode step is missing, and a `MISSING: conpty-backend-deps` line when the backend's dependencies are not installed.
 
 Run firstmate from Claude Code.
