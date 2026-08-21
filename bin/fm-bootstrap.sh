@@ -122,6 +122,11 @@
 #          keeps detect-only meaning unlocked, exactly as before.
 #        fm-bootstrap.sh install <tool>...
 #          Install the named tools (only ones the captain approved).
+#          Every named tool is attempted even after an earlier one fails; each
+#          failure prints its own line naming that tool, and the exit status is
+#          non-zero if any tool failed. Non-zero therefore means partial
+#          success is possible - read the failure lines rather than assume
+#          nothing installed.
 set -u
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
