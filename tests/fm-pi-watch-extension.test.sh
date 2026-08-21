@@ -107,6 +107,17 @@ printf '# arm child start %sms measured, readiness budget %sms\n' \
 # this file on a workstation, 13.1s at the 328ms start measured on run
 # 32255813826, and 32s at the 800ms start in the 16-spinner load curve.
 #
+# The settle sleeps are not the only full-wall-clock term. The readiness budget
+# is the second one: the negative-recovery cases can only conclude by it
+# expiring, so each of the twelve expiries per run of this file is spent in
+# full as well - about 3.0s on a workstation, 16.7s at the 328ms start, and
+# 45.0s at the 800ms start. Combined with the settle sleeps that is roughly 6s,
+# 29s and 76s per run, but ONLY as an increment over a fully pre-fix baseline
+# such as this file's 27802ms weight hint. Against a measurement taken from a
+# tree that already derives the readiness budget, only the settle-sleep term is
+# new. docs/verification/watcher-arm-test-budgets.md owns that arithmetic and
+# the two baselines it applies to.
+#
 # Poll cadence is derived from the window it polls rather than left absolute.
 # A fixed 10ms poll inside a derived window makes the failing path noisier the
 # slower the machine gets - 590 to 1300 timer wakeups, plus a filesystem stat
@@ -178,17 +189,17 @@ fm_ms_to_seconds() {
 # sleeps: every driver stops the moment its event lands, so sizing one from the
 # worst case costs nothing on the passing path and only bounds how long a
 # genuine failure takes to report.
-fm_recovery_deadline_ms() { # <budget expiries> <arm retire budget ms> [backoff cap ms]
-  local expiries=$1 retire=$2 backoff=${3:-$REARM_RETRY_MAX_MS}
+fm_recovery_deadline_ms() { # <budget expiries> <arm retire budget ms>
+  local expiries=$1 retire=$2
   # Per expiry: the readiness budget, the retirement budget that follows it,
-  # and the retry backoff, which the plugins cap at FM_WATCH_REARM_RETRY_MAX_MS
-  # however far their doubling has run - so the cap bounds this term, and it is
-  # read from the same name the call sites export that cap under.
+  # and REARM_RETRY_MAX_MS, which bounds the backoff however far the plugins'
+  # doubling has run and is the same value every call site exports, so the
+  # deadline and the env prefixes cannot disagree about it.
   # Plus one cold child start per attempt and for the original arm, and the
   # derived per-case slack for module load, lock checks and prompt delivery -
   # the same term the drivers add, for the same reason it is not a literal
   # there.
-  echo $(( expiries * (ARM_READY_TIMEOUT_MS + retire + backoff) \
+  echo $(( expiries * (ARM_READY_TIMEOUT_MS + retire + REARM_RETRY_MAX_MS) \
            + (expiries + 1) * ARM_CHILD_START_MS + OBSERVE_SLACK_MS ))
 }
 

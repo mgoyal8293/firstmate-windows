@@ -240,20 +240,36 @@ The first term is the eight settle sleeps: literals summing to 870 ms were repla
 The second term is the arm-readiness budget itself, on the negative-recovery cases that spend it rather than poll it.
 Six call sites moved `FM_PI_ARM_READY_TIMEOUT_MS` / `FM_OPENCODE_ARM_READY_TIMEOUT_MS` off the literal 250 ms onto the derived `ARM_READY_TIMEOUT_MS`, which is `ARM_CHILD_START_MS x 5` with a 500 ms floor.
 Those are the hung-successor cases, and as the comment above `fm_recovery_deadline_ms` states, they can only conclude *by the budget expiring* - the successor never reports ready - so every one of those expiries is spent in full exactly like a settle sleep.
-There are 12 per run of the file: 3 at `tests/fm-pi-watch-extension.test.sh:618`, 1 at `:696`, 1 at `:778` across 2 loop iterations (`for kind in actionable non-actionable`), 3 at `:1875`, 1 at `:1955`, and 1 at `:2039` across 2 iterations.
+There are 12 per run of the file, counted by test function so the count stays auditable when the line numbers move: 3 in `test_pi_hung_successor_falls_back_to_typed_wake` (`tests/fm-pi-watch-extension.test.sh:639`), 1 in `test_pi_unretired_successor_falls_back_without_retry` (`:717`), 1 in `test_pi_late_unretired_close_resumes_supervision` (`:799`) across its 2 loop iterations (`for kind in actionable non-actionable`), and 3 + 1 + 1 x 2 again in the three OpenCode counterparts `test_opencode_hung_successor_falls_back_to_typed_wake` (`:1896`), `test_opencode_unretired_successor_falls_back_without_retry` (`:1976`) and `test_opencode_late_unretired_close_resumes_supervision` (`:2060`).
 Each expiry grew by `ARM_READY_TIMEOUT_MS - 250`, so the term is 12 x 1390 = 16.7 s at the 328 ms start measured on run 32255813826 and 12 x 3750 = 45.0 s at the 800 ms start in the load curve.
 
 Summed, that is about 29 s at the CI-measured start and about 76 s at the load-curve maximum.
 The *polled* windows - and only those - add nothing to the figure on the passing path, by construction: a polled driver stops the moment its event lands, so its window bounds how long a failure takes to report rather than spending time when the case passes.
 That distinction is exactly why the readiness expiries count and the windows wrapped around them do not.
 
-That is still not a job-cap risk for the lane, on a margin thinner than the settle-sleep term alone implied.
-The worst portable serial shard measures 11.67 minutes of script time against a `timeout-minutes: 15` cap, and this file sits in one shard, so the worst case is 11.67 min + 76.1 s = 12.94 min, about 1.16x under the cap with runner setup and checkout on top.
+That is still not a job-cap risk for the lane, but only one of the two terms is additive over the shard measurement, because the two baselines in play are different trees and are not interchangeable.
+The 27802 ms hint came from run 32159215212 at head 580d64fb, a fully pre-fix tree: six literal `ARM_READY_TIMEOUT_MS=250` sites, no `FM_TEST_ARM_START_BUDGET_MS`, six literal `setTimeout(resolve, 100)`. Both terms above are new against it, which is where 29-76 s comes from.
+The 11.67 min worst-shard measurement came from run 32259417831 at head 20b68645, which already carried the derived readiness budgets - no literal 250 ms site was left - but not yet the scaled settle sleeps. The twelve expiries are therefore already inside that 11.67 min, and only the eight settle sleeps are additive over it.
+So the worst case against the cap is 11.67 min + 31.1 s = 12.19 min, about 1.23x under the `timeout-minutes: 15` cap with runner setup and checkout on top. Charging the full 76.1 s there would double-count the expiries.
+That also settles the two margin figures now in tree, which are two different quantities rather than a disagreement: 1.29x (15 / 11.67) is the margin against the raw measured shard, quoted as "about 1.3x" in `docs/fm-test-portable-shards.md` and `.github/workflows/ci.yml`, while 1.23x is the margin once this change's settle sleeps are charged on top of that same measurement.
 No `.github/workflows/ci.yml` change and no timeout change is needed.
 It is recorded here rather than left for the reader to reconstruct because `docs/fm-test-portable-shards.md` argues in the same breath that a stale hint past the cap costs a cancelled job with no verdict.
 
 `bin/fm-test-run.sh --check-coverage` will not catch this one, and that is the point worth writing down: `unmeasured_serial=0` means no selected serial script is packed at the flat default, not that the hints are current.
 This file already had a hint, so the guard never looked at its value - the same blind spot that let the lane overflow accumulate, and the reason `fm-test-weight-drift-detector` is filed as the follow-up that compares measured durations against the table.
+
+### Why the derived budget has no ceiling
+
+`ARM_READY_TIMEOUT_MS` is the measured child start times five with a 500 ms floor and no upper bound, and the budget is paid in full wall clock 20 times per run of this file: the eight settle sleeps plus the twelve readiness expiries above.
+Added wall clock is therefore `W = 20B - 3870 ms` over the pre-fix hint baseline and `W = 8B - 870 ms` over the measured-shard baseline, for a budget `B`.
+Because `B` is five times the worst of five samples, one scheduling outlier is multiplied by five and then paid twenty times, and nothing clamps the result.
+
+Breaching the 15 min cap from the 11.67 min measured shard needs `8B - 870 >= 200 s`, so `B >= 25084 ms`, so a measured child start of 5017 ms - 6.3x worse than the 800 ms worst point of the recorded load curve.
+Charging the roughly 9 s of observed job overhead moves the threshold to 4792 ms, 6.0x.
+
+The budget stays unbounded, and that is a ruling rather than an oversight.
+A ceiling would make the budget stop tracking child start on precisely the slow machine that needs it most, which reintroduces the exact false-red mechanism this change exists to remove: the failure a ceiling prevents is a slow job, the failure it causes is a wrong verdict.
+And at 6.3x margin, a real 5 s child start means the whole 116-script serial lane is in trouble long before this one file's contribution decides the shard, so a cancelled shard would then be a true signal about the runner rather than a false red about the test.
 
 ## Why the guard plugins guard their stdin write
 
