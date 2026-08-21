@@ -1,0 +1,30 @@
+The out-of-scope finding the change already discloses, observed live.
+
+The author's report states that fm_backend_conpty_winpath tries cygpath then
+wslpath, and that under WSL2 the wslpath arm returns a \\wsl.localhost UNC
+spelling native node cannot resolve. That reproduced here on the first real run
+of the F3 transcript, before any shim was added - bootstrap and the spawn-time
+preflight both reported the dependency missing on a home whose dependencies were
+correctly installed:
+
+  $ bash target/bin/fm-backend.sh -> fm_backend_conpty_version_check
+  error: backend=conpty dependencies failed to load: node:internal/modules/cjs/loader:1433
+    Error: Cannot find module
+    '<cwd>/\\wsl.localhost\Ubuntu-24.04\tmp\fmwin-demo\target\bin\backends\conpty\fmpty.js'
+    code: 'MODULE_NOT_FOUND'
+  hint: run 'npm install --omit=dev' in .../bin/backends/conpty
+
+Directly running the same doctor, bypassing winpath, answers ok on the same
+directory:
+
+  $ cd .../bin/backends/conpty && node fmpty.js doctor
+  ok
+
+So it is the path translation, not the dependencies - it cannot affect the real
+Windows target, where Git Bash supplies cygpath and the first arm wins. The
+transcripts therefore add a `cygpath -w` identity shim (identity IS the native
+spelling on a Linux filesystem) so the real doctor can run, which is what makes
+the "healthy home is silent" direction demonstrable on this box.
+
+This is filed here as confirmation of a disclosed, deliberately unfixed finding.
+It is NOT a defect in this diff.

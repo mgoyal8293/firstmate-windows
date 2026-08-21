@@ -1,0 +1,31 @@
+F5 - the Windows lock refusal named an impossible mechanism.
+
+bin/fm-lock.sh driven through the repo's own platform seam
+(FM_PLATFORM_UNAME_OVERRIDE) and launched detached, so the launcher exits, the
+tree reparents, and the ancestry walk genuinely finds nothing - the real Windows
+shape. state/.lock is inspected after each run.
+
+
+== BEFORE (base 023ccc9): what a Windows user without a token was told ==
+$ bin/fm-lock.sh   # uname=MINGW64_NT-10.0-26200, no session token in the environment
+error: cannot locate harness process in ancestry
+[exit 1]  state/.lock: not created
+   ^ 'ancestry' can NEVER answer on Windows: MSYS /proc holds only MSYS
+     processes, so the reader is sent after something they cannot affect.
+
+== AFTER (this change): the same session ==
+$ bin/fm-lock.sh   # uname=MINGW64_NT-10.0-26200, no session token in the environment
+error: no firstmate session token in this environment, so this session cannot prove it owns this home - on Windows ownership is a per-session token, never process ancestry, because a native harness never appears in MSYS's /proc. Only Claude Code exports one today (CLAUDE_CODE_SESSION_ID); under any other harness a Windows firstmate stays read-only - run firstmate from Claude Code, or continue read-only (docs/windows.md 'How the session lock is owned')
+[exit 1]  state/.lock: not created
+
+== AFTER, off Windows: the ancestry refusal is deliberately byte-identical ==
+$ bin/fm-lock.sh   # uname=Linux, no session token in the environment
+error: cannot locate harness process in ancestry
+[exit 1]  state/.lock: not created
+   ^ off Windows an empty ancestry walk IS the real answer, so naming it is correct.
+
+== AFTER, Windows WITH a Claude Code session token: the lock is acquired ==
+$ CLAUDE_CODE_SESSION_ID=sess-demo-0001 bin/fm-lock.sh
+lock acquired: session token
+[exit 0]  state/.lock: acquired
+   ^ the remedy the refusal names ('run firstmate from Claude Code') is the one that works.

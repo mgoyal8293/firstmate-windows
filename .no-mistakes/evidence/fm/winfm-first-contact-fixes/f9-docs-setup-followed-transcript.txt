@@ -1,0 +1,89 @@
+F9 (and the F4 documentation half) - docs/windows.md Setup could not produce a
+working home.
+
+The Setup list is followed literally, step by step, on a Windows-shaped host.
+The host is simulated in exactly two narrow ways:
+  FM_PLATFORM_UNAME_OVERRIDE=MINGW64_NT-10.0-26200  (the repo's own platform seam,
+    the same one its tests use, so bootstrap takes its MINGW arms)
+  a PATH with tmux removed                          (Windows has no tmux to find)
+plus the cygpath identity shim described in wsl2-winpath-out-of-scope-observed.txt.
+Everything else - bootstrap, npm, the conpty doctor - is the real product.
+
+
+===== BEFORE: docs/windows.md Setup as it read at base 023ccc9 =====
+Its whole Setup list: clone with symlinks, enable Developer Mode, run bin/fm-bootstrap.sh.
+Neither backend selection nor the backend's dependencies are mentioned at all.
+$ sed -n '/^## Setup/,/^## /p' docs/windows.md   # the entire base Setup list
+## Setup
+
+- Clone with symlinks enabled: `git clone -c core.symlinks=true ...`.
+  `.claude/skills` is a tracked symlink, and a flattened checkout leaves the harness with zero project skills and no error.
+- Enable Windows Developer Mode (or grant `SeCreateSymbolicLinkPrivilege`).
+  Without it `MSYS=winsymlinks:nativestrict` makes `ln -s` fail rather than copy - which is the safe failure, but no lock can be acquired.
+- Run `bin/fm-bootstrap.sh`. It proves both of the above and prints a `PLATFORM:` line naming the exact remedy when either is missing.
+
+## Validating on Windows
+[exit 0]
+$ cat config/backend   # a follower of those steps never created one
+cat: /tmp/fmwin-demo/doc-base/config/backend: No such file or directory
+[exit 1]
+$ bin/fm-bootstrap.sh
+MISSING: tmux (install: no Windows package; set config/backend to conpty instead (docs/conpty-backend.md))
+[exit 0]
+   ^ the reader lands on the default tmux backend, which cannot exist here.
+     Bootstrap's own hint sends them to conpty - and on a conpty home with no
+     backend dependencies, that same bootstrap says nothing at all:
+$ printf 'conpty\n' > config/backend && bin/fm-bootstrap.sh
+[exit 0]
+   ^ silent, exit 0, and nothing can spawn. That is the F9 -> F3 chain.
+
+===== AFTER: docs/windows.md Setup as it reads now, followed literally =====
+$ sed -n '/^## Setup/,/^## Validating/p' docs/windows.md
+## Setup
+
+- Clone with symlinks enabled: `git clone -c core.symlinks=true ...`.
+  `.claude/skills` is a tracked symlink, and a flattened checkout leaves the harness with zero project skills and no error.
+- Enable Windows Developer Mode (or grant `SeCreateSymbolicLinkPrivilege`).
+  Without it `MSYS=winsymlinks:nativestrict` makes `ln -s` fail rather than copy - which is the safe failure, but no lock can be acquired.
+- Select the ConPTY session provider: put `conpty` in this home's `config/backend`.
+  There is no tmux on Windows, and the default `tmux` backend cannot spawn anything here.
+- Install the ConPTY daemon's pinned runtime dependencies: `npm install --omit=dev` in `bin/backends/conpty`.
+  They are not vendored, so a fresh clone has none and no task can spawn until they are installed; it takes about six seconds and needs no compiler, because node-pty ships a prebuilt `win32-x64` binding.
+  [`conpty-backend.md`](conpty-backend.md) owns the rest of that backend's setup.
+- Run `bin/fm-bootstrap.sh`. It proves all of the above and prints a `PLATFORM:` line naming the exact remedy when the symlink or Developer Mode step is missing, and a `MISSING: conpty-backend-deps` line when the backend's dependencies are not installed.
+
+Run firstmate from Claude Code.
+The session lock is owned by a per-session token on Windows (see below), and Claude Code is the only verified harness that exports one today - under any other, this home can read but never spawn, steer, or merge.
+
+## Validating on Windows
+[exit 0]
+
+-- step 1 and 2 are host-level (symlink clone, Developer Mode); steps 3-5 are executable --
+
+-- step 3: 'Select the ConPTY session provider: put conpty in this home's config/backend' --
+$ printf 'conpty\n' > config/backend
+conpty
+[exit 0]
+
+-- step 4: 'npm install --omit=dev in bin/backends/conpty' --
+$ (cd bin/backends/conpty && npm install --omit=dev)
+
+added 4 packages, and audited 5 packages in 2s
+
+found 0 vulnerabilities
+[exit 0]
+
+-- step 5: 'Run bin/fm-bootstrap.sh' --
+$ bin/fm-bootstrap.sh
+[exit 0]
+   ^ clean. Now prove the home the docs produced can actually dispatch:
+$ fm_backend_conpty_version_check   # the backend's own spawn-time preflight
+backend=conpty: dependencies load, this home can spawn
+[exit 0]
+$ fm_backend_name   # and the resolved backend is the one the docs told them to pick
+conpty[exit 0]
+
+===== And if a reader skips step 4, bootstrap names the step they skipped =====
+$ rm -rf bin/backends/conpty/node_modules && bin/fm-bootstrap.sh
+MISSING: conpty-backend-deps (install: (cd '/tmp/fmwin-demo/doc-target/bin/backends/conpty' && npm install --omit=dev))
+[exit 0]

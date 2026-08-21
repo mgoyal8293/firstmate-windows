@@ -1,0 +1,62 @@
+F3 - bootstrap certified a broken conpty home as healthy.
+
+Run on a real Linux/WSL2 box against two real checkouts (base 023ccc9 and target
+f1d6db3), each git-initialised with config/backend=conpty. Everything here is the
+shipped product: the real bin/fm-bootstrap.sh, the real `npm install --omit=dev`
+of the pinned dependencies, and the real bin/backends/conpty/fmpty.js doctor.
+
+Windows is simulated only where this box cannot be Windows: a `cygpath -w`
+identity shim stands in for the Git Bash arm fm_backend_conpty_winpath takes
+first on the target (see wsl2-winpath-out-of-scope-observed.txt).
+
+
+== 1. BEFORE (base 023ccc9): a fresh conpty clone with no backend dependencies ==
+$ bash /tmp/fmwin-demo/base/bin/fm-bootstrap.sh
+[exit 0]
+   ^ bootstrap said nothing and exited 0. This home is certified healthy.
+
+   ... but the backend's own spawn-time dependency preflight on that same home:
+$ bash -c '. /tmp/fmwin-demo/base/bin/fm-backend.sh; fm_backend_source conpty; fm_backend_conpty_version_check'
+error: backend=conpty selected but its runtime dependencies are not installed; run 'npm install --omit=dev' in /tmp/fmwin-demo/base/bin/backends/conpty (see docs/conpty-backend.md 'Setup')
+[exit 1]
+   ^ nothing can spawn here. That is F3: a broken home reported healthy.
+
+== 2. AFTER (this change): the same broken home ==
+$ bash /tmp/fmwin-demo/target/bin/fm-bootstrap.sh
+MISSING: conpty-backend-deps (install: (cd '/tmp/fmwin-demo/target/bin/backends/conpty' && npm install --omit=dev))
+[exit 0]
+
+== 3. The remedy bootstrap printed is runnable through bootstrap itself ==
+$ bash /tmp/fmwin-demo/target/bin/fm-bootstrap.sh install conpty-backend-deps
+installing conpty-backend-deps: (cd '/tmp/fmwin-demo/target/bin/backends/conpty' && npm install --omit=dev)
+
+added 4 packages, and audited 5 packages in 2s
+
+found 0 vulnerabilities
+[exit 0]
+
+== 4. Re-run bootstrap on the repaired home ==
+$ bash /tmp/fmwin-demo/target/bin/fm-bootstrap.sh
+[exit 0]
+   ^ silent. And the spawn-time preflight now agrees:
+$ bash -c '. /tmp/fmwin-demo/target/bin/fm-backend.sh; fm_backend_source conpty; fm_backend_conpty_version_check && echo "conpty dependencies load: this home can dispatch"'
+conpty dependencies load: this home can dispatch
+[exit 0]
+
+== 5. The shape a presence check would miss: node_modules present, deps not loadable ==
+$ ls -d /tmp/fmwin-demo/target/bin/backends/conpty/node_modules/node-pty
+/tmp/fmwin-demo/target/bin/backends/conpty/node_modules/node-pty
+[exit 0]
+$ mv /tmp/fmwin-demo/target/bin/backends/conpty/node_modules/node-pty/lib /tmp/fmwin-demo/target/bin/backends/conpty/node_modules/node-pty/lib.broken
+[exit 0]
+$ bash /tmp/fmwin-demo/target/bin/fm-bootstrap.sh
+MISSING: conpty-backend-deps (install: (cd '/tmp/fmwin-demo/target/bin/backends/conpty' && npm install --omit=dev))
+[exit 0]
+   ^ fires on an unloadable install, with the same remedy. A directory test would have passed.
+
+== 6. Repair it again: the diagnostic goes silent, so case 5 is the check firing ==
+$ mv /tmp/fmwin-demo/target/bin/backends/conpty/node_modules/node-pty/lib.broken /tmp/fmwin-demo/target/bin/backends/conpty/node_modules/node-pty/lib
+[exit 0]
+$ bash /tmp/fmwin-demo/target/bin/fm-bootstrap.sh
+[exit 0]
+   ^ silent again.

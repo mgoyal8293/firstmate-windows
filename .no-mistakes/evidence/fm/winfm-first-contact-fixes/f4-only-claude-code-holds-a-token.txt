@@ -1,0 +1,25 @@
+F4 (documentation half) - "only Claude Code supplies a session token today, so
+under the other verified harnesses a Windows firstmate is read-only".
+
+The sentence docs/windows.md now states, checked against the running code: each
+documented harness's plausible session variable is offered to bin/fm-lock.sh on a
+Windows-simulated session, and state/.lock is inspected afterwards. The other
+harnesses' variable names are illustrative - the point is that nothing but
+Claude's is honoured, which is also the change's stated forbidden behaviour
+(FM_SESSION_TOKEN_VARS must NOT be widened without per-harness evidence).
+
+
+== Every harness firstmate documents, on Windows, asked for the fleet lock ==
+$ CLAUDE_CODE_SESSION_ID=... (Claude Code)       -> LOCK ACQUIRED (read-write)
+$ CODEX_SESSION_ID=... (codex)                   -> refused, session stays READ-ONLY
+$ OPENCODE_SESSION_ID=... (opencode)             -> refused, session stays READ-ONLY
+$ CURSOR_SESSION_ID=... (cursor)                 -> refused, session stays READ-ONLY
+$ GROK_SESSION_ID=... (grok)                     -> refused, session stays READ-ONLY
+$ KIMI_SESSION_ID=... (kimi)                     -> refused, session stays READ-ONLY
+$ PI_SESSION_ID=... (pi)                         -> refused, session stays READ-ONLY
+$ no token at all                                -> refused, session stays READ-ONLY
+
+   ^ exactly one harness can take the lock, which is what the new sentence in
+     docs/windows.md says. FM_SESSION_TOKEN_VARS is unchanged by this diff:
+$ grep FM_SESSION_TOKEN_VARS= bin/fm-session-lock-lib.sh
+66:FM_SESSION_TOKEN_VARS=(CLAUDE_CODE_SESSION_ID)

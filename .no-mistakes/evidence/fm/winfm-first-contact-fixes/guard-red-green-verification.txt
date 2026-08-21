@@ -1,0 +1,49 @@
+Guard RED/GREEN verification - "a guard that only passes is no evidence".
+
+Each new guard was re-run against a copy of the target tree with ONLY that
+guard's production code removed, to prove the test fails without it.
+
+================================================================================
+GUARD 1 - bootstrap's conpty dependency diagnostic (F3)
+================================================================================
+Removed from /tmp/fm-red/bin/fm-bootstrap.sh (detect_local_tools):
+
+  if [ "$BACKEND_VALID" -eq 1 ] && backend_dep=$(fm_backend_required_dependency "$BACKEND"); then
+    fm_backend_required_dependency_available "$BACKEND" \
+      || missing_tool_diagnostic "$backend_dep"
+  fi
+
+$ cd /tmp/fm-red && bash tests/fm-bootstrap.test.sh
+not ok - a conpty home with no installed backend dependencies must report them missing, got:
+exit=1                                              <-- RED without the fix
+
+$ bash tests/fm-bootstrap.test.sh          # unmodified worktree
+ok - bootstrap: a conpty home is reported healthy only when its backend dependencies actually load
+ok - bootstrap: the conpty dependency check is gated on the resolved backend
+ok - bootstrap: install conpty-backend-deps runs the documented npm install in the backend directory
+ok - bootstrap: install conpty-backend-deps runs npm in a backend directory whose path needs quoting
+ok - bootstrap: a failed backend-dependency install fails loudly instead of reporting success
+ok - bootstrap: install attempts every approved tool and reports failure without abandoning the batch
+ok - bootstrap: a failed stage of a piped install command cannot report success
+ok - bootstrap: a damaged checkout still gets a runnable MISSING: install command for the conpty dependency
+ok - bootstrap: the backend dependency remedy is never ranked above the missing node it needs
+                                                    <-- GREEN with the fix
+
+================================================================================
+GUARD 2 - the Windows lock refusal (F5)
+================================================================================
+Removed from /tmp/fm-red2/bin/fm-lock.sh: the whole
+
+  elif fm_session_ancestry_unavailable; then
+    ... "error: no firstmate session token in this environment, ..." ; exit 1
+
+arm, so the refusal falls back through to the old ancestry message.
+
+$ cd /tmp/fm-red2 && bash tests/fm-session-token.test.sh
+not ok - refusal: a Windows session with no token must be told the token is what is missing
+         (missing: 'no firstmate session token')
+exit=1                                              <-- RED without the fix
+
+$ bash tests/fm-session-token.test.sh      # unmodified worktree
+ok - lock refusal: Windows names the missing session token and its remedy; other platforms still name ancestry
+                                                    <-- GREEN with the fix

@@ -1,0 +1,31 @@
+Targeted test runs (bin/fm-test-run.sh, this worktree).
+
+$ bin/fm-test-run.sh tests/fm-bootstrap.test.sh tests/fm-backend-conpty.test.sh \
+    tests/fm-session-token.test.sh
+FM_TEST_END tests/fm-bootstrap.test.sh      exit=1  duration_ms=20538
+FM_TEST_END tests/fm-backend-conpty.test.sh exit=0  duration_ms=752
+FM_TEST_END tests/fm-session-token.test.sh  exit=0  duration_ms=2665
+FM_TEST_SUMMARY total=3 failed=1
+
+$ bin/fm-test-run.sh tests/fm-session-start.test.sh tests/fm-backend.test.sh
+FM_TEST_END tests/fm-session-start.test.sh  exit=1  duration_ms=4977
+FM_TEST_END tests/fm-backend.test.sh        exit=0  duration_ms=17647
+FM_TEST_SUMMARY total=2 failed=1
+
+Every new case in this change passes. The two failures are pre-existing and
+environmental, and reproduce identically on a clean base checkout (023ccc9
+extracted to /tmp/fm-base):
+
+  tests/fm-bootstrap.test.sh
+    not ok - the unsplit run lost its local diagnostic (missing: 'MISSING: node (install:')
+    base 023ccc9: same single failure, exit 1
+  tests/fm-session-start.test.sh
+    not ok - MISSING diagnostic did not appear at all
+    base 023ccc9: same single failure, exit 1
+
+Both cases hide `node` by deleting it from a fake PATH bin, but BASE_PATH
+(/usr/bin:/bin:...) still carries /usr/bin/node on this box, so `MISSING: node`
+can never be emitted here. Note that the NEW case added by this change,
+"the backend dependency remedy is never ranked above the missing node it needs",
+avoids exactly that trap: it builds a symlink farm of BASE_PATH with node
+genuinely absent (make_base_path_without), and it passes.
