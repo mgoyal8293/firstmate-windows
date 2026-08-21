@@ -73,6 +73,7 @@ A shard that overruns `timeout-minutes` is cancelled and reports no verdict at a
 That is what happened on 2026-08-19, through two mechanisms that are easy to conflate and are not the same.
 
 The lane total was under-counted by stale values on scripts that already had hints.
+Every "real" figure below is measured on run 32159215212 at head `580d64fb`, and every packed figure is what `bin/fm-test-run.sh` held before this change.
 Those 71 scripts were packed at 1147781 ms against a real 1744890 ms, hiding 597 s: `tests/fm-session-start.test.sh` was hinted at 37289 ms and measures 152852 ms, `tests/fm-teardown.test.sh` at 23237 ms against 94337 ms, `tests/fm-sessionstart-nudge.test.sh` at 264 ms against 67672 ms.
 The 45 scripts with no hint were, in aggregate, packed slightly high rather than low: 45 x 20000 = 900000 ms against a real 794804 ms, 105 s of slack.
 So packing believed the lane was 2047781 ms (34.13 min, 8.53 min per shard) against a real 2539694 ms (42.33 min, 10.58 min per shard), and the whole 8.20-minute undercount came from stale values on already-hinted scripts, not from the unhinted set.

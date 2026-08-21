@@ -153,18 +153,18 @@ Counters read from the run log, not inferred from step colour.
 
 On a workstation, from frozen snapshots, across four fork-cost levels between 10ms and 621ms of child start: 150 consecutive runs of the fixed tree with no failures, against 70 consecutive baseline runs with no passes at 415ms and above.
 
-### The residual is closed by the same finding
+### The OpenCode arm crosses at the same point
 
-An earlier round recorded one failure it could not isolate: a wake apparently delivered before any arm had recorded a row, three times in 150 runs.
-The self-describing assertion it added is what resolved it.
-The ambiguous count meant "no delivery was observed", not "a delivery saw an empty log", and it is this same crossing on the OpenCode arm, whose plugin carries the same readiness, retire, backoff and retry-limit defaults and whose driver carried the same literal window.
+One residual signature took a self-describing assertion to isolate: a wake apparently delivered before any arm had recorded a row, three times in 150 runs.
+The ambiguous count meant "no delivery was observed", not "a delivery saw an empty log", and once it said which, it was this same crossing on the OpenCode arm, whose plugin carries the same readiness, retire, backoff and retry-limit defaults and whose driver carried the same literal window.
 It is reproduced deterministically by the counterfactual above and passes 150/150 on the runner alongside the Pi case.
+An assertion that reports which of two states it saw is what makes a derived bound diagnosable; one that reports only a count is not.
 
-### The rule this cost two rounds to learn
+### Every bound coupled to a measurement must be derived from it
 
 When a test bound is derived from a measurement, every bound coupled to it must be derived from the same measurement.
 Fixing one side of a two-sided constraint moves the failure; it does not remove it.
-A derived bound must also print what it derived, which is the only reason this was diagnosable from a CI log instead of a fourth reproduction.
+A derived bound must also print what it derived, which is what makes it diagnosable from a CI log rather than only from another reproduction.
 
 Applied to the whole file rather than only the cases that failed: every window in `tests/fm-pi-watch-extension.test.sh` that waits on a chain of cold arm children now sizes itself as `<chained child starts> * FM_TEST_ARM_START_BUDGET_MS + FM_TEST_OBSERVE_SLACK_MS`, counting every start in its chain rather than assuming the first lands before the window opens.
 The tightest of those was the retry-limit pair, which allowed a literal 250 x 10ms for three chained starts and therefore crossed near 830ms.
@@ -236,8 +236,8 @@ On a 14 ms workstation that narrows the bound from 10000 ms to 6000 ms, which is
 
 ### The weight hint this change knowingly staled
 
-`bin/fm-test-run.sh` packs `tests/fm-pi-watch-extension.test.sh` at 27802 ms.
-That hint now understates by about 29-76 s, and the derivation has two terms, not one.
+`bin/fm-test-run.sh` packs `tests/fm-pi-watch-extension.test.sh` at 27802 ms, a hint measured on the pre-fix tree of run [32159215212](https://github.com/mgoyal8293/firstmate-windows/actions/runs/32159215212) at head `580d64fb`, 2026-08-18.
+Against that tree the hint now understates by about 29-76 s, and the derivation has two terms, not one.
 Both are pure wall clock paid in full on the passing path, and they are additive because they belong to different cases.
 
 The first term is the eight settle sleeps: literals summing to 870 ms were replaced by 8 x `FM_TEST_ARM_START_BUDGET_MS`, which is 8 x 1640 = 13120 ms at the 328 ms start measured on run 32255813826 (delta 12.3 s) and 8 x 4000 = 32000 ms at the 800 ms start in the load curve (delta 31.1 s).
@@ -248,17 +248,18 @@ Those are the hung-successor cases, and as the comment above `fm_recovery_deadli
 There are 12 per run of the file, counted by test function so the count stays auditable when the line numbers move: 3 in `test_pi_hung_successor_falls_back_to_typed_wake` (`tests/fm-pi-watch-extension.test.sh:653`), 1 in `test_pi_unretired_successor_falls_back_without_retry` (`:731`), 1 in `test_pi_late_unretired_close_resumes_supervision` (`:813`) across its 2 loop iterations (`for kind in actionable non-actionable`), and 3 + 1 + 1 x 2 again in the three OpenCode counterparts `test_opencode_hung_successor_falls_back_to_typed_wake` (`:1910`), `test_opencode_unretired_successor_falls_back_without_retry` (`:1990`) and `test_opencode_late_unretired_close_resumes_supervision` (`:2074`).
 Each expiry grew by `ARM_READY_TIMEOUT_MS - 250`, so the term is 12 x 1390 = 16.7 s at the 328 ms start measured on run 32255813826 and 12 x 3750 = 45.0 s at the 800 ms start in the load curve.
 
-Summed, that is about 29 s at the CI-measured start and about 76 s at the load-curve maximum.
+Summed, that is about 29 s at the CI-measured start and about 76 s at the load-curve maximum - both computed from those two measured start costs rather than measured as file durations.
 The *polled* windows - and only those - add nothing to the figure on the passing path, by construction: a polled driver stops the moment its event lands, so its window bounds how long a failure takes to report rather than spending time when the case passes.
 That distinction is exactly why the readiness expiries count and the windows wrapped around them do not.
 
-That is still not a job-cap risk for the lane, but only one of the two terms is additive over the shard measurement, because the two baselines in play are different trees and are not interchangeable.
-The 27802 ms hint came from run 32159215212 at head 580d64fb, a fully pre-fix tree: six literal `ARM_READY_TIMEOUT_MS=250` sites, no `FM_TEST_ARM_START_BUDGET_MS`, six literal `setTimeout(resolve, 100)`. Both terms above are new against it, which is where 29-76 s comes from.
-The 11.67 min worst-shard measurement came from run 32259417831 at head 20b68645, which already carried the derived readiness budgets - no literal 250 ms site was left - but not yet the scaled settle sleeps. The twelve expiries are therefore already inside that 11.67 min, and only the eight settle sleeps are additive over it.
-Sizing that additive term needs the budget the measured run itself derived, and the run's own log records it: this file took 40563 ms there against its 27802 ms hint, and a 12761 ms delta spread over 12 expiries that were 250 ms literals in the hint's tree back-solves to a budget of about 1313 ms, i.e. a child start near 263 ms - consistent with the 328 ms measured on run 32255813826.
-So the measurement already contains 12 x 1313 + 870 = about 16.6 s of budget-driven wall clock, and at the 800 ms load-curve maximum this tree spends 20 x 4000 = 80.0 s on the same twenty sites. The additive term is the difference, about 63.4 s, putting the worst case at 11.67 min + 63.4 s = 12.73 min, about 1.18x under the `timeout-minutes: 15` cap with runner setup and checkout on top.
-Neither of the two figures this passage carried before was that: charging the full 76.1 s (12.94 min) double-counted the expiries already inside the measurement, and charging only `8B - 870` = 31.1 s (12.19 min) assumed the measured run had derived the same 4000 ms budget as the load-curve maximum, which it had not.
-Against that, the two margin figures elsewhere in tree are a different quantity rather than a disagreement: 1.29x (15 / 11.67) is the margin against the raw measured shard, quoted as "about 1.3x" in `docs/fm-test-portable-shards.md` and `.github/workflows/ci.yml`, while 1.18x is the margin once this change's budget growth is charged on top of that same measurement.
+That is still not a job-cap risk for the lane, but the two terms cannot simply be added to the shard measurement the way they are added to the hint, because the two baselines in play are different trees and are not interchangeable.
+That hint's tree, run 32159215212 at head `580d64fb`, was fully pre-fix: six literal `ARM_READY_TIMEOUT_MS=250` sites, no `FM_TEST_ARM_START_BUDGET_MS`, six literal `setTimeout(resolve, 100)`. Both terms above are new in full against it, which is where the 29-76 s comes from.
+The 11.67 min worst-shard measurement came from run [32259417831](https://github.com/mgoyal8293/firstmate-windows/actions/runs/32259417831) at head `20b68645`, shard 3 - the shard this file sits in - which already carried the derived readiness budgets, no literal 250 ms site left, but not yet the scaled settle sleeps. The twelve expiries are therefore already inside that 11.67 min at whatever budget *that* run derived, so what is additive over it is the eight settle sleeps in full plus the growth of those twelve expiries above the budget already charged - not both terms in full.
+Sizing that needs the budget the measured run itself derived, and the run's own log records it: this file took 40563 ms on shard 3 of run 32259417831 against its 27802 ms packed hint, and a 12761 ms delta spread over 12 expiries that were 250 ms literals in the hint's tree back-solves to a budget of about 1313 ms, i.e. a child start near 263 ms - consistent with the 328 ms measured on run 32255813826.
+So the measurement already contains 12 x 1313 + 870 = about 16.6 s of budget-driven wall clock, and at the 800 ms load-curve maximum this tree spends 20 x 4000 = 80.0 s across the same twenty sites. The additive term is the difference, about 63.4 s - the same figure the `file(B) = 23937 + 20B` derivation below gives, 103937 ms at `B = 4000` against the 40563 ms this file actually measured on that shard. That puts the worst case at 11.67 min + 63.4 s = 12.73 min, about 1.18x under the `timeout-minutes: 15` cap with runner setup and checkout on top.
+The 12.73 min is an estimate built on two measurements: the 11.67 min shard and the 40563 ms file duration, both from run 32259417831, shard 3. Its `B = 4000` input is the load curve's worst recorded point rather than anything this shard has run at.
+Against that, the two margin figures elsewhere in tree are a different quantity rather than a disagreement: 1.29x (15 / 11.67) is the margin against the raw shard measured on run 32259417831, quoted as "about 1.3x" in `docs/fm-test-portable-shards.md` and `.github/workflows/ci.yml`, while 1.18x is the margin once this change's budget growth is charged on top of that same measurement.
+A margin is only as good as the baseline it is computed against: name the tree that baseline was measured on, and account for what it already contains before charging anything on top of it.
 No `.github/workflows/ci.yml` change and no timeout change is needed.
 It is recorded here rather than left for the reader to reconstruct because `docs/fm-test-portable-shards.md` argues in the same breath that a stale hint past the cap costs a cancelled job with no verdict.
 
@@ -272,16 +273,16 @@ Added wall clock is `W = 20B - 3870 ms` over the pre-fix hint baseline, for a bu
 Because `B` is five times the worst of five samples, one scheduling outlier is multiplied by five and then paid twenty times, and nothing clamps the result.
 
 **The margin against the job cap is about 2.7x of measured fork cost, and that is a live maintenance concern rather than comfortable headroom.**
-The lane has only 3.33 min of slack under the cap at all, and it has that much only because the weights were refreshed in this change.
+The lane has only 3.33 min of slack under the cap at all - 15 min against the 11.67 min worst shard measured on run 32259417831, shard 3 - and it has that much only because the weights were refreshed in this change.
 
-An earlier revision of this section put the threshold at a 5017 ms child start, 6.3x, from `8B - 870 >= 200 s`. That figure was wrong: it varied `B` while holding the 11.67 min measurement fixed, but that measurement itself contains twelve expiries at the budget *that* run derived, so it froze the expiry term at an old budget and dropped `12 x (B - B_measured)` from the left-hand side.
-Anchoring on the measurement instead, from run 32259417831, shard 3 - the shard this file sits in - at 11.67 min, this file at 40563 ms against its 27802 ms hint, back-solving that run's budget to about 1313 ms:
+Deriving that threshold is where the baseline rule above bites concretely: `B` cannot be varied while the 11.67 min shard measurement is held fixed, because that measurement contains twelve expiries at the budget its own run derived, so treating it as a constant freezes the expiry term at an old budget and silently drops `12 x (B - B_measured)`.
+Accounting for that, on run 32259417831, shard 3 - the shard this file sits in - at 11.67 min, this file at 40563 ms against its 27802 ms packed hint, back-solving that run's budget to about 1313 ms:
 everything in this file other than the twelve expiry budgets and the eight settle sleeps is about 23.9 s (40563 - 12 x 1313 - 870), so `file(B) = 23937 + 20B` and `shard3(B) = (11.67 min - 40563 ms) + 23937 + 20B`.
-Setting that equal to the 900000 ms cap gives `B = 10821 ms`, a measured child start of 2164 ms - about 2.71x the 800 ms worst point of the recorded load curve.
+Setting that equal to the 900000 ms cap gives `B = 10821 ms`, a child start of 2164 ms - about 2.71x the 800 ms worst point of the recorded load curve. The 2164 ms is a derived threshold rather than an observed start cost; the measured inputs behind it are the 11.67 min shard and the 40563 ms file duration from run 32259417831, shard 3.
 The answer is not sensitive to the back-solve: assuming the run derived 1640 ms instead gives 2204 ms and 2.75x, so it is about 2.7x either way.
 
 The budget still stays unbounded, and that is a ruling rather than an oversight.
-The argument is structural and does not depend on whether the margin is 6.3x or 2.7x: a ceiling would make the budget stop tracking child start on precisely the slow machine that needs it most, which reintroduces the exact false-red mechanism this change exists to remove.
+The argument is structural and does not depend on the size of the margin: a ceiling would make the budget stop tracking child start on precisely the slow machine that needs it most, which reintroduces the exact false-red mechanism this change exists to remove.
 The failure a ceiling prevents is a slow job; the failure it causes is a wrong verdict.
 
 ## Why the guard plugins guard their stdin write
