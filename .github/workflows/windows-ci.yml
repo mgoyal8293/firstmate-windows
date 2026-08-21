@@ -1,0 +1,305 @@
+name: Windows CI
+
+# Windows lanes live in their own workflow rather than inside ci.yml.
+# ci.yml is upstream's file and every upstream change touches it; a separate
+# file means this fork's Windows work never conflicts on an upstream sync.
+#
+# Two jobs:
+#   windows-lint      - proves the lint gate itself runs on Windows
+#   windows-behavior  - a measured subset of the behavior suite, sharded
+#
+# Read docs/fm-test-windows-lane.md before changing the shard count or the
+# lane's membership; bin/fm-test-run.sh owns both and refuses a matrix that
+# disagrees with it.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    # GitHub's `bash` on a Windows runner is Git Bash (MSYS), which is the
+    # shell firstmate actually has to work under there. `pwsh` would prove
+    # nothing about this port.
+    shell: bash
+
+jobs:
+  windows-lint:
+    name: Lint (Windows)
+    runs-on: windows-latest
+    # Measured at 5m35s on a warm developer machine for 304 shell files plus
+    # 5 workflows, with fm-lint.sh capped at 2 workers. This is a hang
+    # tripwire with roughly 3x margin, not the expected end of the job.
+    timeout-minutes: 18
+    steps:
+      - name: Check out with LF line endings
+        # LF, deliberately, and configured BEFORE checkout so the working tree is
+        # never written as CRLF in the first place. Git for Windows defaults
+        # core.autocrlf=true, and a CRLF checkout makes ShellCheck reject every
+        # single file with SC1017 ("Literal carriage return") - the lint gate then
+        # fails on line 1 of everything and says nothing about the code. The root
+        # .gitattributes owns this invariant for every clone; the lane pins it
+        # again here so a checkout can never depend on that file alone.
+        run: |
+          set -eu
+          git config --global core.autocrlf false
+          git config --global core.eol lf
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+      - name: Assert the working tree is LF
+        # Fail loudly rather than discovering CRLF as 300 bogus SC1017 errors, or
+        # as a test comparing against a string that silently grew a \r.
+        #
+        # The scan is captured whole and only then judged, and a scan that did
+        # not complete is an error rather than a pass. Feeding the recursive grep
+        # into a pipeline instead lets `-o pipefail` - which GitHub sets for
+        # `shell: bash` - promote grep's SIGPIPE to the pipeline's status, and
+        # the guard then reports "working tree is LF" on a CRLF tree. A tripwire
+        # that goes quiet exactly when it should fire is worse than none.
+        run: |
+          set -eu
+          # The CR pattern travels in a variable and the scan is calibrated
+          # before it is trusted, for a measured reason: spelled inline as
+          # $'\r' inside a command substitution the pattern reaches grep EMPTY
+          # under Git Bash, and a detector whose answer cannot be trusted must
+          # be allowed neither to certify this tree nor to condemn it.
+          cr=$'\r'
+          calibrate_cr_scan() {
+            local dir hits
+            dir=$(mktemp -d)
+            printf 'crlf\r\n' > "$dir/dirty.sh"
+            printf 'lf\n' > "$dir/clean.sh"
+            hits=$(cd "$dir" && grep -rlU "$cr" . --include='*.sh') || hits=
+            rm -rf "$dir"
+            if [ "$hits" != './dirty.sh' ]; then
+              echo "::error::the CR detector is not usable in this shell: on a fixture of one CRLF file and one LF file it reported [$hits] instead of ./dirty.sh, so its verdict on this working tree would mean nothing"
+              exit 1
+            fi
+          }
+          calibrate_cr_scan
+          scan=0
+          crlf=$(grep -rlU "$cr" bin tests --include='*.sh') || scan=$?
+          if [ "$scan" -gt 1 ]; then
+            echo "::error::the CRLF scan did not complete (grep exit $scan); refusing to report the tree as LF"
+            exit 1
+          fi
+          if [ -n "$crlf" ]; then
+            head -5 <<<"$crlf"
+            echo "::error::working tree contains CRLF shell files; the LF checkout config did not take"
+            exit 1
+          fi
+          echo "working tree is LF"
+      - name: Install pinned ShellCheck
+        run: |
+          set -eu
+          bin/fm-install-shellcheck.sh "$RUNNER_TEMP/bin"
+          echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
+      - name: Install pinned actionlint
+        run: |
+          set -eu
+          bin/fm-install-actionlint.sh "$RUNNER_TEMP/bin"
+          echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
+      # Same single owner of the lint definition as the Linux lane. Do not
+      # re-spell the checks here.
+      - run: bin/fm-lint.sh
+
+  windows-behavior:
+    name: Behavior Windows ${{ matrix.shard }}
+    runs-on: windows-latest
+    # Measured: the whole lane is 61.9 min of serial Git Bash work over 39
+    # scripts, and the longest single script
+    # (tests/fm-decision-hold-lifecycle.test.sh, 860s) is the floor no shard
+    # count can lower - which is why 4 shards is the useful maximum here rather
+    # than 8 or 16. Balanced shards land near 15.5 min. This cap is a hang
+    # tripwire with roughly 2.6x margin, not the expected end of the lane, and
+    # GitHub's Windows runners are slower than the machine these numbers came
+    # from. See docs/fm-test-windows-lane.md.
+    timeout-minutes: 40
+    strategy:
+      # Every shard reports so one failure never hides another shard's result.
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3, 4]
+    steps:
+      - name: Check out with LF line endings
+        # LF, deliberately, and configured BEFORE checkout so the working tree is
+        # never written as CRLF in the first place. Git for Windows defaults
+        # core.autocrlf=true, and a CRLF checkout makes ShellCheck reject every
+        # single file with SC1017 ("Literal carriage return") - the lint gate then
+        # fails on line 1 of everything and says nothing about the code. The root
+        # .gitattributes owns this invariant for every clone; the lane pins it
+        # again here so a checkout can never depend on that file alone.
+        run: |
+          set -eu
+          git config --global core.autocrlf false
+          git config --global core.eol lf
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+      - name: Assert the working tree is LF
+        # Fail loudly rather than discovering CRLF as 300 bogus SC1017 errors, or
+        # as a test comparing against a string that silently grew a \r.
+        #
+        # The scan is captured whole and only then judged, and a scan that did
+        # not complete is an error rather than a pass. Feeding the recursive grep
+        # into a pipeline instead lets `-o pipefail` - which GitHub sets for
+        # `shell: bash` - promote grep's SIGPIPE to the pipeline's status, and
+        # the guard then reports "working tree is LF" on a CRLF tree. A tripwire
+        # that goes quiet exactly when it should fire is worse than none.
+        run: |
+          set -eu
+          # The CR pattern travels in a variable and the scan is calibrated
+          # before it is trusted, for a measured reason: spelled inline as
+          # $'\r' inside a command substitution the pattern reaches grep EMPTY
+          # under Git Bash, and a detector whose answer cannot be trusted must
+          # be allowed neither to certify this tree nor to condemn it.
+          cr=$'\r'
+          calibrate_cr_scan() {
+            local dir hits
+            dir=$(mktemp -d)
+            printf 'crlf\r\n' > "$dir/dirty.sh"
+            printf 'lf\n' > "$dir/clean.sh"
+            hits=$(cd "$dir" && grep -rlU "$cr" . --include='*.sh') || hits=
+            rm -rf "$dir"
+            if [ "$hits" != './dirty.sh' ]; then
+              echo "::error::the CR detector is not usable in this shell: on a fixture of one CRLF file and one LF file it reported [$hits] instead of ./dirty.sh, so its verdict on this working tree would mean nothing"
+              exit 1
+            fi
+          }
+          calibrate_cr_scan
+          scan=0
+          crlf=$(grep -rlU "$cr" bin tests --include='*.sh') || scan=$?
+          if [ "$scan" -gt 1 ]; then
+            echo "::error::the CRLF scan did not complete (grep exit $scan); refusing to report the tree as LF"
+            exit 1
+          fi
+          if [ -n "$crlf" ]; then
+            head -5 <<<"$crlf"
+            echo "::error::working tree contains CRLF shell files; the LF checkout config did not take"
+            exit 1
+          fi
+          echo "working tree is LF"
+      - name: Install tasks-axi for backlog-handoff delegation
+        run: |
+          set -eu
+          npm install -g tasks-axi
+          tasks-axi --version
+      - name: Resolve the test harness PATH
+        # 16 test files run the code under test with BASE_PATH as its only PATH,
+        # defaulting to /usr/bin:/bin:/usr/sbin:/sbin. On MINGW64 that list holds
+        # almost none of the toolchain - git is /mingw64/bin/git, node and gh live
+        # under /c - so the code under test sees a machine with no git and the
+        # assertions fail for the harness's reasons rather than the code's.
+        #
+        # Derived from `command -v` rather than written as literal paths, so a
+        # runner-image move (a new Node version directory, a relocated gh) cannot
+        # silently empty the PATH again.
+        run: |
+          set -eu
+          # The seed is overridable so the assertions below can be exercised
+          # against a controlled toolchain; CI never sets it and gets the literal.
+          base="${FM_HARNESS_PATH_SEED:-/mingw64/bin:/usr/bin:/bin:/usr/local/bin}"
+          # PATH is colon-separated, so a Windows-form directory splits at its
+          # drive-letter colon: "C:\npm\prefix" becomes a bare relative entry
+          # "C" plus a "\npm\prefix" that MSYS reads as root-relative and that
+          # does not exist. `npm prefix -g` prints that form because npm resolves
+          # through native node. Convert at the single chokepoint every candidate
+          # passes through, so a future source cannot reintroduce it. cygpath is
+          # probed rather than assumed; where it is absent the value is unchanged,
+          # which keeps this identical on a non-Windows host.
+          cygpath_bin=$(command -v cygpath 2>/dev/null || true)
+          posix_dir() {
+            [ -n "$cygpath_bin" ] || { printf '%s\n' "$1"; return 0; }
+            "$cygpath_bin" -u "$1" 2>/dev/null || printf '%s\n' "$1"
+          }
+          add_dir() {
+            dir=$(posix_dir "$1")
+            case ":$base:" in
+              *":$dir:"*) ;;
+              *) base="$base:$dir" ;;
+            esac
+          }
+          # Advisory on purpose, and NOT the same question as the reachability
+          # check below. This asks whether a candidate exists in the ambient PATH
+          # while the harness PATH is being built, over a wider list than the
+          # suite asserts on - curl, openssl, tar and npx are here so their
+          # directories are picked up when present, not because a lane member
+          # needs them. The reachability check is the single authority on whether
+          # the PATH that was actually built is usable.
+          for tool in git node npm npx gh jq perl curl openssl tar; do
+            resolved=$(command -v "$tool" 2>/dev/null) || {
+              echo "note: $tool not on PATH; not added to the harness PATH"
+              continue
+            }
+            add_dir "$(dirname "$resolved")"
+          done
+          # npm's global bin is where `npm install -g` puts tasks-axi, and it is
+          # not the directory npm itself lives in.
+          npm_bin=$(npm prefix -g 2>/dev/null) || npm_bin=
+          [ -z "$npm_bin" ] || add_dir "$npm_bin"
+          echo "harness PATH: $base"
+          entries=$(tr ':' '\n' <<<"$base")
+          echo "--- harness PATH entries, one per line ---"
+          sed 's/^/  /' <<<"$entries"
+          # A surviving Windows-form entry shows up here as a single-letter
+          # directory or one holding a backslash. Fail rather than run the lane
+          # with a PATH that silently lost the entry it was built to add. Matched
+          # against a captured list rather than through a pipeline, because
+          # `-o pipefail` would let a reader closing the pipe early turn a match
+          # into a pass.
+          winform=$(grep -E '^[A-Za-z]$|\\' <<<"$entries") || winform=
+          if [ -n "$winform" ]; then
+            echo "::error::harness PATH holds a Windows-form entry; cygpath conversion did not take: $winform"
+            exit 1
+          fi
+          # The whole table prints before any verdict, so one run shows the
+          # complete picture of a runner-image move rather than stopping at the
+          # first casualty. A tool the suite asserts on that the built PATH
+          # cannot reach means FM_TEST_BASE_PATH would misdescribe the machine,
+          # and the lane would then fail for the harness's reasons rather than
+          # the code's - so this is fatal, exactly as the Windows-form check is.
+          echo "--- reachability of the tools the suite asserts on ---"
+          unreachable=
+          for tool in git node gh jq perl; do
+            found=$(PATH="$base" command -v "$tool" 2>/dev/null) || {
+              found=UNREACHABLE
+              unreachable="${unreachable:+$unreachable }$tool"
+            }
+            printf '%-8s %s\n' "$tool" "$found"
+          done
+          if [ -n "$unreachable" ]; then
+            echo "::error::harness PATH cannot reach: $unreachable - the suite asserts on these tools, so FM_TEST_BASE_PATH would misdescribe the machine. PATH was: $base"
+            exit 1
+          fi
+          # Published only after both verdicts, so a PATH that failed validation
+          # is never handed to the lane.
+          echo "FM_TEST_BASE_PATH=$base" >> "$GITHUB_ENV"
+      - name: Run Windows shard ${{ matrix.shard }}
+        env:
+          # job-total rather than a literal, so shrinking or growing the matrix
+          # without matching bin/fm-test-run.sh is refused instead of quietly
+          # leaving part of the lane unrun.
+          FM_WINDOWS_LANE: windows-${{ matrix.shard }}of${{ strategy.job-total }}
+          FM_WINDOWS_SHARD: ${{ matrix.shard }}
+          # ln -s resolves to a recursive COPY under the default MSYS mode, which
+          # no lock in the fleet can validate. nativestrict makes a real link and
+          # fails rather than falling back to a copy.
+          MSYS: winsymlinks:nativestrict
+        run: |
+          set -eu
+          mkdir -p "$RUNNER_TEMP/fm-test"
+          bin/fm-test-run.sh --lane "$FM_WINDOWS_LANE" \
+            --json "$RUNNER_TEMP/fm-test/fm-test-timing-windows-${FM_WINDOWS_SHARD}.json"
+      - name: Upload Windows shard ${{ matrix.shard }} timing artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fm-test-timing-windows-${{ matrix.shard }}
+          path: ${{ runner.temp }}/fm-test/fm-test-timing-windows-${{ matrix.shard }}.json
+          if-no-files-found: warn

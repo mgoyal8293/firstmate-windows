@@ -29,6 +29,8 @@ SHELLCHECK_SHA_LINUX_X86_64=8c3be12b05d5c177a04c29e3c78ce89ac86f1595681cab149b65
 SHELLCHECK_SHA_LINUX_AARCH64=12b331c1d2db6b9eb13cfca64306b1b157a86eb69db83023e261eaa7e7c14588
 SHELLCHECK_SHA_DARWIN_X86_64=3c89db4edcab7cf1c27bff178882e0f6f27f7afdf54e859fa041fca10febe4c6
 SHELLCHECK_SHA_DARWIN_AARCH64=56affdd8de5527894dca6dc3d7e0a99a873b0f004d7aabc30ae407d3f48b0a79
+# The Windows asset carries no platform token in its name and is a flat .zip.
+SHELLCHECK_SHA_WINDOWS_X86_64=8a4e35ab0b331c85d73567b12f2a444df187f483e5079ceffa6bda1faa2e740e
 
 # fm_install_stub_uname <fakebin>: uname -s / uname -m from FM_TEST_UNAME_S/M.
 fm_install_stub_uname() {
@@ -133,6 +135,35 @@ done
 exit 2
 SH
   chmod +x "$fakebin/tar"
+}
+
+# The Windows asset is a flat zip holding shellcheck.exe rather than a .tar.xz
+# holding a shellcheck-v<version>/ directory, so the Windows arm extracts with
+# unzip. Mirrors that layout at the -d destination.
+fm_install_stub_unzip_shellcheck() {
+  local fakebin=$1
+  cat > "$fakebin/unzip" <<'SH'
+#!/usr/bin/env bash
+dest=.
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    -d)
+      dest=$2
+      shift 2
+      ;;
+    *)
+      shift
+      ;;
+  esac
+done
+mkdir -p "$dest"
+cat > "$dest/shellcheck.exe" <<'EOF'
+#!/usr/bin/env bash
+printf 'ShellCheck - shell script analysis tool\nversion: 0.11.0\n'
+EOF
+chmod +x "$dest/shellcheck.exe"
+SH
+  chmod +x "$fakebin/unzip"
 }
 
 fm_install_stub_sleep() {
@@ -390,7 +421,7 @@ test_installer_retries_transient_download_failure() {
 }
 
 test_installer_selects_platform_archive_url_and_checksum() {
-  local tmp fakebin destination out url_log uname_s uname_m archive sha
+  local tmp fakebin destination out url_log uname_s uname_m archive sha binary
   tmp=$(fm_test_tmproot fm-shellcheck-platform)
   fakebin=$(fm_fakebin "$tmp")
   destination="$tmp/bin"
@@ -400,9 +431,10 @@ test_installer_selects_platform_archive_url_and_checksum() {
   fm_install_stub_curl "$fakebin"
   fm_install_stub_hasher "$fakebin" sha256sum
   fm_install_stub_tar_shellcheck "$fakebin"
+  fm_install_stub_unzip_shellcheck "$fakebin"
   fm_install_stub_sleep "$fakebin"
 
-  while IFS=$'\t' read -r uname_s uname_m archive sha; do
+  while IFS=$'\t' read -r uname_s uname_m archive sha binary; do
     [ -n "$uname_s" ] || continue
     rm -rf "$destination"
     : > "$url_log"
@@ -415,16 +447,21 @@ test_installer_selects_platform_archive_url_and_checksum() {
     assert_contains "$(cat "$url_log")" \
       "https://github.com/koalaman/shellcheck/releases/download/v${REQUIRED}/${archive}" \
       "installer used the wrong URL for ${uname_s}/${uname_m}"
-    [ -x "$destination/shellcheck" ] || fail "installer did not install ShellCheck for ${uname_s}/${uname_m}"
+    [ -x "$destination/$binary" ] \
+      || fail "installer did not install $binary for ${uname_s}/${uname_m}"
   done <<EOF
-Linux	x86_64	shellcheck-v${REQUIRED}.linux.x86_64.tar.xz	$SHELLCHECK_SHA_LINUX_X86_64
-Linux	amd64	shellcheck-v${REQUIRED}.linux.x86_64.tar.xz	$SHELLCHECK_SHA_LINUX_X86_64
-Linux	aarch64	shellcheck-v${REQUIRED}.linux.aarch64.tar.xz	$SHELLCHECK_SHA_LINUX_AARCH64
-Linux	arm64	shellcheck-v${REQUIRED}.linux.aarch64.tar.xz	$SHELLCHECK_SHA_LINUX_AARCH64
-Darwin	x86_64	shellcheck-v${REQUIRED}.darwin.x86_64.tar.xz	$SHELLCHECK_SHA_DARWIN_X86_64
-Darwin	amd64	shellcheck-v${REQUIRED}.darwin.x86_64.tar.xz	$SHELLCHECK_SHA_DARWIN_X86_64
-Darwin	arm64	shellcheck-v${REQUIRED}.darwin.aarch64.tar.xz	$SHELLCHECK_SHA_DARWIN_AARCH64
-Darwin	aarch64	shellcheck-v${REQUIRED}.darwin.aarch64.tar.xz	$SHELLCHECK_SHA_DARWIN_AARCH64
+Linux	x86_64	shellcheck-v${REQUIRED}.linux.x86_64.tar.xz	$SHELLCHECK_SHA_LINUX_X86_64	shellcheck
+Linux	amd64	shellcheck-v${REQUIRED}.linux.x86_64.tar.xz	$SHELLCHECK_SHA_LINUX_X86_64	shellcheck
+Linux	aarch64	shellcheck-v${REQUIRED}.linux.aarch64.tar.xz	$SHELLCHECK_SHA_LINUX_AARCH64	shellcheck
+Linux	arm64	shellcheck-v${REQUIRED}.linux.aarch64.tar.xz	$SHELLCHECK_SHA_LINUX_AARCH64	shellcheck
+Darwin	x86_64	shellcheck-v${REQUIRED}.darwin.x86_64.tar.xz	$SHELLCHECK_SHA_DARWIN_X86_64	shellcheck
+Darwin	amd64	shellcheck-v${REQUIRED}.darwin.x86_64.tar.xz	$SHELLCHECK_SHA_DARWIN_X86_64	shellcheck
+Darwin	arm64	shellcheck-v${REQUIRED}.darwin.aarch64.tar.xz	$SHELLCHECK_SHA_DARWIN_AARCH64	shellcheck
+Darwin	aarch64	shellcheck-v${REQUIRED}.darwin.aarch64.tar.xz	$SHELLCHECK_SHA_DARWIN_AARCH64	shellcheck
+MINGW64_NT-10.0-26200	x86_64	shellcheck-v${REQUIRED}.zip	$SHELLCHECK_SHA_WINDOWS_X86_64	shellcheck.exe
+MINGW64_NT-10.0-26200	amd64	shellcheck-v${REQUIRED}.zip	$SHELLCHECK_SHA_WINDOWS_X86_64	shellcheck.exe
+MSYS_NT-10.0-26200	x86_64	shellcheck-v${REQUIRED}.zip	$SHELLCHECK_SHA_WINDOWS_X86_64	shellcheck.exe
+CYGWIN_NT-10.0-26200	x86_64	shellcheck-v${REQUIRED}.zip	$SHELLCHECK_SHA_WINDOWS_X86_64	shellcheck.exe
 EOF
   pass "ShellCheck installer selects the official archive, URL, and checksum per OS/arch"
 }
@@ -453,6 +490,56 @@ test_installer_rejects_wrong_checksum() {
     "mismatch did not name the pinned linux/x86_64 checksum"
   [ ! -e "$destination/shellcheck" ] || fail "installer installed ShellCheck after a checksum mismatch"
   pass "ShellCheck installer rejects a wrong checksum"
+}
+
+# The installer digests its download under $RUNNER_TEMP, and on a Windows runner
+# that is a Windows-form path (D:\a\_temp). GNU coreutils escapes its checksum
+# LINE whenever the FILENAME holds a backslash: the line is prefixed with a
+# literal `\`, the first field reads `\<hex>`, and a byte-perfect download is then
+# rejected as "checksum mismatch ... got \8a4e35...". That is what took the
+# Windows lint gate down at its first step.
+#
+# Reproduced on ANY host, because the trigger is the filename rather than the
+# platform: point RUNNER_TEMP at a directory whose name really holds a backslash
+# and let the REAL hasher run. The invariant is that identical bytes digest
+# identically no matter how the work directory is spelled - asserted by comparing
+# the two runs against each other rather than against a hardcoded digest, so the
+# case cannot rot when a pin is bumped.
+test_installer_digest_is_unaffected_by_a_backslash_in_its_work_directory() {
+  local tmp fakebin destination plain_out win_out plain_digest win_digest winlike
+  tmp=$(fm_test_tmproot fm-shellcheck-backslash)
+  fakebin=$(fm_fakebin "$tmp")
+  destination="$tmp/bin"
+  # Deliberately no hasher stub: the real sha256sum/shasum escaping is under test.
+  fm_install_stub_uname "$fakebin"
+  fm_install_stub_curl "$fakebin"
+  fm_install_stub_tar_shellcheck "$fakebin"
+  fm_install_stub_sleep "$fakebin"
+
+  # The stub download is not the pinned archive, so both runs must refuse to
+  # install. The digest each one REPORTS is the observable under test.
+  mkdir -p "$tmp/plain"
+  plain_out=$(RUNNER_TEMP="$tmp/plain" FM_TEST_UNAME_S=Linux FM_TEST_UNAME_M=x86_64 \
+    PATH="$fakebin:$PATH" "$INSTALLER" "$destination" 2>&1) \
+    && fail "installer installed an archive that does not match its pin"$'\n'"$plain_out"
+  winlike="$tmp/win\\temp"
+  mkdir -p "$winlike"
+  win_out=$(RUNNER_TEMP="$winlike" FM_TEST_UNAME_S=Linux FM_TEST_UNAME_M=x86_64 \
+    PATH="$fakebin:$PATH" "$INSTALLER" "$destination" 2>&1) \
+    && fail "installer installed an archive that does not match its pin"$'\n'"$win_out"
+
+  plain_digest=${plain_out##*got }
+  plain_digest=${plain_digest%%)*}
+  win_digest=${win_out##*got }
+  win_digest=${win_digest%%)*}
+  [ -n "$win_digest" ] || fail "installer did not report the digest it computed"$'\n'"$win_out"
+  [ "$win_digest" = "$plain_digest" ] \
+    || fail "a backslash in the work directory changed the computed digest: '$win_digest' vs '$plain_digest'"
+  case "$win_digest" in
+    *[!0-9a-f]*) fail "reported digest is not bare hex: '$win_digest'" ;;
+  esac
+  [ ! -e "$destination/shellcheck" ] || fail "installer installed ShellCheck after a checksum mismatch"
+  pass "ShellCheck installer digests its download by content, not by a path a backslash can escape"
 }
 
 test_installer_falls_back_to_shasum() {
@@ -863,6 +950,7 @@ test_pins_an_explicit_version
 test_installer_retries_transient_download_failure
 test_installer_selects_platform_archive_url_and_checksum
 test_installer_rejects_wrong_checksum
+test_installer_digest_is_unaffected_by_a_backslash_in_its_work_directory
 test_installer_falls_back_to_shasum
 test_installer_prefers_sha256sum_over_shasum
 test_installer_rejects_unsupported_platform

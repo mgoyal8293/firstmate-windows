@@ -21,6 +21,11 @@
 #   5. fm_pid_identity is served from this same file, because a stored process
 #      identity is another `ps -o` read: a second copy elsewhere in bin/ answered
 #      nothing on MSYS while this one answers from /proc.
+#   6. The root .gitattributes pins an LF working tree for every clone, because
+#      Git for Windows defaults core.autocrlf=true and a CRLF checkout makes
+#      ShellCheck reject every shell file with SC1017 - the lint gate then says
+#      nothing about the code, and assertions compare against strings that grew
+#      a \r.
 #
 # The remaining blocker - the private-file mode assertion - is a security
 # boundary and has its own file: tests/fm-pr-private-file-mode.test.sh.
@@ -216,7 +221,204 @@ test_proc_cwd_scan_reports_scan_failure_distinctly() {
 }
 
 
+# MSYS reports /proc/<pid>/cwd in the mount table's OWN canonical spelling of the
+# process's Windows cwd, which need not be the spelling the caller holds. Git for
+# Windows mounts /tmp with `usertemp`, i.e. wherever %TEMP% points, so when %TEMP%
+# carries a short (8.3) component - how GitHub's Windows runners spell it - a
+# fixture created as /tmp/x reads back from /proc as
+# /c/Users/<user>/AppData/Local/Temp/<long-name>/x. Measured on Git-for-Windows
+# MINGW64: the strict prefix compare then finds NOBODY under a directory a live
+# process is sitting in, and teardown reads that as a proven-empty scan.
+#
+# Driven through a fake /proc plus a stub resolver so the contract is pinned on a
+# POSIX host too, exactly as the lock-spelling case below is.
+test_proc_cwd_scan_matches_a_mount_aliased_cwd_spelling() {
+  local dir proc out
+  dir=$(fm_test_tmproot fm-proc-cwd-alias) || fail "cwd-alias: could not create a fixture root"
+  # `mnt` is the spelling the caller passes; `long` is the spelling /proc answers
+  # in. They are the same location as far as the stub mount table is concerned.
+  mkdir -p "$dir/mnt/wt/sub" "$dir/long/wt/sub" "$dir/stub" "$dir/elsewhere"
+  proc="$dir/proc"
+  # 4242 sits under the aliased spelling; 4243 sits somewhere else entirely and
+  # must never be claimed by the widening.
+  mkdir -p "$proc/4242" "$proc/4243"
+  # A missing target is a silent dangling link on POSIX but a hard `ln -s`
+  # failure under MSYS winsymlinks:nativestrict, so it is asserted on every host.
+  [ -e "$dir/long/wt/sub" ] \
+    || fail "cwd-alias: link target does not exist: $dir/long/wt/sub"
+  ln -s "$dir/long/wt/sub" "$proc/4242/cwd" || fail "cwd-alias: could not stage the aliased cwd link"
+  [ -e "$dir/elsewhere" ] \
+    || fail "cwd-alias: link target does not exist: $dir/elsewhere"
+  ln -s "$dir/elsewhere" "$proc/4243/cwd" || fail "cwd-alias: could not stage the unrelated cwd link"
+
+  cat > "$dir/stub/cygpath" <<STUB
+#!/usr/bin/env bash
+# Stand-in for the MSYS mount table: \$dir/mnt and \$dir/long are one Windows
+# path, and -u answers in the spelling /proc uses (the \`long\` one).
+p=\${!#}
+case "\$1" in
+  -u)
+    case "\$p" in
+      X:/win/*) printf '%s/%s\n' '$dir/long' "\${p#X:/win/}" ;;
+      *) printf '%s\n' "\$p" ;;
+    esac
+    ;;
+  *)
+    case "\$p" in
+      '$dir/mnt'/*) printf 'X:/win/%s\n' "\${p#$dir/mnt/}" ;;
+      '$dir/long'/*) printf 'X:/win/%s\n' "\${p#$dir/long/}" ;;
+      *) printf '%s\n' "\$p" ;;
+    esac
+    ;;
+esac
+STUB
+  chmod +x "$dir/stub/cygpath"
+
+  # shellcheck disable=SC2034 # Read by bin/fm-proc-lib.sh fm_proc_root.
+  FM_PROC_ROOT_OVERRIDE=$proc
+  out=$(with_path "$dir/stub:$PATH" fm_proc_pids_with_cwd_under "$dir/mnt/wt") \
+    || fail "cwd-alias: the scan must still report success when a resolver is present"
+  case $'\n'"$out"$'\n' in
+    *$'\n4242\n'*) : ;;
+    *) fail "cwd-alias: a process whose /proc cwd uses the aliased spelling must be found, got '$out'" ;;
+  esac
+  case $'\n'"$out"$'\n' in
+    *$'\n4243\n'*) fail "cwd-alias: SECURITY - a process outside the directory must never be claimed, got '$out'" ;;
+  esac
+
+  # The widening is capability-gated, never assumed: a resolver that cannot
+  # answer leaves the strict compare as the only verdict, so the aliased pid is
+  # reported as not-found rather than guessed at.
+  cat > "$dir/stub/cygpath" <<'STUB'
+#!/usr/bin/env bash
+exit 1
+STUB
+  chmod +x "$dir/stub/cygpath"
+  out=$(with_path "$dir/stub:$PATH" fm_proc_pids_with_cwd_under "$dir/mnt/wt") \
+    || fail "cwd-alias: an unusable resolver must not turn a completed scan into a failed one"
+  [ -z "$out" ] \
+    || fail "cwd-alias: with no working resolver the strict compare must be the only verdict, got '$out'"
+
+  # And the caller's own spelling never needs the resolver at all.
+  out=$(with_path "$dir/stub:$PATH" fm_proc_pids_with_cwd_under "$dir/long/wt") \
+    || fail "cwd-alias: scanning the /proc spelling itself must succeed"
+  case $'\n'"$out"$'\n' in
+    *$'\n4242\n'*) : ;;
+    *) fail "cwd-alias: the strict compare must still match the spelling /proc reports, got '$out'" ;;
+  esac
+  unset FM_PROC_ROOT_OVERRIDE
+  pass "fm_proc_pids_with_cwd_under: a mount-aliased /proc cwd spelling still matches the caller's directory"
+}
+
+
+# The same mount aliasing reaches /proc/<pid>/fd/N, and for a lock FILE the fd
+# links are the ONLY branch that can ever match - no process holds a regular file
+# as its cwd. fm_lock_proc_holder reads an empty result as "provably no holder",
+# which is what lets fm_lock_is_provably_stale delete a lock a live git process
+# still owns, so the fd compare has to widen exactly as the cwd compare does.
+test_proc_holder_scan_matches_a_mount_aliased_fd_target() {
+  local dir proc out
+  dir=$(fm_test_tmproot fm-proc-fd-alias) || fail "fd-alias: could not create a fixture root"
+  mkdir -p "$dir/mnt/wt" "$dir/long/wt" "$dir/stub"
+  : > "$dir/long/wt/index.lock" || fail "fd-alias: could not stage the lock file"
+  : > "$dir/long/wt/other.lock" || fail "fd-alias: could not stage the unrelated file"
+  proc="$dir/proc"
+  # 4242 holds the lock open under the aliased spelling; 4243 holds a different
+  # file and must never be claimed by the widening.
+  mkdir -p "$proc/4242/fd" "$proc/4243/fd"
+  ln -s "$dir/long/wt/index.lock" "$proc/4242/fd/3" \
+    || fail "fd-alias: could not stage the aliased fd link"
+  ln -s "$dir/long/wt/other.lock" "$proc/4243/fd/3" \
+    || fail "fd-alias: could not stage the unrelated fd link"
+
+  cat > "$dir/stub/cygpath" <<STUB
+#!/usr/bin/env bash
+# Stand-in for the MSYS mount table, same shape as the cwd case above.
+p=\${!#}
+case "\$1" in
+  -u)
+    case "\$p" in
+      X:/win/*) printf '%s/%s\n' '$dir/long' "\${p#X:/win/}" ;;
+      *) printf '%s\n' "\$p" ;;
+    esac
+    ;;
+  *)
+    case "\$p" in
+      '$dir/mnt'/*) printf 'X:/win/%s\n' "\${p#$dir/mnt/}" ;;
+      '$dir/long'/*) printf 'X:/win/%s\n' "\${p#$dir/long/}" ;;
+      *) printf '%s\n' "\$p" ;;
+    esac
+    ;;
+esac
+STUB
+  chmod +x "$dir/stub/cygpath"
+
+  # shellcheck disable=SC2034 # Read by bin/fm-proc-lib.sh fm_proc_root.
+  FM_PROC_ROOT_OVERRIDE=$proc
+  out=$(with_path "$dir/stub:$PATH" fm_proc_pids_holding_path "$dir/mnt/wt/index.lock") \
+    || fail "fd-alias: the scan must still report success when a resolver is present"
+  case $'\n'"$out"$'\n' in
+    *$'\n4242\n'*) : ;;
+    *) fail "fd-alias: a process whose /proc fd link uses the aliased spelling must be found, got '$out'" ;;
+  esac
+  case $'\n'"$out"$'\n' in
+    *$'\n4243\n'*) fail "fd-alias: SECURITY - a process holding a different file must never be claimed, got '$out'" ;;
+  esac
+
+  # Capability-gated exactly as the cwd widening is: no working resolver leaves
+  # the strict compare as the only verdict.
+  cat > "$dir/stub/cygpath" <<'STUB'
+#!/usr/bin/env bash
+exit 1
+STUB
+  chmod +x "$dir/stub/cygpath"
+  out=$(with_path "$dir/stub:$PATH" fm_proc_pids_holding_path "$dir/mnt/wt/index.lock") \
+    || fail "fd-alias: an unusable resolver must not turn a completed scan into a failed one"
+  [ -z "$out" ] \
+    || fail "fd-alias: with no working resolver the strict compare must be the only verdict, got '$out'"
+
+  # And the spelling /proc itself reports never needs the resolver.
+  out=$(with_path "$dir/stub:$PATH" fm_proc_pids_holding_path "$dir/long/wt/index.lock") \
+    || fail "fd-alias: scanning the /proc spelling itself must succeed"
+  case $'\n'"$out"$'\n' in
+    *$'\n4242\n'*) : ;;
+    *) fail "fd-alias: the strict compare must still match the spelling /proc reports, got '$out'" ;;
+  esac
+  case $'\n'"$out"$'\n' in
+    *$'\n4243\n'*) fail "fd-alias: the strict compare must not claim an unrelated holder, got '$out'" ;;
+  esac
+  unset FM_PROC_ROOT_OVERRIDE
+  pass "fm_proc_pids_holding_path: a mount-aliased /proc fd target still matches the caller's path"
+}
+
+
 # --- 4. symlink target spelling ---------------------------------------------
+
+# Stage real tool $2 inside directory $1 so it still runs when $1 is the ENTIRE
+# PATH, which is how the cases below prove what happens with no resolver present.
+#
+# A symlink cannot do that on Windows: an MSYS binary finds msys-2.0.dll through
+# PATH, Windows' last-resort DLL search location, so a link reached through a PATH
+# that carries only the link's own directory exits 127 before running and the case
+# reads as a failure of the code under test rather than of its fixture (measured
+# on Git-for-Windows MINGW64: `PATH=$dir readlink` -> 127). An exec wrapper keeps
+# the real binary running from its own directory, where its DLLs sit, so this
+# never has to know which DLLs a tool needs. Same reasoning, and the same shape,
+# as make_no_timeout_toolbin in tests/fm-crew-state.test.sh.
+stage_tool_for_restricted_path() {  # <dir> <tool>
+  local dir=$1 tool=$2 real shell
+  real=$(command -v "$tool") || return 1
+  case "$(uname -s)" in
+    MINGW*|MSYS*|CYGWIN*)
+      shell=$(command -v bash) || return 1
+      printf '#!%s\nexec "%s" "$@"\n' "$shell" "$real" > "$dir/$tool" || return 1
+      chmod +x "$dir/$tool" || return 1
+      ;;
+    *)
+      ln -s "$real" "$dir/$tool" || return 1
+      ;;
+  esac
+}
 
 # Run a predicate with PATH replaced, then put PATH back. Replacing PATH is the
 # case under test - these functions decide what to do by probing for a resolver
@@ -296,7 +498,8 @@ test_lock_points_to_owner_still_accepts_an_exact_readlink_answer() {
   ln -s "$dir/owner" "$dir/lock" || fail "fixture: could not create the owner link"
   # A PATH carrying readlink and deliberately no cygpath, so the case holds on a
   # Windows host running this suite too.
-  ln -s "$(command -v readlink)" "$dir/nocyg/readlink" || fail "fixture: could not stage readlink"
+  stage_tool_for_restricted_path "$dir/nocyg" readlink \
+    || fail "fixture: could not stage readlink"
   with_path "$dir/nocyg" fm_lock_points_to_owner "$dir/lock" "$dir/owner" \
     || fail "points-to-owner: an exact readlink match must be accepted without any resolver"
   with_path "$dir/nocyg" fm_lock_points_to_owner "$dir/lock" "$dir/somewhere-else" \
@@ -363,6 +566,97 @@ SH
   pass "fm_pid_identity: bin/fm-proc-lib.sh answers from /proc where ps rejects -o, and detects pid reuse"
 }
 
+# --- 6. line endings ---------------------------------------------------------
+
+# The invariant belongs to the REPO, not to the two Windows CI jobs: a Windows
+# contributor who clones this published repo with Git-for-Windows defaults and
+# runs bin/fm-lint.sh must not meet SC1017 on all 304 files with no hint why.
+#
+# Driven through git itself, with the SHIPPED .gitattributes copied into the
+# fixture, so this pins that file's meaning rather than re-spelling its rules.
+# The no-attributes arm is the control: it proves the fixture really exercises
+# core.autocrlf's conversion, so a passing result cannot be vacuous.
+test_gitattributes_pins_an_lf_working_tree_for_every_clone() {
+  local dir variant src clone attrs
+  assert_present "$ROOT/.gitattributes" "the repo must carry a root .gitattributes"
+  dir=$(fm_test_tmproot fm-gitattributes-lf) || fail "gitattributes: could not create a fixture root"
+
+  for variant in shipped text-only bare; do
+    src="$dir/src-$variant"
+    mkdir -p "$src/bin" "$src/assets"
+    case "$variant" in
+      shipped) cp "$ROOT/.gitattributes" "$src/.gitattributes" ;;
+      # The `* text=auto eol=lf` line alone, so the assertions below can tell
+      # which of the two shipped lines is doing the work.
+      text-only) printf '* text=auto eol=lf\n' > "$src/.gitattributes" ;;
+      bare) : ;;
+    esac
+    printf 'echo one\necho two\n' > "$src/bin/sample.sh"
+    # Bytes a content sniffer cannot tell from text - CRLF and no NUL - so
+    # `text=auto` alone would call this a text file and rewrite it. Pinning
+    # *.png binary is what keeps a real banner intact.
+    printf 'PNG-fixture\r\nrow\r\n' > "$src/assets/sample.png"
+    git -C "$src" -c init.defaultBranch=main init -q \
+      || fail "gitattributes: could not init the $variant fixture repo"
+    git -C "$src" -c core.autocrlf=true -c core.safecrlf=false add -A \
+      || fail "gitattributes: could not stage the $variant fixture"
+    git -C "$src" -c core.autocrlf=true -c core.safecrlf=false \
+      -c user.name='Firstmate Tests' \
+      -c user.email='tests@example.invalid' commit -qm fixture \
+      || fail "gitattributes: could not commit the $variant fixture"
+    # Git for Windows' default, which is the whole point: the clone must land as
+    # LF without the operator knowing to override anything.
+    git -c core.autocrlf=true clone -q "$src" "$dir/clone-$variant" \
+      || fail "gitattributes: could not clone the $variant fixture"
+  done
+
+  # The CR byte travels in a variable and is double-quoted at the call. MEASURED
+  # on windows-latest (runner image 20260810.198.2, git 2.55.0.windows.3, Git
+  # Bash): spelled inline as $'\r' the pattern can reach grep EMPTY, and an
+  # empty pattern matches every file - see docs/fm-test-windows-lane.md. The
+  # control arm below would still catch that, but it would report it as a
+  # .gitattributes failure rather than as the detector's.
+  local cr=$'\r'
+
+  clone="$dir/clone-bare/bin/sample.sh"
+  grep -qU "$cr" "$clone" \
+    || fail "gitattributes: CONTROL FAILED - core.autocrlf=true did not produce a CRLF checkout here, so this fixture proves nothing"
+
+  clone="$dir/clone-shipped/bin/sample.sh"
+  grep -qU "$cr" "$clone" \
+    && fail "gitattributes: a shell file cloned with core.autocrlf=true must still land as LF"
+  cmp -s "$dir/src-shipped/bin/sample.sh" "$clone" \
+    || fail "gitattributes: the LF checkout must be byte-identical to the committed file"
+
+  clone="$dir/clone-shipped/assets/sample.png"
+  cmp -s "$dir/src-shipped/assets/sample.png" "$clone" \
+    || fail "gitattributes: *.png must survive the clone byte-for-byte, got a rewritten file"
+
+  clone="$dir/clone-text-only/assets/sample.png"
+  cmp -s "$dir/src-text-only/assets/sample.png" "$clone" \
+    && fail "gitattributes: CONTROL FAILED - text=auto alone left the fake png intact, so the *.png binary pin is untested"
+
+  # And the shipped file must keep saying so for the paths that actually exist.
+  attrs=$(git -C "$ROOT" check-attr text eol -- bin/fm-lint.sh) \
+    || fail "gitattributes: could not read the attributes git resolves for bin/fm-lint.sh"
+  case "$attrs" in
+    *'text: auto'*) : ;;
+    *) fail "gitattributes: bin/fm-lint.sh must resolve text=auto, got '$attrs'" ;;
+  esac
+  case "$attrs" in
+    *'eol: lf'*) : ;;
+    *) fail "gitattributes: bin/fm-lint.sh must resolve eol=lf, got '$attrs'" ;;
+  esac
+  attrs=$(git -C "$ROOT" check-attr text -- assets/banner.png) \
+    || fail "gitattributes: could not read the attributes git resolves for assets/banner.png"
+  case "$attrs" in
+    *'text: unset'*) : ;;
+    *) fail "gitattributes: assets/banner.png must resolve text unset (binary), got '$attrs'" ;;
+  esac
+
+  pass "root .gitattributes: a core.autocrlf=true clone still lands LF, and the one binary blob survives"
+}
+
 test_proc_field_reads_msys_layout
 test_proc_field_falls_back_to_ps_where_proc_is_absent
 test_proc_field_rejects_bad_input
@@ -371,6 +665,9 @@ test_symlink_probe_proves_rather_than_assumes
 test_native_symlink_mode_is_set_and_preserves_operator_choice
 test_proc_cwd_scan_finds_processes_rooted_under_a_directory
 test_proc_cwd_scan_reports_scan_failure_distinctly
+test_proc_cwd_scan_matches_a_mount_aliased_cwd_spelling
+test_proc_holder_scan_matches_a_mount_aliased_fd_target
 test_lock_same_path_resolves_a_mount_alias_only_through_cygpath
 test_lock_points_to_owner_still_accepts_an_exact_readlink_answer
 test_pid_identity_is_served_by_this_file_from_proc
+test_gitattributes_pins_an_lf_working_tree_for_every_clone

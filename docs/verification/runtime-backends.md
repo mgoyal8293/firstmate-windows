@@ -718,7 +718,7 @@ The portable classifier regression is `tests/fm-backend-cmux.test.sh`.
 
 The compatibility floor is Windows 10 1809 (ConPTY's own floor) with Node 20.
 Active live evidence is a manual pass recorded on 2026-08-18 against Windows 10.0.26200, Node v22.18.0, node-pty 1.1.0, @xterm/headless 6.0.0, and a real Claude Code 2.1.220.
-Windows is not a Firstmate CI platform, so this evidence is a recorded manual pass rather than a gate that reruns on every change; the portable regression is `tests/fm-backend-conpty.test.sh`, which fakes the session client.
+The Windows CI lane in `.github/workflows/windows-ci.yml` carries only the portable regression `tests/fm-backend-conpty.test.sh`, which fakes the session client, so this live evidence stays a recorded manual pass rather than a gate that reruns on every change.
 The later whole-system pass on this backend - session lock, spawn, supervision, landing, teardown, and restart in one run - is recorded in [`../windows.md`](../windows.md#run-end-to-end-on-windows) and is not repeated here.
 
 Detachment and reattach:

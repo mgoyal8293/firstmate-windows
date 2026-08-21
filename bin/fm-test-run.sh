@@ -10,6 +10,8 @@
 #   fm-test-run.sh --changed [--base <git-ref>]
 #   fm-test-run.sh --lane portable-parallel-1|portable-parallel-2|portable-serial
 #   fm-test-run.sh --lane portable-serial-<k>of<n>   (one CI serial shard)
+#   fm-test-run.sh --lane windows                    (the whole Windows lane)
+#   fm-test-run.sh --lane windows-<k>of<n>           (one CI Windows shard)
 #   fm-test-run.sh --proven-isolated
 #   fm-test-run.sh tests/<name>.test.sh [more scripts...]
 #
@@ -98,6 +100,16 @@ PORTABLE_SERIAL_SHARDS=4
 # overloads the shard it lands in.
 PORTABLE_SERIAL_DEFAULT_WEIGHT_MS=20000
 
+# How many separate-runner shards the Windows lane splits into.
+# One owner: CI lane names carry this count and are refused when they disagree,
+# exactly as PORTABLE_SERIAL_SHARDS works for the Linux serial lane.
+WINDOWS_SHARDS=4
+
+# Balance hint for a Windows-lane script with no measured Windows duration.
+# The measured per-script mean of the lane below (3,713,000 ms over 39 scripts),
+# so a newly listed test neither starves nor overloads the shard it lands in.
+WINDOWS_DEFAULT_WEIGHT_MS=95205
+
 usage() {
   awk '
     NR == 1 { next }
@@ -119,11 +131,50 @@ now_iso() {
   date -u +%Y-%m-%dT%H:%M:%SZ
 }
 
+# Resolve a Python 3 that actually runs, recording it in FM_TEST_PYTHON3_CACHE
+# and returning status only - callers read the variable, never `$(...)`.
+#
+# `command -v python3` is not evidence a Python exists. Windows ships Microsoft
+# Store "app execution aliases" for python and python3: they resolve on PATH,
+# but every invocation prints "Python was not found; run without arguments to
+# install from the Microsoft Store" and exits 49. A probe that only resolves the
+# name therefore reports success and then every call fails - which took out the
+# whole run rather than degrading. Probe by executing.
+#
+# Also accepts `python`, because that is frequently the only real interpreter on
+# a Windows machine - but only when it is a Python 3. The payloads below are
+# Python-3-only (`pathlib`, `open(..., encoding=)`), and `-c 'pass'` succeeds
+# under Python 2 as well, so the probe asks for the major version rather than
+# merely for an interpreter that starts. One execution answers both questions.
+# The answer lands in FM_TEST_PYTHON3_CACHE rather than on stdout: callers run
+# in the shell that needs the cache, so a `$(fm_test_python3)` would probe again
+# on every call and double the interpreter startups the probe exists to bound.
+# Empty means unprobed, "-" means no working interpreter.
+FM_TEST_PYTHON3_CACHE=
+fm_test_python3() {
+  local candidate
+  case "$FM_TEST_PYTHON3_CACHE" in
+    '') ;;
+    '-') return 1 ;;
+    *) return 0 ;;
+  esac
+  for candidate in python3 python; do
+    if command -v "$candidate" >/dev/null 2>&1 \
+      && "$candidate" -c 'import sys; sys.exit(0 if sys.version_info[0] >= 3 else 1)' \
+        >/dev/null 2>&1; then
+      FM_TEST_PYTHON3_CACHE=$candidate
+      return 0
+    fi
+  done
+  FM_TEST_PYTHON3_CACHE=-
+  return 1
+}
+
 now_ms() {
-  if command -v python3 >/dev/null 2>&1; then
-    python3 -c 'import time; print(int(time.time() * 1000))'
+  if fm_test_python3; then
+    "$FM_TEST_PYTHON3_CACHE" -c 'import time; print(int(time.time() * 1000))'
   else
-    # Second precision only when python3 is unavailable.
+    # Second precision only when no working Python is available.
     echo $(($(date +%s) * 1000))
   fi
 }
@@ -275,6 +326,12 @@ list_known_lanes() {
     i=$((i + 1))
   done
   printf '%s\n' real-herdr-gated
+  printf '%s\n' windows
+  i=1
+  while [ "$i" -le "$WINDOWS_SHARDS" ]; do
+    printf 'windows-%sof%s\n' "$i" "$WINDOWS_SHARDS"
+    i=$((i + 1))
+  done
 }
 
 # Exact proven-isolated candidate set (same paths as
@@ -394,6 +451,7 @@ list_portable_serial() {
 # the cap, and otherwise periodically, not only when the count is non-zero
 # (fm-test-weight-drift-detector is the filed follow-up that will compare
 # measured durations against this table). That doc owns the refresh procedure.
+# shellcheck disable=SC2329 # Invoked by name through lane_weight_for.
 portable_serial_weight_hints() {
   cat <<'EOF'
 tests/fm-afk-inject-e2e.test.sh 35004
@@ -515,26 +573,32 @@ tests/fm-windows-portability.test.sh 1985
 EOF
 }
 
-portable_serial_weight_for() {
-  local want=$1 path ms
+# Shared lane partition helpers. The Linux serial remainder and the Windows
+# allowlist split across separate-runner shards by the same rule, so the
+# partition logic lives here once; each lane supplies its own script list,
+# duration hints, shard count and lane naming.
+# shellcheck disable=SC2329 # Reached only through the per-lane weight_for wrappers.
+lane_weight_for() {
+  local hints_fn=$1 default_ms=$2 want=$3 path ms
   while read -r path ms; do
     if [ "$path" = "$want" ]; then
       printf '%s\n' "$ms"
       return 0
     fi
-  done < <(portable_serial_weight_hints)
-  printf '%s\n' "$PORTABLE_SERIAL_DEFAULT_WEIGHT_MS"
+  done < <("$hints_fn")
+  printf '%s\n' "$default_ms"
 }
 
-# Longest-processing-time assignment of the serial remainder to
-# PORTABLE_SERIAL_SHARDS bins, printing "<shard>\t<script>" for every script.
-# Deterministic: candidates are ordered by hint descending then path, and ties
-# between equally loaded bins always take the lowest bin index.
-portable_serial_assignments() {
+# Longest-processing-time assignment of a lane's scripts to <shards> bins,
+# printing "<shard>\t<script>" for every script. Deterministic: candidates are
+# ordered by hint descending then path, and ties between equally loaded bins
+# always take the lowest bin index.
+lane_assignments() {
+  local shards=$1 list_fn=$2 weight_fn=$3
   local ms script i best best_load
   local -a loads=()
   i=1
-  while [ "$i" -le "$PORTABLE_SERIAL_SHARDS" ]; do
+  while [ "$i" -le "$shards" ]; do
     loads[i]=0
     i=$((i + 1))
   done
@@ -543,7 +607,7 @@ portable_serial_assignments() {
     best=1
     best_load=${loads[1]}
     i=2
-    while [ "$i" -le "$PORTABLE_SERIAL_SHARDS" ]; do
+    while [ "$i" -le "$shards" ]; do
       if [ "${loads[i]}" -lt "$best_load" ]; then
         best_load=${loads[i]}
         best=$i
@@ -555,17 +619,18 @@ portable_serial_assignments() {
   done < <(
     while IFS= read -r script; do
       [ -n "$script" ] || continue
-      printf '%s\t%s\n' "$(portable_serial_weight_for "$script")" "$script"
-    done < <(list_portable_serial) | LC_ALL=C sort -t$'\t' -k1,1nr -k2,2
+      printf '%s\t%s\n' "$("$weight_fn" "$script")" "$script"
+    done < <("$list_fn") | LC_ALL=C sort -t$'\t' -k1,1nr -k2,2
   )
 }
 
-# Parse "<k>of<n>" from a portable-serial shard lane and echo <k>, refusing when
-# <n> disagrees with this script's configured count so a CI matrix built for a
-# different shard count fails loudly instead of dropping tests.
-portable_serial_shard_index() {
-  local lane=$1 spec index count
-  spec=${lane#portable-serial-}
+# Parse "<k>of<n>" from a "<prefix><k>of<n>" shard lane and echo <k>, refusing
+# when <n> disagrees with this script's configured count so a CI matrix built
+# for a different shard count fails loudly instead of dropping tests. <noun>
+# names the lane in the refusal so the operator sees which one disagreed.
+lane_shard_index() {
+  local lane=$1 prefix=$2 shards=$3 noun=$4 spec index count
+  spec=${lane#"$prefix"}
   index=${spec%%of*}
   count=${spec#*of}
   case "$spec" in
@@ -578,13 +643,153 @@ portable_serial_shard_index() {
   case "$count" in
     ''|*[!0-9]*) die "unknown lane '$lane' (see --list-lanes)" ;;
   esac
-  if [ "$count" -ne "$PORTABLE_SERIAL_SHARDS" ]; then
-    die "lane '$lane' asks for $count portable serial shards but this runner is configured for $PORTABLE_SERIAL_SHARDS (see --list-lanes)"
+  if [ "$count" -ne "$shards" ]; then
+    die "lane '$lane' asks for $count $noun shards but this runner is configured for $shards (see --list-lanes)"
   fi
-  if [ "$index" -lt 1 ] || [ "$index" -gt "$PORTABLE_SERIAL_SHARDS" ]; then
-    die "lane '$lane' shard index is outside 1..$PORTABLE_SERIAL_SHARDS (see --list-lanes)"
+  if [ "$index" -lt 1 ] || [ "$index" -gt "$shards" ]; then
+    die "lane '$lane' shard index is outside 1..$shards (see --list-lanes)"
   fi
   printf '%s\n' "$index"
+}
+
+# shellcheck disable=SC2329 # Invoked by name through lane_assignments.
+portable_serial_weight_for() {
+  lane_weight_for portable_serial_weight_hints "$PORTABLE_SERIAL_DEFAULT_WEIGHT_MS" "$1"
+}
+
+portable_serial_assignments() {
+  lane_assignments "$PORTABLE_SERIAL_SHARDS" list_portable_serial portable_serial_weight_for
+}
+
+portable_serial_shard_index() {
+  lane_shard_index "$1" portable-serial- "$PORTABLE_SERIAL_SHARDS" 'portable serial'
+}
+
+# The Windows lane: an explicit allowlist rather than a derived remainder.
+#
+# Git Bash pays 14-18x more per process than Linux, so the derived
+# portable-serial remainder - 116 scripts, 42.33 min on Linux - is many hours
+# on Windows and cannot be made to fit any job timeout by sharding alone: the
+# longest single script sets a floor no shard count can lower. This lane
+# therefore carries a measured subset instead.
+#
+# Enumerated on purpose. The Linux serial lane is derived so a newly added test
+# lands in a required lane by default; here that same default would drop an
+# unported test into a green gate and turn it red. A new test joins this lane
+# when it is measured green on Windows, and the coverage guard still proves the
+# lane is a real, disjoint, complete partition of whatever is listed.
+#
+# Membership rule: exited 0 with no failed assertion on Git Bash. A gate skip
+# counts as green - that is the test declining to run, the same as on Linux -
+# but a script that can ONLY gate-skip on this runner, because the tool it needs
+# is not installed there, is left out: it would inflate the lane's headline count
+# without executing anything, and unlike the Linux lane there is no hard-fail
+# step asserting the tool is present. A dropped member is visible here; a
+# silently skipping one is not.
+# docs/fm-test-windows-lane.md records the measurement behind each entry.
+list_windows() {
+  cat <<'EOF'
+tests/fm-afk-return.test.sh
+tests/fm-ask-user-authority.test.sh
+tests/fm-backend-conpty.test.sh
+tests/fm-brief.test.sh
+tests/fm-busy-state.test.sh
+tests/fm-calm-pi-extension.test.sh
+tests/fm-classify-decision-key.test.sh
+tests/fm-claude-stop-autoarm.test.sh
+tests/fm-composer-ghost.test.sh
+tests/fm-composer-lib.test.sh
+tests/fm-crew-state.test.sh
+tests/fm-decision-hold-lifecycle.test.sh
+tests/fm-gate-refuse.test.sh
+tests/fm-gitignore-config.test.sh
+tests/fm-gotmp.test.sh
+tests/fm-herdr-session-cleanup.test.sh
+tests/fm-pr-merge.test.sh
+tests/fm-pr-private-file-mode.test.sh
+tests/fm-project-origin.test.sh
+tests/fm-remote-entrypoint.test.sh
+tests/fm-review-diff.test.sh
+tests/fm-send-popup-settle.test.sh
+tests/fm-send-settle.test.sh
+tests/fm-send-strict.test.sh
+tests/fm-spawn-batch.test.sh
+tests/fm-spawn-pool-base-freshen.test.sh
+tests/fm-supervision-events.test.sh
+tests/fm-supervision-instructions.test.sh
+tests/fm-tangle-guard.test.sh
+tests/fm-task-delivery.test.sh
+tests/fm-test-fixture-cleanup.test.sh
+tests/fm-test-isolation-proof.test.sh
+tests/fm-tmux-submit-busy.test.sh
+tests/fm-trace-context-lib.test.sh
+tests/fm-transition-lib.test.sh
+tests/fm-upstream-sync.test.sh
+tests/fm-vendor-auth-probe.test.sh
+tests/fm-wake-queue.test.sh
+tests/fm-windows-portability.test.sh
+EOF
+}
+
+# Measured Git Bash durations, in ms, for the scripts above. Hints only affect
+# balance: the coverage guard keeps the partition complete and disjoint whatever
+# they say, so a stale hint costs a slower shard rather than lost coverage.
+# shellcheck disable=SC2329 # Invoked by name through lane_weight_for.
+windows_weight_hints() {
+  cat <<'EOF'
+tests/fm-afk-return.test.sh 63000
+tests/fm-ask-user-authority.test.sh 3000
+tests/fm-backend-conpty.test.sh 25000
+tests/fm-brief.test.sh 21000
+tests/fm-busy-state.test.sh 24000
+tests/fm-calm-pi-extension.test.sh 3000
+tests/fm-classify-decision-key.test.sh 24000
+tests/fm-claude-stop-autoarm.test.sh 135000
+tests/fm-composer-ghost.test.sh 54000
+tests/fm-composer-lib.test.sh 119000
+tests/fm-crew-state.test.sh 171000
+tests/fm-decision-hold-lifecycle.test.sh 860000
+tests/fm-gate-refuse.test.sh 117000
+tests/fm-gitignore-config.test.sh 1000
+tests/fm-gotmp.test.sh 23000
+tests/fm-herdr-session-cleanup.test.sh 154000
+tests/fm-pr-merge.test.sh 165000
+tests/fm-pr-private-file-mode.test.sh 5000
+tests/fm-project-origin.test.sh 2000
+tests/fm-remote-entrypoint.test.sh 2000
+tests/fm-review-diff.test.sh 83000
+tests/fm-send-popup-settle.test.sh 102000
+tests/fm-send-settle.test.sh 43000
+tests/fm-send-strict.test.sh 119000
+tests/fm-spawn-batch.test.sh 74000
+tests/fm-spawn-pool-base-freshen.test.sh 122000
+tests/fm-supervision-events.test.sh 15000
+tests/fm-supervision-instructions.test.sh 7000
+tests/fm-tangle-guard.test.sh 108000
+tests/fm-task-delivery.test.sh 57000
+tests/fm-test-fixture-cleanup.test.sh 21000
+tests/fm-test-isolation-proof.test.sh 15000
+tests/fm-tmux-submit-busy.test.sh 37000
+tests/fm-trace-context-lib.test.sh 6000
+tests/fm-transition-lib.test.sh 4000
+tests/fm-upstream-sync.test.sh 17000
+tests/fm-vendor-auth-probe.test.sh 79000
+tests/fm-wake-queue.test.sh 826000
+tests/fm-windows-portability.test.sh 7000
+EOF
+}
+
+# shellcheck disable=SC2329 # Invoked by name through lane_assignments.
+windows_weight_for() {
+  lane_weight_for windows_weight_hints "$WINDOWS_DEFAULT_WEIGHT_MS" "$1"
+}
+
+windows_assignments() {
+  lane_assignments "$WINDOWS_SHARDS" list_windows windows_weight_for
+}
+
+windows_shard_index() {
+  lane_shard_index "$1" windows- "$WINDOWS_SHARDS" windows
 }
 
 select_proven_isolated() {
@@ -634,6 +839,24 @@ select_lane() {
       select_family real-herdr-gated
       found=1
       ;;
+    windows)
+      while IFS= read -r s; do
+        [ -n "$s" ] || continue
+        add_script "$s"
+        found=1
+      done < <(list_windows)
+      ;;
+    windows-*)
+      # One separate-runner shard of the Windows lane, still serial in itself.
+      shard=$(windows_shard_index "$want")
+      while IFS=$'\t' read -r idx s; do
+        [ -n "$s" ] || continue
+        if [ "$idx" = "$shard" ]; then
+          add_script "$s"
+          found=1
+        fi
+      done < <(windows_assignments)
+      ;;
     *)
       die "unknown lane '$want' (see --list-lanes)"
       ;;
@@ -641,6 +864,11 @@ select_lane() {
   [ "$found" -eq 1 ] || die "lane '$want' selected no tests"
 }
 
+# Every comm input below is produced by `LC_ALL=C sort`, and comm validates its
+# inputs' order using the AMBIENT locale. On a non-C locale - Git Bash defaults
+# to en_US.UTF-8 - comm rejects C-sorted input as "not in sorted order" and the
+# guard fails for the locale's reasons rather than the inventory's. Comparison
+# locale therefore has to match the sort locale.
 run_coverage_guard() {
   local tmp missing extra a b shard
   local -a saved_scripts=()
@@ -659,8 +887,8 @@ run_coverage_guard() {
     return 1
   fi
   cat "$tmp/s1" "$tmp/s2" | LC_ALL=C sort -u >"$tmp/shards_union"
-  missing=$(comm -23 "$tmp/proven" "$tmp/shards_union" || true)
-  extra=$(comm -13 "$tmp/proven" "$tmp/shards_union" || true)
+  missing=$(LC_ALL=C comm -23 "$tmp/proven" "$tmp/shards_union" || true)
+  extra=$(LC_ALL=C comm -13 "$tmp/proven" "$tmp/shards_union" || true)
   if [ -n "$missing" ] || [ -n "$extra" ]; then
     log "coverage guard: portable shards must equal the proven-isolated set"
     [ -z "$missing" ] || { log "missing from shards:"; printf '%s\n' "$missing" >&2; }
@@ -704,8 +932,8 @@ run_coverage_guard() {
     return 1
   fi
   LC_ALL=C sort -u "$tmp/serial_shards_raw" >"$tmp/serial_shards"
-  missing=$(comm -23 "$tmp/serial" "$tmp/serial_shards" || true)
-  extra=$(comm -13 "$tmp/serial" "$tmp/serial_shards" || true)
+  missing=$(LC_ALL=C comm -23 "$tmp/serial" "$tmp/serial_shards" || true)
+  extra=$(LC_ALL=C comm -13 "$tmp/serial" "$tmp/serial_shards" || true)
   if [ -n "$missing" ] || [ -n "$extra" ]; then
     log "coverage guard: portable serial shards must equal the portable serial lane"
     [ -z "$missing" ] || { log "missing from serial shards:"; printf '%s\n' "$missing" >&2; }
@@ -717,7 +945,7 @@ run_coverage_guard() {
   for pair in "shards_union:serial" "shards_union:herdr" "serial:herdr"; do
     a=${pair%%:*}
     b=${pair#*:}
-    comm -12 "$tmp/$a" "$tmp/$b" >"$tmp/overlap"
+    LC_ALL=C comm -12 "$tmp/$a" "$tmp/$b" >"$tmp/overlap"
     if [ -s "$tmp/overlap" ]; then
       log "coverage guard: overlap between $a and $b:"
       cat "$tmp/overlap" >&2
@@ -735,8 +963,8 @@ run_coverage_guard() {
     return 1
   fi
   LC_ALL=C sort -u "$tmp/union_raw" >"$tmp/union"
-  missing=$(comm -23 "$tmp/all" "$tmp/union" || true)
-  extra=$(comm -13 "$tmp/all" "$tmp/union" || true)
+  missing=$(LC_ALL=C comm -23 "$tmp/all" "$tmp/union" || true)
+  extra=$(LC_ALL=C comm -13 "$tmp/all" "$tmp/union" || true)
   if [ -n "$missing" ] || [ -n "$extra" ]; then
     log "coverage guard: union of portable shards + portable serial + Herdr must equal tests/*.test.sh"
     [ -z "$missing" ] || { log "missing from union:"; printf '%s\n' "$missing" >&2; }
@@ -749,10 +977,58 @@ run_coverage_guard() {
     "$ROOT/bin/fm-test-isolation-proof.sh" --list | LC_ALL=C sort -u >"$tmp/proof_list"
     if ! cmp -s "$tmp/proven" "$tmp/proof_list"; then
       log "coverage guard: embedded proven-isolated set diverges from bin/fm-test-isolation-proof.sh --list"
-      comm -3 "$tmp/proven" "$tmp/proof_list" >&2 || true
+      LC_ALL=C comm -3 "$tmp/proven" "$tmp/proof_list" >&2 || true
       rm -rf "$tmp"
       return 1
     fi
+  fi
+
+  # The Windows lane is a measured SUBSET overlay of tests/*.test.sh, not another
+  # part of the parallel + serial + Herdr partition, so it is deliberately left
+  # out of the union check above. What must still hold: every listed script
+  # exists, and the shards partition the list exactly.
+  SCRIPTS=()
+  select_lane windows
+  printf '%s\n' "${SCRIPTS[@]+"${SCRIPTS[@]}"}" | LC_ALL=C sort -u >"$tmp/windows"
+  SCRIPTS=("${saved_scripts[@]+"${saved_scripts[@]}"}")
+  missing=$(LC_ALL=C comm -23 "$tmp/windows" "$tmp/all" || true)
+  if [ -n "$missing" ]; then
+    log "coverage guard: windows lane lists scripts that are not in tests/*.test.sh:"
+    printf '%s\n' "$missing" >&2
+    rm -rf "$tmp"
+    return 1
+  fi
+  : >"$tmp/windows_shards_raw"
+  shard=1
+  while [ "$shard" -le "$WINDOWS_SHARDS" ]; do
+    SCRIPTS=()
+    select_lane "windows-${shard}of${WINDOWS_SHARDS}"
+    if [ "${#SCRIPTS[@]}" -eq 0 ]; then
+      log "coverage guard: windows shard $shard of $WINDOWS_SHARDS is empty"
+      SCRIPTS=("${saved_scripts[@]+"${saved_scripts[@]}"}")
+      rm -rf "$tmp"
+      return 1
+    fi
+    printf '%s\n' "${SCRIPTS[@]}" >>"$tmp/windows_shards_raw"
+    shard=$((shard + 1))
+  done
+  SCRIPTS=("${saved_scripts[@]+"${saved_scripts[@]}"}")
+  LC_ALL=C sort "$tmp/windows_shards_raw" | uniq -d >"$tmp/windows_shard_dups"
+  if [ -s "$tmp/windows_shard_dups" ]; then
+    log "coverage guard: windows shards share scripts:"
+    cat "$tmp/windows_shard_dups" >&2
+    rm -rf "$tmp"
+    return 1
+  fi
+  LC_ALL=C sort -u "$tmp/windows_shards_raw" >"$tmp/windows_shards"
+  missing=$(LC_ALL=C comm -23 "$tmp/windows" "$tmp/windows_shards" || true)
+  extra=$(LC_ALL=C comm -13 "$tmp/windows" "$tmp/windows_shards" || true)
+  if [ -n "$missing" ] || [ -n "$extra" ]; then
+    log "coverage guard: windows shards must equal the windows lane"
+    [ -z "$missing" ] || { log "missing from windows shards:"; printf '%s\n' "$missing" >&2; }
+    [ -z "$extra" ] || { log "extra beyond windows lane:"; printf '%s\n' "$extra" >&2; }
+    rm -rf "$tmp"
+    return 1
   fi
 
   # Serial scripts packed at the default weight because nothing measured them.
@@ -766,7 +1042,7 @@ run_coverage_guard() {
   # script that already has a hint is invisible here
   # (docs/fm-test-portable-shards.md).
   portable_serial_weight_hints | cut -d' ' -f1 | LC_ALL=C sort -u >"$tmp/hinted"
-  comm -23 "$tmp/serial" "$tmp/hinted" >"$tmp/unhinted"
+  LC_ALL=C comm -23 "$tmp/serial" "$tmp/hinted" >"$tmp/unhinted"
 
   printf 'FM_TEST_COVERAGE ok total=%s parallel=%s serial=%s serial_shards=%s herdr=%s unmeasured_serial=%s\n' \
     "$(wc -l <"$tmp/all" | tr -d ' ')" \
@@ -779,6 +1055,30 @@ run_coverage_guard() {
     log "coverage guard: portable serial scripts with no measured duration, packed at ${PORTABLE_SERIAL_DEFAULT_WEIGHT_MS}ms (docs/fm-test-portable-shards.md owns the refresh):"
     cat "$tmp/unhinted" >&2
   fi
+  # Windows lane members packed at the default weight because nothing measured
+  # them, reported by count AND name for the same reason the serial lane reports
+  # its own: an unmeasured member is what unbalances a shard, and a Windows shard
+  # that overruns its cap is cancelled with no verdict rather than merely slow.
+  #
+  # It bites harder here than on the serial lane. list_windows and
+  # windows_weight_hints are two hand-maintained parallel lists, and this lane's
+  # admission rule is that a test joins once it is measured green on Windows
+  # (docs/fm-test-windows-lane.md), so a member with no hint is one admitted
+  # without the measurement its own rule requires.
+  #
+  # Same limit as the serial counter: this counts only members packed at the
+  # default, so a zero says no member is unhinted, NOT that the hints are current.
+  windows_weight_hints | cut -d' ' -f1 | LC_ALL=C sort -u >"$tmp/windows_hinted"
+  LC_ALL=C comm -23 "$tmp/windows" "$tmp/windows_hinted" >"$tmp/windows_unhinted"
+
+  printf 'FM_TEST_COVERAGE_WINDOWS ok windows=%s windows_shards=%s unmeasured_windows=%s\n' \
+    "$(wc -l <"$tmp/windows" | tr -d ' ')" \
+    "$WINDOWS_SHARDS" \
+    "$(wc -l <"$tmp/windows_unhinted" | tr -d ' ')"
+  if [ -s "$tmp/windows_unhinted" ]; then
+    log "coverage guard: windows lane members with no measured duration, packed at ${WINDOWS_DEFAULT_WEIGHT_MS}ms (docs/fm-test-windows-lane.md owns the refresh):"
+    cat "$tmp/windows_unhinted" >&2
+  fi
   rm -rf "$tmp"
   return 0
 }
@@ -787,8 +1087,10 @@ aggregate_timing_json() {
   local out=$1
   shift
   [ "$#" -gt 0 ] || die "--aggregate-json requires at least one input timing JSON"
-  command -v python3 >/dev/null 2>&1 || die "--aggregate-json requires python3"
-  python3 - "$out" "$@" <<'PY'
+  local py
+  fm_test_python3 || die "--aggregate-json requires a working python3"
+  py=$FM_TEST_PYTHON3_CACHE
+  "$py" - "$out" "$@" <<'PY'
 import json, sys
 from pathlib import Path
 
@@ -1222,11 +1524,13 @@ write_json_artifact() {
   local records_file=${10}
   local families_file=${11}
 
-  if ! command -v python3 >/dev/null 2>&1; then
-    die "--json requires python3 to emit a valid timing artifact"
+  local py
+  if ! fm_test_python3; then
+    die "--json requires a working python3 to emit a valid timing artifact"
   fi
+  py=$FM_TEST_PYTHON3_CACHE
 
-  python3 - "$out" "$started" "$finished" "$run_id" "$total" "$failed" "$skipped" "$duration" "$selection" "$records_file" "$families_file" <<'PY'
+  "$py" - "$out" "$started" "$finished" "$run_id" "$total" "$failed" "$skipped" "$duration" "$selection" "$records_file" "$families_file" <<'PY'
 import json, sys
 
 out, started, finished, run_id, total, failed, skipped, duration, selection, records_file, families_file = sys.argv[1:]
@@ -1542,6 +1846,9 @@ FAMILIES_TSV="$RUN_TMP/families.tsv"
 : >"$RECORDS"
 trap 'rm -rf "$RUN_TMP"' EXIT
 
+# Resolve Python once here, in the shell that owns the cache, so the timing
+# calls below and every forked worker inherit one probe rather than repeating it.
+fm_test_python3 || true
 RUN_STARTED_ISO=$(now_iso)
 RUN_STARTED_MS=$(now_ms)
 RUN_ID="fm-test-run-${RUN_STARTED_MS}-$$"

@@ -11,7 +11,7 @@ WSL runs upstream firstmate unchanged and needs none of this.
 
 ## What is fixed here
 
-Five failures stopped firstmate before any of its own logic was reached.
+Six failures stopped firstmate before any of its own logic was reached.
 Each is fixed at exactly one owner:
 
 | Failure | Owner | Substitute |
@@ -21,6 +21,7 @@ Each is fixed at exactly one owner:
 | `lsof` is absent, so teardown reaps nothing - and Windows then physically refuses to delete the worktree the unreaped agent sits in | `bin/fm-teardown.sh`, `bin/fm-lock-lib.sh` | a bounded `/proc/*/cwd` (and `/proc/*/fd`) scan, which also sees the native Windows children MSYS spawned |
 | `chmod` is a no-op on `noacl` mounts, so no PR can be merged and no watcher check can be armed | `bin/fm-pr-lib.sh` | the exact-mode assertion is capability-gated; see the security note below |
 | A stored process identity was read through `ps -o lstart= -o command=` in a second place, so a secondmate's missed-report guard could never read its own sender | `bin/fm-proc-lib.sh` | `fm_pid_identity` moved here from `bin/fm-wake-lib.sh` and `bin/fm-pending-reply-lib.sh`'s private copy is gone. The pending-reply record now tags the stored identity's format and verifies an untagged one against the reader that wrote it, so records already on disk are not read as dead senders |
+| The `/proc` cwd and fd-target compare matched raw spellings, so a short (8.3) `%TEMP%` component - the spelling GitHub's Windows runners use - made the scan report NOBODY under a directory a live process was sitting in | `bin/fm-proc-lib.sh` | `fm_proc_cwd_prefixes` resolves the caller's directory through a `cygpath -m -l` probe and scans both spellings, so one location reachable under a mount alias or a short name is recognised as one. A match is what makes `bin/fm-teardown.sh` REFUSE to delete a worktree a live process occupies, and what makes `bin/fm-lock-lib.sh` read a held lock as live rather than stale; before it, teardown could delete that worktree out from under the process. Without `cygpath` the caller's spelling stays the only verdict |
 
 There is no tmux on Windows either, so multi-agent work runs on the ConPTY
 session provider (`bin/backends/conpty.sh`, [`conpty-backend.md`](conpty-backend.md)).
@@ -57,6 +58,12 @@ call site.
 - Enable Windows Developer Mode (or grant `SeCreateSymbolicLinkPrivilege`).
   Without it `MSYS=winsymlinks:nativestrict` makes `ln -s` fail rather than copy - which is the safe failure, but no lock can be acquired.
 - Run `bin/fm-bootstrap.sh`. It proves both of the above and prints a `PLATFORM:` line naming the exact remedy when either is missing.
+
+## Validating on Windows
+
+`bin/fm-lint.sh` runs here now: both pinned linter installers gained a Windows arm, and `.github/workflows/windows-ci.yml` proves the lint gate plus a measured, sharded subset of the behavior suite on `windows-latest`.
+It is a subset on purpose - Git Bash's per-process cost puts the whole suite far outside any job timeout - and its membership is enumerated in `bin/fm-test-run.sh` rather than derived, so a newly added test cannot redden the lane merely by existing before anyone has measured it here.
+[`fm-test-windows-lane.md`](fm-test-windows-lane.md) owns that lane's membership, its measurements, and the worklist of scripts that still fail on Windows.
 
 ## Staying current with upstream
 
@@ -186,6 +193,11 @@ components but leaves the mount alias exactly as given, so it returns both
 spellings unchanged (measured). The strict string compare stays first and stays
 authoritative; where no `cygpath` exists the strict compare remains the only
 verdict, so this can widen a match and never silently accept an unresolvable one.
+
+It resolves the mount alias only.
+`fm_lock_same_path` calls `cygpath -m` without `-l`, so it cannot see through an 8.3 short component - the spelling GitHub's runners use for `%TEMP%` - and still compares a short spelling against a long one.
+The short-name expansion exists one layer down, in `fm_proc_cwd_prefixes` (`bin/fm-proc-lib.sh`), added for the `/proc` cwd read described in [`fm-test-windows-lane.md`](fm-test-windows-lane.md).
+The lock resolver has not been given it, and that gap is tracked as `winfm-portability-points-to-owner`.
 
 ## Run end to end on Windows
 
