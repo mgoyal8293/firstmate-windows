@@ -372,6 +372,14 @@ test_portable_shard_union_and_coverage_guard() {
     || fail "herdr family must include smoke"
   out=$("$RUNNER" --check-coverage)
   assert_contains "$out" "FM_TEST_COVERAGE ok" "coverage guard success marker"
+  # The guard also reports how many serial scripts are packed at the default
+  # weight because nothing has measured them. That count is what an operator
+  # reads to decide whether the shard balance can be trusted: an unmeasured
+  # script is packed as if it were average, and enough of them silently push
+  # one shard past its job cap, where it is cancelled with no verdict at all
+  # rather than merely running slow. Pinned so the field cannot quietly vanish.
+  printf '%s\n' "$out" | grep -Eq 'FM_TEST_COVERAGE ok .* unmeasured_serial=[0-9]+$' \
+    || fail "coverage guard must report an unmeasured serial count: $out"
   all_count=$("$RUNNER" --list --all | wc -l | tr -d ' ')
   union_count=$(printf '%s\n' "$s1" "$s2" "$serial" "$herdr" | LC_ALL=C sort -u | wc -l | tr -d ' ')
   [ "$union_count" = "$all_count" ] \
@@ -384,6 +392,61 @@ test_portable_shard_union_and_coverage_guard() {
   [ "$first" = "tests/fm-x-mode.test.sh" ] \
     || fail "shard 1 must start with the longest proven script, got $first"
   pass "portable shard union, disjointness, and coverage guard hold"
+}
+
+unmeasured_serial_count() { # <coverage guard stdout>
+  printf '%s\n' "$1" | sed -n 's/.*unmeasured_serial=\([0-9]*\).*/\1/p'
+}
+
+test_unmeasured_serial_report_names_the_unhinted_script() {
+  local sandbox out err rc f baseline count expected
+  # The report the guard added is only exercised against a lane that actually
+  # contains an unmeasured script. A sandbox root gives it one: the runner
+  # resolves its own root from its location and derives the serial lane from
+  # tests/*.test.sh, so a copy beside a mirrored inventory drives the real guard
+  # and one added script is the only difference between the two runs below.
+  sandbox=$(fm_test_tmproot fm-test-run-unmeasured) || fail "could not create sandbox root"
+  mkdir -p "$sandbox/bin" "$sandbox/tests"
+  cp "$RUNNER" "$sandbox/bin/fm-test-run.sh"
+  cp "$ROOT/bin/fm-test-isolation-proof.sh" "$sandbox/bin/fm-test-isolation-proof.sh"
+  for f in "$ROOT"/tests/*.test.sh; do
+    : > "$sandbox/tests/$(basename "$f")"
+  done
+
+  # Baseline first, so the assertion is the delta this case creates and not the
+  # production tree's own hint coverage. A newly added test legitimately has no
+  # measured duration until it has run once in CI, so an absolute count here
+  # would red this required lane for adding a test - the same self-inflicted
+  # false red the guard reports rather than refuses in order to avoid.
+  out=$("$sandbox/bin/fm-test-run.sh" --check-coverage 2>"$sandbox/baseline-err.txt")
+  rc=$?
+  [ "$rc" = 0 ] || fail "coverage guard must pass on the mirrored sandbox: $out $(cat "$sandbox/baseline-err.txt")"
+  baseline=$(unmeasured_serial_count "$out")
+  case $baseline in
+    ''|*[!0-9]*) fail "coverage guard did not report an unmeasured serial count: $out" ;;
+  esac
+
+  : > "$sandbox/tests/fm-zzz-unmeasured-probe.test.sh"
+  out=$("$sandbox/bin/fm-test-run.sh" --check-coverage 2>"$sandbox/err.txt")
+  rc=$?
+  err=$(cat "$sandbox/err.txt")
+  # Reported, never refused: an unmeasured script must not fail the guard.
+  [ "$rc" = 0 ] || fail "unmeasured serial script must not fail the coverage guard: $out $err"
+  assert_contains "$out" "FM_TEST_COVERAGE ok" "coverage guard success marker in sandbox"
+  # The count must move with the lane, not be a constant: swapped comm operands
+  # or a divergent sort order leave it at the baseline for a lane that gained an
+  # unmeasured script.
+  count=$(unmeasured_serial_count "$out")
+  expected=$((baseline + 1))
+  [ "$count" = "$expected" ] \
+    || fail "one added unhinted script must raise unmeasured_serial from $baseline to $expected, got $count: $out"
+  printf '%s\n' "$err" | grep -Fq 'tests/fm-zzz-unmeasured-probe.test.sh' \
+    || fail "guard must name the unhinted serial script on stderr: $err"
+  # And a hinted script must not be swept in with it.
+  printf '%s\n' "$err" | grep -Fq 'tests/fm-pr-check-security.test.sh' \
+    && fail "guard named a measured script as unmeasured: $err"
+  rm -rf "$sandbox"
+  pass "coverage guard counts and names serial scripts with no measured duration"
 }
 
 test_portable_serial_shards_partition_the_serial_lane() {
@@ -716,6 +779,7 @@ test_fail_on_gate_skip_token
 test_exclude_family
 test_portable_shard_union_and_coverage_guard
 test_portable_serial_shards_partition_the_serial_lane
+test_unmeasured_serial_report_names_the_unhinted_script
 test_portable_serial_shard_lane_refusals
 test_jobs_requires_proven_isolated
 test_jobs_parallel_scheduler_and_failure_propagation
