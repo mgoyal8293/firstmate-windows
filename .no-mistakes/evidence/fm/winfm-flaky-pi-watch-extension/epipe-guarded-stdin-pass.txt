@@ -1,0 +1,10 @@
+$ bash tests/fm-operational-input.test.sh
+ok - operational input: the OpenCode adapter constructs through the canonical owner
+ok - operational input: an encoder that stops reading fails the call, not the host
+ok - operational input: current construction rejects legacy kinds and empty bodies
+
+$ bash <the two turn-end guard stdin cases from tests/fm-pi-watch-extension.test.sh>
+# arm child start 12ms measured, readiness budget 500ms
+# observation slack 1000ms derived, poll cadence window/64
+ok - OpenCode turn-end guard reports its verdict when the stdin write is refused
+ok - Pi turn-end guard reports its verdict when the stdin write is refused

@@ -1,0 +1,6 @@
+FM_TEST_SUMMARY BASELINE_PI_HUNG (1baa477 test file): pass=0 fail=25 of 25 (fork_cost_shim=0.3)
+first failure:
+not ok - Pi must deliver the actionable wake after bounded hung-successor recovery: expected exit 0, got 1
+FM_TEST_SUMMARY BASELINE_OC_HUNG (1baa477 test file): pass=0 fail=25 of 25 (fork_cost_shim=0.3)
+first failure:
+not ok - OpenCode must deliver the actionable wake after bounded hung-successor recovery: expected exit 0, got 1

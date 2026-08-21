@@ -1,0 +1,1 @@
+FM_TEST_SUMMARY FIXED_WHOLE_FILE (native fork cost, frozen snapshot c95cf43): pass=25 fail=0 of 25 (fork_cost_shim=none)

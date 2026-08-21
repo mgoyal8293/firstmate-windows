@@ -1,0 +1,11 @@
+# The retry-limit pair: sibling cases the intent required deriving even though
+# their CI failures were never observed. Scored at a 0.8s fork-cost shim.
+
+--- BASELINE (1baa477 literals) ---
+not ok - Pi established clean closes must honor the continuity retry limit: expected exit 0, got 1
+
+--- FIXED (c95cf43 derived windows), same shim ---
+# arm child start 1631ms measured, readiness budget 8155ms
+# observation slack 4893ms derived, poll cadence window/64
+ok - Pi established clean closes stop at the configured retry limit
+ok - OpenCode established clean closes stop at the configured retry limit

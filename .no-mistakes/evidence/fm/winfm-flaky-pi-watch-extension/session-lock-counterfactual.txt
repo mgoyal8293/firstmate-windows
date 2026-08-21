@@ -1,0 +1,10 @@
+# The session-lock case: its 120ms pause was the timing dependence. `ps` slowed
+# to 200ms per call stands in for what runner load does to a spawn.
+
+--- BASELINE (1baa477, 120ms pause) ---
+not ok - OpenCode watch plugin must arm only when this session owns the fleet lock: expected exit 0, got 1
+
+--- FIXED (c95cf43, settles the refusal through the coordinator) ---
+# arm child start 16ms measured, readiness budget 500ms
+# observation slack 1000ms derived, poll cadence window/64
+ok - OpenCode watcher plugin requires session lock ownership

@@ -1,0 +1,16 @@
+=== fork-cost shim 0.02s ===
+# arm child start 67ms measured, readiness budget 500ms
+# observation slack 1000ms derived, poll cadence window/64
+ok - Pi hung successor falls back to one typed actionable wake
+=== fork-cost shim 0.1s ===
+# arm child start 230ms measured, readiness budget 1150ms
+# observation slack 1000ms derived, poll cadence window/64
+ok - Pi hung successor falls back to one typed actionable wake
+=== fork-cost shim 0.3s ===
+# arm child start 632ms measured, readiness budget 3160ms
+# observation slack 1896ms derived, poll cadence window/64
+ok - Pi hung successor falls back to one typed actionable wake
+=== fork-cost shim 0.8s ===
+# arm child start 1634ms measured, readiness budget 8170ms
+# observation slack 4902ms derived, poll cadence window/64
+ok - Pi hung successor falls back to one typed actionable wake

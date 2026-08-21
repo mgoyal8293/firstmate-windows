@@ -1,0 +1,12 @@
+$ bash <shard/coverage cases from tests/fm-test-run.test.sh>
+fm-test-run: coverage guard: portable serial scripts with no measured duration, packed at 20000ms (docs/fm-test-portable-shards.md owns the refresh):
+tests/zz-shard-guard.test.sh
+ok - portable shard union, disjointness, and coverage guard hold
+ok - portable serial shards are a deterministic disjoint cover of the serial lane
+ok - coverage guard counts and names serial scripts with no measured duration
+exit=0
+
+# Note: the stderr line above names the transient single-case runner this test
+# phase generated in tests/ to invoke the three cases; it is live evidence of the
+# report-never-refuse contract - an unhinted serial script is named and the guard
+# still exits 0. That runner was deleted after the run.

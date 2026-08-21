@@ -1,0 +1,21 @@
+# Each site is exercised by the regression case that pins it; the listener is
+# removed, the case is rerun, and the tree is restored immediately after.
+
+=== operational-input adapter (tests/fm-operational-input.test.sh): child.stdin.on("error") listener REMOVED from .opencode/plugins/lib/fm-operational-input.js ===
+not ok - a refused encoder body killed the adapter's host: exit 1 - node:events:497
+      throw er; // Unhandled 'error' event
+Error: write EPIPE
+  code: 'EPIPE',
+
+=== OpenCode turn-end guard (fm-pi-watch-extension case): child.stdin.on("error") listener REMOVED from .opencode/plugins/fm-primary-turnend-guard.js ===
+not ok - OpenCode turn-end guard let a refused stdin write escape: node:events:497
+      throw er; // Unhandled 'error' event
+Error: write EPIPE
+  code: 'EPIPE',
+
+=== Pi turn-end guard (fm-pi-watch-extension case): child.stdin.on("error") listener REMOVED from .pi/extensions/fm-primary-turnend-guard.ts ===
+not ok - Pi turn-end guard let a refused stdin write escape: node:events:497
+      throw er; // Unhandled 'error' event
+Error: write EPIPE
+  code: 'EPIPE',
+

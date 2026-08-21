@@ -1,0 +1,6 @@
+# Wall clock of the whole fixed file against its 27802 ms weight hint,
+# at a workstation fork cost and at a CI-like one.
+fork_cost_shim=none  arm child start 14ms measured, readiness budget 500ms  verdict=all-ok  duration=20715ms  (hint 27802ms)
+  assertions ok=32 not_ok=0
+fork_cost_shim=0.15  arm child start 331ms measured, readiness budget 1655ms  verdict=all-ok  duration=70894ms  (hint 27802ms)
+  assertions ok=32 not_ok=0
