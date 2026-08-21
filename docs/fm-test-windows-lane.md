@@ -492,6 +492,16 @@ So the pinned Windows download was rejected for how its path was spelled, and th
 Both installers now digest through **stdin**, which removes the filename from the output entirely.
 That is correct on every platform rather than a Windows arm, and `tests/fm-lint.test.sh` and `tests/fm-lint-workflows.test.sh` pin it on any host by pointing `RUNNER_TEMP` at a directory whose name really does hold a backslash.
 
-### The restricted-PATH DLL pattern, fixed in place once
+### The restricted-PATH DLL pattern, and the exec wrapper that fixes it at every site
 
-`tests/fm-windows-portability.test.sh` also builds a deliberately restricted PATH - one directory, holding `readlink` and no `cygpath` - and reached it through a symlink, which is the `$TOOLS` symlink pattern named under "Scripts excluded, and why" above: `PATH=$dir readlink` exits 127 there, because an MSYS binary finds `msys-2.0.dll` through PATH. It is fixed with the same exec wrapper `make_no_timeout_toolbin` uses in `tests/fm-crew-state.test.sh`, which is the worked example for the excluded scripts that still carry this pattern.
+`tests/fm-windows-portability.test.sh` also builds a deliberately restricted PATH - one directory, holding `readlink` and no `cygpath` - and reached it through a symlink, which is the `$TOOLS` symlink pattern named under "Scripts excluded, and why" above.
+`PATH=$dir readlink` exits 127 there, because an MSYS binary finds `msys-2.0.dll` through PATH, and a directory carrying only the link is Windows' last-resort DLL search location with none of those DLLs in it.
+The fix is the same everywhere: an exec wrapper, which keeps the real binary running from its own directory where its DLLs sit, so no fixture ever has to know which DLLs a tool needs.
+
+The wrapper is spelled out per file, enumerated here so a site added later has to join a visible list rather than rot against a bare total:
+
+- `tests/fm-crew-state.test.sh` - 1 site, `make_no_timeout_toolbin`, the worked example for the excluded scripts that still carry the symlink form.
+- `tests/fm-windows-portability.test.sh` - 1 site, `stage_tool_for_restricted_path`.
+- `tests/fm-test-run.test.sh` - 1 site, the coreutils staging inside `lfharness_bin`, added by this change's own review rounds.
+
+Hoisting the three copies into one shared helper is deliberately deferred, not forgotten: `tests/fm-lint.test.sh` and `tests/fm-subagent-pretool-check.test.sh` still carry the unfixed symlink form, so the consolidation waits until every call site exists and can move at once instead of half-migrating.
