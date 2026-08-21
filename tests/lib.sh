@@ -284,6 +284,20 @@ expect_code() {
   [ "$actual" = "$expected" ] || fail "$label: expected exit $expected, got $actual"
 }
 
+# expect_driver_ok <status> <label> <output>: assert an embedded driver
+# heredoc (node, python) exited 0 having printed nothing.
+#
+# The captured output is folded into the exit-code failure on purpose. Such a
+# driver reports which of its own assertions tripped by printing that message
+# and exiting non-zero, so asserting the code first and the output second
+# discards the only diagnosable part: a CI log is left with a bare
+# "expected exit 0, got 1" and the reason is unrecoverable after the fact.
+expect_driver_ok() {
+  local status=$1 label=$2 out=$3
+  [ "$status" = 0 ] || fail "$label: expected exit 0, got $status${out:+ - $out}"
+  [ -z "$out" ] || fail "$label: driver printed unexpected output: $out"
+}
+
 # assert_grep <pattern> <file> <msg>: fixed-string grep must match in <file>.
 # `--` guards patterns that begin with '-' (e.g. backlog/registry lines).
 assert_grep() {

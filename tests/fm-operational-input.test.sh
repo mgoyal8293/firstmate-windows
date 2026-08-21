@@ -6,6 +6,7 @@ set -u
 . "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 
 OWNER="$ROOT/bin/fm-operational-input.sh"
+TMP_ROOT=$(fm_test_tmproot fm-operational-input)
 # shellcheck source=/dev/null
 . "$OWNER"
 
@@ -140,6 +141,48 @@ JS
   pass "operational input: the OpenCode adapter constructs through the canonical owner"
 }
 
+test_adapter_survives_an_encoder_that_stops_reading() {
+  local fixture out status
+  fixture="$TMP_ROOT/unreading-encoder"
+  mkdir -p "$fixture/bin"
+  # Any encoder that rejects its arguments exits before it drains the body.
+  cat > "$fixture/bin/fm-operational-input.sh" <<'SH'
+#!/usr/bin/env bash
+exit 3
+SH
+  chmod +x "$fixture/bin/fm-operational-input.sh"
+  # A body past the pipe capacity cannot be handed over in one write, so the
+  # encoder is certainly gone before the adapter finishes writing and the
+  # failing write is deterministic rather than load-dependent.
+  out=$(FM_TEST_ROOT="$fixture" HELPER="$ROOT/.opencode/plugins/lib/fm-operational-input.js" \
+    node --input-type=module 2>&1 <<'JS'
+import { pathToFileURL } from "node:url";
+const { encodeFirstmateOperationalInput } = await import(pathToFileURL(process.env.HELPER).href);
+const body = "x".repeat(1024 * 1024);
+try {
+  await encodeFirstmateOperationalInput(process.env.FM_TEST_ROOT, "watcher", body);
+  console.log("RESOLVED");
+} catch (error) {
+  console.log(`REJECTED ${error.message}`);
+}
+JS
+  )
+  status=$?
+  # An unguarded write turns the refused body into an unhandled stream error
+  # that takes the whole host session down, so surviving at all is the point.
+  [ "$status" = 0 ] \
+    || fail "a refused encoder body killed the adapter's host: exit $status - $out"
+  case $out in
+    *EPIPE*|*"Unhandled 'error' event"*)
+      fail "the refused write escaped as an unhandled stream error: $out" ;;
+  esac
+  case $out in
+    "REJECTED "*) : ;;
+    *) fail "the encoder's own failure was not reported to the caller: $out" ;;
+  esac
+  pass "operational input: an encoder that stops reading fails the call, not the host"
+}
+
 test_invalid_current_encodings_are_rejected() {
   local output
   output=$(printf 'body' | "$OWNER" encode legacy-operational 2>/dev/null) \
@@ -157,4 +200,5 @@ test_landed_untyped_prefix_is_explicitly_legacy
 test_isolated_legacy_matrix
 test_genuine_near_misses_remain_unclassified
 test_cross_language_adapter_uses_the_owner
+test_adapter_survives_an_encoder_that_stops_reading
 test_invalid_current_encodings_are_rejected

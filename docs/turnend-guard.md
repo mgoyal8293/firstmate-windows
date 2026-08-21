@@ -90,6 +90,8 @@ A Claude failure notice describes the automatic mechanism as broken and does not
 
 OpenCode, Pi, and pi-signed expose passive callbacks for this purpose.
 Their adapters fail open at the hook boundary to protect the user session but schedule one bounded follow-up when the predicate blocks.
+That fail-open also covers a guard child that exits before draining the payload written to its stdin: the refused write cannot escalate into an unhandled error that kills the host session, and the child's own verdict remains what the adapter reports.
+`tests/fm-pi-watch-extension.test.sh` pins both guard sites and `tests/fm-operational-input.test.sh` pins the OpenCode prompt encoder that writes to a child the same way; [`verification/watcher-arm-test-budgets.md`](verification/watcher-arm-test-budgets.md) records the evidence.
 The generated prompts use the canonical `turn-end-guard` kind after the U+2063 `FIRSTMATE_OP: ` prefix, so Ahoy does not treat them as captain messages.
 Each passive adapter owns a loop latch.
 Pi keeps the latch across internal tool turns and clears it only when the generated follow-up settles or delivery fails.
