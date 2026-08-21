@@ -64,7 +64,7 @@ Each shard is still strictly serial in itself, and separate runners mean no two 
 `.github/workflows/ci.yml` derives the same `n` from `strategy.job-total` rather than a literal, so changing the shard count in either file without the other fails the lane loudly instead of leaving part of the required suite unrun.
 
 Assignment is longest-processing-time bin packing over per-script duration hints embedded in `bin/fm-test-run.sh`.
-The hints came from the `fm-test-timing-portable-serial` artifacts of green run [32159215212](https://github.com/mgoyal8293/firstmate-windows/actions/runs/32159215212) on 2026-08-19, where the lane ran 116 scripts in 2539694 ms of serial work.
+The hints came from the `fm-test-timing-portable-serial` artifacts of green run [32159215212](https://github.com/mgoyal8293/firstmate-windows/actions/runs/32159215212) on 2026-08-18, where the lane ran 116 scripts in 2539694 ms of serial work.
 A script with no hint gets the conservative `PORTABLE_SERIAL_DEFAULT_WEIGHT_MS` default.
 
 Hints affect balance, not coverage: the coverage guard keeps the partition complete and disjoint whatever they say.
@@ -100,7 +100,7 @@ Nothing currently detects a stale value on a script that already has a hint; `fm
 
 Those four numbers are the packer's own arithmetic over the table above, not a measurement.
 
-Measured on green run [32259417831](https://github.com/mgoyal8293/firstmate-windows/actions/runs/32259417831), the first real lane run with the refreshed hints: all four shards passed, the worst shard fell to 11.67 min from the 13.43 min it took on run [32159215212](https://github.com/mgoyal8293/firstmate-windows/actions/runs/32159215212) - the run whose artifacts supplied these weights - and the spread roughly halved.
+Measured on green run [32259417831](https://github.com/mgoyal8293/firstmate-windows/actions/runs/32259417831), the `DIAG shards` diagnostic workflow that runs the four real shard commands on `ubuntu-latest` and the first measurement of the refreshed hints: all four shards passed, the worst shard fell to 11.67 min from the 13.43 min it took on run [32159215212](https://github.com/mgoyal8293/firstmate-windows/actions/runs/32159215212) - the run whose artifacts supplied these weights - and the spread roughly halved.
 The overflow was removed rather than relocated - no other shard took up the time the worst one gave back.
 The two "before" figures above are two different runs, not one quantity stated twice: 14.68 min is shard 4 on red run 32142691561, and 13.43 min is the worst shard on green run 32159215212.
 
