@@ -122,6 +122,11 @@
 #          keeps detect-only meaning unlocked, exactly as before.
 #        fm-bootstrap.sh install <tool>...
 #          Install the named tools (only ones the captain approved).
+#          Every named tool is attempted even after an earlier one fails; each
+#          failure prints its own line naming that tool, and the exit status is
+#          non-zero if any tool failed. Non-zero therefore means partial
+#          success is possible - read the failure lines rather than assume
+#          nothing installed.
 set -u
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -753,6 +758,15 @@ secondmate_handoff_detect() {
   done
 }
 
+# Single-quote escaping for a string this script's `install` subcommand evals,
+# matching the shell_quote in bin/fm-spawn.sh and bin/fm-brief.sh. Single quotes
+# rather than double so `$` and backticks in a path stay literal.
+shell_quote() {
+  printf "'"
+  printf '%s' "$1" | sed "s/'/'\\\\''/g"
+  printf "'"
+}
+
 install_cmd() {
   # Windows arm first: brew does not exist there, so the generic hint named a
   # package manager the host cannot have. Confirmed live on Windows, where every
@@ -774,6 +788,18 @@ install_cmd() {
     esac
   fi
   case "$1" in
+    # Not a package: the ConPTY session daemon's pinned runtime dependencies,
+    # installed once inside the backend's own directory, which the backend itself
+    # owns and resolves. See docs/conpty-backend.md "Setup".
+    conpty-backend-deps)
+      # The backend owns where its dependencies install, so ask it rather than
+      # re-deriving the path. A checkout too damaged to load the adapter at all
+      # still gets a runnable command for where that directory belongs, because
+      # this line must never be an install hint with no command in it.
+      fm_backend_source conpty >/dev/null 2>&1 \
+        || FM_BACKEND_CONPTY_DIR="$FM_ROOT/bin/backends/conpty"
+      echo "(cd $(shell_quote "$FM_BACKEND_CONPTY_DIR") && npm install --omit=dev)"
+      ;;
     tmux|node|git|gh|curl|jq|orca|zellij) echo "brew install $1  # or the platform's package manager" ;;
     cmux) echo "brew install --cask cmux  # or see https://cmux.com" ;;
     treehouse) echo "curl -fsSL https://kunchenguid.github.io/treehouse/install.sh | sh" ;;
@@ -1122,17 +1148,28 @@ startup_memory_budget_setup() {
 if [ "${1:-}" = "install" ]; then
   shift
   [ $# -gt 0 ] || { echo "usage: fm-bootstrap.sh install <tool>..." >&2; exit 1; }
+  # One captain approval covers the whole list, so every named tool is attempted
+  # even after one fails; the failures are reported per tool and the exit status
+  # stays honest at the end.
+  install_failed=0
   for t in "$@"; do
     if ! cmd=$(install_cmd "$t"); then
-      instructions=$(manual_install_url "$t") || { echo "error: unknown tool $t" >&2; exit 1; }
-      echo "error: $t requires manual installation (instructions: $instructions)" >&2
-      exit 1
+      if instructions=$(manual_install_url "$t"); then
+        echo "error: $t requires manual installation (instructions: $instructions)" >&2
+      else
+        echo "error: unknown tool $t" >&2
+      fi
+      install_failed=1
+      continue
     fi
     cmd=${cmd%%  #*}
     echo "installing $t: $cmd"
-    eval "$cmd"
+    if ! (set -o pipefail; eval "$cmd"); then
+      echo "error: install of $t failed: $cmd" >&2
+      install_failed=1
+    fi
   done
-  exit 0
+  exit "$install_failed"
 fi
 
 # This is the first mutating sweep at a locked session boundary. It pauses an
@@ -1148,6 +1185,7 @@ fi
 # Local detection: presence, version floors, and configuration. Nothing here
 # leaves this machine, so it stays on the session-start critical path.
 detect_local_tools() {
+  local backend_dep
   if [ "$BACKEND_VALID" -eq 0 ]; then
     echo "BACKEND_INVALID: $BACKEND (known: $FM_BACKEND_KNOWN)"
   fi
@@ -1158,6 +1196,19 @@ detect_local_tools() {
   for t in $COMMON_TOOLS; do
     command -v "$t" >/dev/null || missing_tool_diagnostic "$t"
   done
+  # The resolved backend's non-PATH dependency, when it has one (bin/fm-backend.sh
+  # owns which backends do and how each is probed). Without this a conpty home
+  # with no installed daemon dependencies was reported completely healthy and then
+  # refused every spawn - and conpty is what the tmux hint above sends a Windows
+  # user to. Skipped when the backend value itself is invalid, because
+  # BACKEND_INVALID is the actionable line then. Reported after the universal
+  # toolchain because the probe depends on it: on a box with no node yet the
+  # remedy here is an npm install that cannot run, so the line that can must
+  # come first.
+  if [ "$BACKEND_VALID" -eq 1 ] && backend_dep=$(fm_backend_required_dependency "$BACKEND"); then
+    fm_backend_required_dependency_available "$BACKEND" \
+      || missing_tool_diagnostic "$backend_dep"
+  fi
   # The treehouse lease-support upgrade check is only relevant when the resolved
   # backend actually requires treehouse (every backend except orca, which owns its
   # own worktrees); an orca home must not be told to upgrade a provider it never uses.

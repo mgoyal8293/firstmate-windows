@@ -19,6 +19,7 @@ Prerequisites:
 - Node 20 or newer, already part of firstmate's universal toolchain.
 - The daemon's pinned runtime dependencies, installed once: `npm install --omit=dev` in `bin/backends/conpty`.
   They are not vendored because node-pty ships a platform-specific prebuilt binary.
+  That prebuilt `win32-x64` binding is also why the install needs no Visual Studio or node-gyp toolchain on Windows.
 - Git for Windows, for the shell each task session starts in.
 - The universal harness and toolchain requirements in [`configuration.md`](configuration.md#toolchain).
 
@@ -27,6 +28,8 @@ Unlike herdr, zellij, and cmux, this backend adds no `jq` dependency: the sessio
 
 Select it by putting `conpty` in a local `config/backend`, by exporting `FM_BACKEND=conpty`, or by telling the first mate in chat.
 It is never auto-detected — there is no ambient session to detect, because each task's daemon is its own container.
+
+`bin/fm-bootstrap.sh` runs that same dependency probe on a conpty home and reports `MISSING: conpty-backend-deps` with the install command, so a home missing it is no longer reported healthy.
 
 A spawn refuses, before creating a session or a worktree, when the host is not Windows, when `node` is absent, when the daemon's dependencies are not installed, or when the task's session id is already live.
 Verify setup by spawning a small task and confirming its metadata contains `backend=conpty` and a `conpty_session=` line.

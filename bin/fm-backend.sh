@@ -333,6 +333,43 @@ fm_backend_required_tools() {  # <backend>
   esac
 }
 
+# fm_backend_required_dependency / fm_backend_required_dependency_available: the
+# backend-specific dependency that is NOT a PATH command.
+#
+# fm_backend_required_tools above answers "which CLIs must be on PATH", which is
+# the only shape a `command -v` presence loop can check. conpty's real dependency
+# is not a CLI at all: its session daemon needs an npm install inside
+# bin/backends/conpty/, and `node` being on PATH says nothing about whether that
+# install happened. A home missing it passed every check bootstrap had and then
+# could not spawn anything - and conpty is the backend bootstrap itself
+# recommends on Windows, so it is exactly the path a first-time user is steered
+# onto.
+#
+# This is a sibling hook rather than another entry in that flat list because the
+# answer is a capability probe, not a name lookup. The probe is the backend's OWN
+# existing preflight (fm_backend_conpty_version_check, which runs `fmpty.js
+# doctor`), so bootstrap and the spawn-time refusal can never disagree about
+# whether this home can dispatch. It costs one short node process on a conpty
+# home and nothing at all anywhere else.
+fm_backend_required_dependency() {  # <backend>
+  # Prints the name the diagnostic and `fm-bootstrap.sh install` use for this
+  # backend's non-PATH dependency, or returns 1 when the backend has none.
+  case "$1" in
+    conpty) printf '%s' 'conpty-backend-deps' ;;
+    *) return 1 ;;
+  esac
+}
+
+fm_backend_required_dependency_available() {  # <backend>
+  case "$1" in
+    conpty)
+      fm_backend_source conpty >/dev/null 2>&1 || return 1
+      fm_backend_conpty_version_check >/dev/null 2>&1
+      ;;
+    *) return 0 ;;
+  esac
+}
+
 fm_backend_required_tool_available() {  # <backend> <tool>
   local backend=$1 tool=$2 required
   required=$(fm_backend_required_tools "$backend") || return 1

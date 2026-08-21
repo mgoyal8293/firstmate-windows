@@ -475,6 +475,16 @@ line two'
   # conpty must never be auto-detected: there is no ambient session to detect.
   out=$(FM_BACKEND='' fm_backend_detect 2>/dev/null || true)
   [ "$out" != conpty ] || fail "conpty was auto-detected"
+  # The dependency that is NOT a PATH command. `node` is universal and says
+  # nothing about bin/backends/conpty/node_modules, so the flat tools list above
+  # structurally cannot carry this and the sibling hook does.
+  dep=$(fm_backend_required_dependency conpty) \
+    || fail "conpty declares no non-PATH dependency"
+  [ "$dep" = conpty-backend-deps ] || fail "unexpected conpty dependency name: $dep"
+  fm_backend_required_dependency tmux >/dev/null 2>&1 \
+    && fail "tmux must declare no non-PATH dependency"
+  fm_backend_required_dependency_available tmux \
+    || fail "a backend with no non-PATH dependency must read as available"
   pass "conpty is registered as a known, spawn-capable, explicitly-selected backend needing no JSON parser"
 ) || exit 1
 
