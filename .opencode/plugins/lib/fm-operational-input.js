@@ -32,6 +32,12 @@ export function encodeFirstmateOperationalInput(root, kind, content) {
       }
       reject(new Error(stderr.trim() || `operational-input encoder exited ${code ?? "unknown"}`));
     });
+    // The encoder exiting before it drains stdin makes this write fail with
+    // EPIPE on the stdin stream rather than on the ChildProcess, so without a
+    // listener node escalates it to an unhandled error and kills the host.
+    // The close handler above already rejects a non-zero or empty encode, so
+    // the real failure is still reported.
+    child.stdin.on("error", () => {});
     child.stdin.end(content);
   });
 }

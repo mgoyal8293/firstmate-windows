@@ -163,6 +163,11 @@ function runGuard(): Promise<{ code: number; stderr: string }> {
     });
     child.on("error", () => resolveResult({ code: 0, stderr: "" }));
     child.on("close", (code) => resolveResult({ code: code ?? 0, stderr }));
+    // A guard that exits before draining stdin makes this write fail with
+    // EPIPE on the stdin stream rather than on the ChildProcess, so without a
+    // listener node escalates it to an unhandled error and kills the Pi
+    // session. The close handler above already carries the guard's verdict.
+    child.stdin.on("error", () => {});
     child.stdin.end('{"stop_hook_active":false}');
   });
 }
