@@ -103,20 +103,23 @@ printf '# arm child start %sms measured, readiness budget %sms\n' \
 # sleep - setTimeout with FM_TEST_ARM_START_BUDGET_MS and no predicate, which is
 # how the negative cases give an unwanted arm child time to record itself - is
 # pure wall clock, paid in full on the passing path too. There are eight of
-# those, so for them a wide budget does NOT cost nothing: about 3s per run of
-# this file on a workstation, 13.1s at the 328ms start measured on run
-# 32255813826, and 32s at the 800ms start in the 16-spinner load curve.
+# those, so for them a wide budget does NOT cost nothing. TOTAL cost of the
+# eight: 4.0s per run of this file on a workstation, 13.1s at the 328ms start
+# measured on run 32255813826, and 32.0s at the 800ms start in the 16-spinner
+# load curve. DELTA over the 870ms of literals they replaced, at those same
+# three fork costs: 3.1s, 12.3s and 31.1s.
 #
 # The settle sleeps are not the only full-wall-clock term. The readiness budget
 # is the second one: the negative-recovery cases can only conclude by it
-# expiring, so each of the twelve expiries per run of this file is spent in
-# full as well - about 3.0s on a workstation, 16.7s at the 328ms start, and
-# 45.0s at the 800ms start. Combined with the settle sleeps that is roughly 6s,
-# 29s and 76s per run, but ONLY as an increment over a fully pre-fix baseline
+# expiring, so each of the twelve expiries per run of this file is spent in full
+# as well. As a DELTA over the 250ms literal each replaced: 3.0s on a
+# workstation, 16.7s at the 328ms start, and 45.0s at the 800ms start. Added to
+# the settle-sleep DELTAS above - never to their totals - that is roughly 6s,
+# 29s and 76s per run, and ONLY as an increment over a fully pre-fix baseline
 # such as this file's 27802ms weight hint. Against a measurement taken from a
-# tree that already derives the readiness budget, only the settle-sleep term is
-# new. docs/verification/watcher-arm-test-budgets.md owns that arithmetic and
-# the two baselines it applies to.
+# tree that already derives the readiness budget, that tree's own expiries are
+# already inside the measurement. docs/verification/watcher-arm-test-budgets.md
+# owns that arithmetic and the baselines it applies to.
 #
 # Poll cadence is derived from the window it polls rather than left absolute.
 # A fixed 10ms poll inside a derived window makes the failing path noisier the
@@ -147,6 +150,17 @@ printf '# observation slack %sms derived, poll cadence window/%s\n' \
 # about it could drift apart, raising the cap would silently under-count the
 # deadline and report "no wake delivery" for a recovery still on schedule.
 REARM_RETRY_MAX_MS=10
+
+# The inverse bound: the owned-noop scheduled-retry case needs its continuity
+# retry to stay OUTSIDE its own observation rather than expire inside it. That
+# case probes for at most ARM_READY_TIMEOUT_MS + OBSERVE_SLACK_MS and then
+# settles for one more budget, so the backoff has to outrun a fork-cost-derived
+# interval - which no literal can do at every fork cost, however large it looks
+# on the machine it was picked on. Four times that probe window keeps the 3.8x
+# margin the former 10000ms literal happened to hold at the 328ms start measured
+# on run 32255813826, and keeps that ratio at every fork cost instead of only
+# that one.
+SCHEDULED_RETRY_BACKOFF_MS=$(( 4 * (ARM_READY_TIMEOUT_MS + OBSERVE_SLACK_MS) ))
 
 # Shell-side counterparts of the two derivations above, for the one bound in
 # this file that is waited on from bash rather than from a node driver.
@@ -472,7 +486,7 @@ printf 'arm\n' >> "${FM_ARM_LOG:?}"
 exit 0
 SH
   chmod +x "$repo/bin/fm-watch-arm.sh"
-  out=$(PLUGIN="$plugin" FM_HOME="$home" FM_ROOT_OVERRIDE="$repo" FM_ARM_LOG="$log" FM_WATCH_REARM_RETRY_BASE_MS=10000 FM_WATCH_REARM_RETRY_MAX_MS=10000 node --input-type=module 2>&1 <<'EOF'
+  out=$(PLUGIN="$plugin" FM_HOME="$home" FM_ROOT_OVERRIDE="$repo" FM_ARM_LOG="$log" FM_WATCH_REARM_RETRY_BASE_MS="$SCHEDULED_RETRY_BACKOFF_MS" FM_WATCH_REARM_RETRY_MAX_MS="$SCHEDULED_RETRY_BACKOFF_MS" node --input-type=module 2>&1 <<'EOF'
 import { readFileSync, writeFileSync } from "node:fs";
 import { pathToFileURL } from "node:url";
 
