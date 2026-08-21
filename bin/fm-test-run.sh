@@ -1042,7 +1042,7 @@ run_coverage_guard() {
   # script that already has a hint is invisible here
   # (docs/fm-test-portable-shards.md).
   portable_serial_weight_hints | cut -d' ' -f1 | LC_ALL=C sort -u >"$tmp/hinted"
-  comm -23 "$tmp/serial" "$tmp/hinted" >"$tmp/unhinted"
+  LC_ALL=C comm -23 "$tmp/serial" "$tmp/hinted" >"$tmp/unhinted"
 
   printf 'FM_TEST_COVERAGE ok total=%s parallel=%s serial=%s serial_shards=%s herdr=%s unmeasured_serial=%s\n' \
     "$(wc -l <"$tmp/all" | tr -d ' ')" \
