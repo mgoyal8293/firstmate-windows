@@ -1,0 +1,39 @@
+### bin/fm-test-run.sh --list-lanes  (the Windows lane and its CI shards are discoverable)
+portable-parallel-1
+portable-parallel-2
+portable-serial
+portable-serial-1of4
+portable-serial-2of4
+portable-serial-3of4
+portable-serial-4of4
+real-herdr-gated
+windows
+windows-1of4
+windows-2of4
+windows-3of4
+windows-4of4
+
+### bin/fm-test-run.sh --check-coverage  (the guard now proves the Windows overlay too)
+FM_TEST_COVERAGE ok total=152 parallel=24 serial=116 serial_shards=4 herdr=12 unmeasured_serial=0
+FM_TEST_COVERAGE_WINDOWS ok windows=39 windows_shards=4
+
+### The lane names windows-ci.yml builds (windows-${matrix.shard}of${strategy.job-total}) resolved by the real consumer
+windows-1of4 ->  6 scripts, predicted 929s of Git Bash work
+windows-2of4 ->  7 scripts, predicted 928s of Git Bash work
+windows-3of4 -> 13 scripts, predicted 928s of Git Bash work
+windows-4of4 -> 13 scripts, predicted 928s of Git Bash work
+
+lane total: 39 scripts, 3713000 ms = 61.9 min  (docs/fm-test-windows-lane.md claims 61.9 min / 3,713,000 ms)
+unmeasured-script balance hint: mean of the table = 95205 ms, declared WINDOWS_DEFAULT_WEIGHT_MS = 95205
+shard cap check: timeout-minutes=40 over a 15.5 min balanced shard = 2.6x margin (doc claims ~2.6x)
+matrix: shard=[1, 2, 3, 4], job-total=4 -> agrees with WINDOWS_SHARDS=4
+
+### A matrix that disagreed with the runner is refused, not silently short a shard
+$ bin/fm-test-run.sh --lane windows-1of3
+  fm-test-run: lane 'windows-1of3' asks for 3 windows shards but this runner is configured for 4 (see --list-lanes)
+$ bin/fm-test-run.sh --lane windows-5of4
+  fm-test-run: lane 'windows-5of4' shard index is outside 1..4 (see --list-lanes)
+$ bin/fm-test-run.sh --lane windows-0of4
+  fm-test-run: lane 'windows-0of4' shard index is outside 1..4 (see --list-lanes)
+$ bin/fm-test-run.sh --lane windows-xofy
+  fm-test-run: unknown lane 'windows-xofy' (see --list-lanes)

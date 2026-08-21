@@ -1,0 +1,29 @@
+### windows-ci.yml step "Assert the working tree is LF" - real step body, real working tree
+$ bash --noprofile --norc -eo pipefail <step>
+working tree is LF
+exit=0
+
+### the same step on a tree that really does hold a CRLF shell file (tripwire fires)
+tests/dirty.sh
+::error::working tree contains CRLF shell files; the LF checkout config did not take
+exit=1
+
+### windows-ci.yml step "Resolve the test harness PATH" - real step body, this machine's toolchain
+$ bash --noprofile --norc -eo pipefail <step>   (GITHUB_ENV captured)
+harness PATH: /mingw64/bin:/usr/bin:/bin:/usr/local/bin:/usr
+--- harness PATH entries, one per line ---
+  /mingw64/bin
+  /usr/bin
+  /bin
+  /usr/local/bin
+  /usr
+--- reachability of the tools the suite asserts on ---
+git      /usr/bin/git
+node     /usr/bin/node
+gh       /usr/bin/gh
+jq       /usr/bin/jq
+perl     /usr/bin/perl
+exit=0
+
+$ cat $GITHUB_ENV   # what the lane's later steps actually receive
+FM_TEST_BASE_PATH=/mingw64/bin:/usr/bin:/bin:/usr/local/bin:/usr

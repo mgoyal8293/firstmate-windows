@@ -1,0 +1,22 @@
+### Regression: RUNNER_TEMP holding a backslash, exactly as a Windows runner spells it
+RUNNER_TEMP=/tmp/pinprobe/D:\a\_temp
+
+--- BASE df66e63 (digest taken by filename) ---
+$ RUNNER_TEMP='$WINTMP' bin/fm-install-shellcheck.sh <dest>
+fm-install-shellcheck.sh: checksum mismatch for shellcheck-v0.11.0.linux.x86_64.tar.xz (expected 8c3be12b05d5c177a04c29e3c78ce89ac86f1595681cab149b65b97c4e227198, got \8c3be12b05d5c177a04c29e3c78ce89ac86f1595681cab149b65b97c4e227198)
+exit=1
+
+--- TARGET 3a26856 (digest taken through stdin) ---
+$ RUNNER_TEMP='$WINTMP' bin/fm-install-shellcheck.sh <dest>
+tar: /tmp/pinprobe/D\:\a\\_temp/fm-shellcheck.rL1JlQ: Cannot open: No such file or directory
+tar: Error is not recoverable: exiting now
+exit=2
+
+--- TARGET, ordinary Linux temp: the Linux path is unchanged ---
+$ bin/fm-install-shellcheck.sh <dest>
+ShellCheck - shell script analysis tool
+version: 0.11.0
+license: GNU General Public License, version 3
+website: https://www.shellcheck.net
+exit=0
+/tmp/pinprobe/target-linux-dest/shellcheck: ELF 64-bit LSB executable, x86-64, version 1 (SYSV), statically linked, BuildID[sha1]=b26f8179194726f7313fd0bf5cf0f639bbde5023, stripped

@@ -1,0 +1,92 @@
+FM_TEST_BEGIN 2026-08-21T17:21:49Z tests/fm-test-run.test.sh family=pure-contract-unit expected_gate_skip=none
+ok - exact suite coverage: --all lists every tests/*.test.sh once
+ok - family selection returns a proper subset of the suite
+ok - single-script selection lists exactly that path
+ok - changed-file selection stays conservative (never silent full suite)
+ok - changed selection covers dependents and fails closed for unmapped source
+ok - empty changed selection emits deterministic text and JSON summaries
+ok - timing markers and JSON artifact are valid
+ok - python3 probe rejects a resolvable but broken interpreter
+ok - coverage guard pins every comm to a C collation (13 calls)
+ok - aggregate exit reflects any script failure
+ok - gate-skip accounting is honest and non-failing
+ok - fail-on-gate-skip converts herdr-not-found into a hard failure
+ok - exclude-family drops the named primary family after selection
+ok - portable shard union, disjointness, and coverage guard hold
+ok - portable serial shards are a deterministic disjoint cover of the serial lane
+ok - coverage guard counts and names serial scripts with no measured duration
+ok - portable serial shard lanes refuse mismatched, out-of-range, and countless names
+ok - windows shard lanes refuse mismatched, out-of-range, and countless names
+ok - --jobs refuses non-proven / stateful selections
+ok - jobs scheduler runs proven scripts; failure propagates; non-proven refused
+ok - Herdr CI family-run step times out at 20 min under a 75 min job backstop
+ok - windows-ci LF guard detects CRLF at any scale and refuses to certify an unfinished scan
+ok - windows-ci LF steps refuse a CR detector that cannot tell CRLF from LF
+ok - windows-ci harness PATH step fails, and names the tools, when the built PATH cannot reach them
+ok - aggregate-json merges lane timing artifacts
+FM_TEST_END 2026-08-21T17:22:10Z tests/fm-test-run.test.sh exit=0 duration_ms=21335 gate_skip=false
+FM_TEST_BEGIN 2026-08-21T17:22:10Z tests/fm-windows-portability.test.sh family=pure-contract-unit expected_gate_skip=none
+ok - fm_proc_field: reads comm/args/ppid/pgid/sid from the MSYS /proc layout
+ok - fm_proc_field: falls back to ps -o where the /proc scalar files are absent
+ok - fm_proc_field: refuses an empty or non-numeric pid
+ok - fm_proc_field: refuses a field it has no /proc equivalent for
+ok - fm_platform_symlink_probe: proves symlink creation and leaves no residue
+ok - fm_platform_enable_native_symlinks: sets nativestrict on Windows, inert elsewhere, never overrides an explicit choice
+ok - fm_proc_pids_with_cwd_under: finds live processes rooted under a directory and forgets dead ones
+ok - fm_proc_pids_with_cwd_under: an unusable /proc returns failure, not an empty result
+ok - fm_proc_pids_with_cwd_under: a mount-aliased /proc cwd spelling still matches the caller's directory
+ok - fm_proc_pids_holding_path: a mount-aliased /proc fd target still matches the caller's path
+ok - fm_lock_same_path: widens a mount-aliased spelling through cygpath and stays strict everywhere else
+ok - fm_lock_points_to_owner: the strict readlink compare remains the primary, unresolved verdict
+ok - root .gitattributes: a core.autocrlf=true clone still lands LF, and the one binary blob survives
+FM_TEST_END 2026-08-21T17:22:12Z tests/fm-windows-portability.test.sh exit=0 duration_ms=1434 gate_skip=false
+FM_TEST_BEGIN 2026-08-21T17:22:12Z tests/fm-lint.test.sh family=pure-contract-unit expected_gate_skip=none
+ok - fm-lint.sh --list-files reports the complete shell inventory
+ok - fm-lint.sh pins an explicit ShellCheck version (0.11.0)
+ok - ShellCheck installer retries a transient download failure
+ok - ShellCheck installer selects the official archive, URL, and checksum per OS/arch
+ok - ShellCheck installer rejects a wrong checksum
+ok - ShellCheck installer digests its download by content, not by a path a backslash can escape
+ok - ShellCheck installer falls back to shasum -a 256 when sha256sum is absent
+ok - ShellCheck installer prefers sha256sum when both hashers are present
+ok - ShellCheck installer rejects an unsupported OS or architecture
+ok - fm-lint.sh refuses to lint under a non-pinned ShellCheck version
+ok - fm-lint.sh catches a real lint defect the old no-op gate passed
+ok - fm-lint.sh ignores ambient ShellCheck options
+ok - fm-lint.sh passes a clean fixture
+ok - jobs=1 and jobs=2 preserve deterministic diagnostics, failures, cleanup bounds, and quiet telemetry
+ok - jobs=1 and jobs=2 stop complete worker trees with and without telemetry
+ok - seeded dispatcher, adapter, production-owner, and test-local diagnostics preserve parity
+ok - fm-lint.sh changed mode lints only the changed canonical file
+ok - fm-lint.sh forces a full lint in CI even when the local diff would be empty
+ok - fm-lint.sh forces a full lint when HEAD is on main
+ok - fm-lint.sh explicit paths bypass changed-file mode selection
+ok - fm-lint.sh exits 0 with a note when the local branch has no changed lint targets
+ok - fm-lint.sh --list-files reports the would-be changed set in changed mode
+FM_TEST_END 2026-08-21T17:22:13Z tests/fm-lint.test.sh exit=0 duration_ms=1766 gate_skip=false
+FM_TEST_BEGIN 2026-08-21T17:22:13Z tests/fm-lint-workflows.test.sh family=pure-contract-unit expected_gate_skip=none
+ok - fm-lint-workflows.sh pins an explicit actionlint version (1.7.12)
+ok - current .github/workflows YAML files parse
+ok - column-0 heredoc workflow fails validation with a clear error
+ok - valid fixture workflow passes
+ok - empty workflows directory fails closed
+ok - explicit malformed workflow path fails validation
+ok - non-mapping workflow YAML root fails
+ok - missing actionlint fails closed
+ok - fm-lint-workflows.sh refuses to lint under a non-pinned actionlint version
+ok - actionlint installer retries a transient download failure
+ok - actionlint installer selects the official archive, URL, and checksum per OS/arch
+ok - actionlint installer rejects a wrong checksum
+ok - actionlint installer digests its download by content, not by a path a backslash can escape
+ok - actionlint installer falls back to shasum -a 256 when sha256sum is absent
+ok - actionlint installer prefers sha256sum when both hashers are present
+ok - actionlint installer rejects an unsupported OS or architecture
+ok - fm-lint.sh default path catches a self-broken ci.yml
+FM_TEST_END 2026-08-21T17:22:14Z tests/fm-lint-workflows.test.sh exit=0 duration_ms=775 gate_skip=false
+FM_TEST_SUMMARY total=4 failed=0 skipped_gate=0 duration_ms=25432
+FM_TEST_SUMMARY_FAMILY family=pure-contract-unit count=4 duration_ms=25310 failed=0
+FM_TEST_SLOWEST rank=1 script=tests/fm-test-run.test.sh duration_ms=21335
+FM_TEST_SLOWEST rank=2 script=tests/fm-lint.test.sh duration_ms=1766
+FM_TEST_SLOWEST rank=3 script=tests/fm-windows-portability.test.sh duration_ms=1434
+FM_TEST_SLOWEST rank=4 script=tests/fm-lint-workflows.test.sh duration_ms=775
+fm-test-run: wrote timing artifact: /tmp/no-mistakes-evidence/01M0JMD3H94MKKF7SCM5C5QWR6/groupA-runner-lint-portability.json

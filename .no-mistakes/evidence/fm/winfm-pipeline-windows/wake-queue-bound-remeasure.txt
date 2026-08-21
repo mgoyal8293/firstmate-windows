@@ -1,0 +1,18 @@
+### Linux re-measurement of the wake-queue bound (carry-in: re-check every timing claim)
+tests/wake-helpers.sh:wait_for_exit, run against a live pid so the full limit is paid.
+docs/fm-test-windows-lane.md claims 0.106s/iteration on Linux, linear at 40/100/300,
+so WATCHER_EXIT_LIMIT=40 is a 4.24-4.31s bound over a 1.5-1.6s watcher cycle (2.6x).
+
+limit= 40 iterations  elapsed=  4.16s  per-iteration=0.104s  rc=124
+limit=100 iterations  elapsed= 10.46s  per-iteration=0.105s  rc=124
+limit=300 iterations  elapsed= 31.40s  per-iteration=0.105s  rc=124
+
+### The Linux bound is still WATCHER_EXIT_LIMIT=40; the 300 arm is Windows-only
+WATCHER_EXIT_LIMIT=40
+case "$(uname -s)" in
+  MINGW*|MSYS*|CYGWIN*) WATCHER_EXIT_LIMIT=300 ;;
+esac
+
+### tests/wake-helpers.sh is handed back untouched (shared, separately owned)
+$ git diff --stat df66e63..HEAD -- tests/wake-helpers.sh
+(no output = unmodified)

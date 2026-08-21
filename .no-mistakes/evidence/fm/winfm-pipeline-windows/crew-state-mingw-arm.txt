@@ -1,0 +1,20 @@
+### tests/fm-crew-state.test.sh make_no_timeout_toolbin: the added MINGW arm builds exec wrappers, the Linux arm still symlinks
+
+uname -s = Linux  ->  toolbin entries:
+  bash  symbolic link to /usr/bin/bash
+  git   symbolic link to /usr/bin/git
+  perl  symbolic link to /usr/bin/perl
+  PATH=<toolbin only> bash -c 'echo ran' -> ran
+
+uname -s = MINGW64_NT-10.0-26200  ->  toolbin entries:
+  bash  Bourne-Again shell script, ASCII text executable
+  git   Bourne-Again shell script, ASCII text executable
+  perl  Bourne-Again shell script, ASCII text executable
+  PATH=<toolbin only> bash -c 'echo ran' -> ran
+
+### The whole file under a simulated MINGW host (exec-wrapper arm + the scaled 25s bound both engage)
+$ PATH=<mingw uname shim>:$PATH bin/fm-test-run.sh tests/fm-crew-state.test.sh
+FM_TEST_BEGIN 2026-08-21T17:33:15Z tests/fm-crew-state.test.sh family=pure-contract-unit expected_gate_skip=none
+ok - no timeout command uses perl bound
+FM_TEST_END 2026-08-21T17:33:21Z tests/fm-crew-state.test.sh exit=0 duration_ms=5965 gate_skip=false
+assertions: 49 ok, 0 not ok

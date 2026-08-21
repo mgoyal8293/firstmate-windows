@@ -1,0 +1,21 @@
+=== 1. Windows-runner temp path (RUNNER_TEMP holds a backslash), MINGW arm, TARGET 3a26856 ===
+$ RUNNER_TEMP='D:\a\_temp'-shaped dir, uname -s = MINGW64_NT-10.0-26200
+$ bin/fm-install-shellcheck.sh /tmp/pinprobe/win-dest
+ShellCheck - shell script analysis tool
+version: 0.11.0
+license: GNU General Public License, version 3
+website: https://www.shellcheck.net
+exit=0
+$ bin/fm-install-actionlint.sh /tmp/pinprobe/win-dest
+1.7.12
+installed by downloading from release page
+built with go1.26.1 compiler for windows/amd64
+exit=0
+$ ls /tmp/pinprobe/win-dest
+actionlint.exe
+shellcheck.exe
+
+=== 2. Same MINGW host at BASE df66e63: no Windows arm existed ===
+$ bin/fm-install-shellcheck.sh /tmp/pinprobe/base-mingw-dest
+fm-install-shellcheck.sh: unsupported platform MINGW64_NT-10.0-26200-x86_64; need linux or darwin on amd64/x86_64 or arm64/aarch64
+exit=1

@@ -1,0 +1,9 @@
+### What a Windows user's clone now lands: git clone -c core.autocrlf=true (Git for Windows' default)
+$ cd clone && git config core.autocrlf -> true
+CRLF shell files in the clone: none
+shell files scanned: 306
+
+### The one tracked binary blob survives text=auto
+worktree png sha256: 71a0d9cd978c138de73bd284546852e8e5b8b42ab610ebc9cf30bf8d2435e590
+blob     png sha256: 71a0d9cd978c138de73bd284546852e8e5b8b42ab610ebc9cf30bf8d2435e590
+/tmp/pinprobe/autocrlf-clone/assets/banner.png: PNG image data, 1774 x 887, 8-bit/color RGB, non-interlaced

@@ -1,0 +1,607 @@
+FM_TEST_BEGIN 2026-08-21T17:28:26Z tests/fm-afk-return.test.sh family=afk expected_gate_skip=none
+ok - return catch-up precedes Bearings, owns live blocker remediation, preserves evidence once, and clears idempotently
+ok - tmux and Herdr blockers require the same explicit durable reclassification before ordinary work
+ok - needs-decision remains reportable without masquerading as a firstmate-actionable blocker
+ok - AFK return re-drains published wakes until handling acknowledges
+ok - away-mode re-entry fails closed while the prior return catch-up is pending
+ok - check retries recorded terminal teardown and keeps catch-up gated until success
+FM_TEST_END 2026-08-21T17:28:28Z tests/fm-afk-return.test.sh exit=0 duration_ms=1567 gate_skip=false
+FM_TEST_BEGIN 2026-08-21T17:28:28Z tests/fm-ask-user-authority.test.sh family=pure-contract-unit expected_gate_skip=none
+ok - primary workers and secondmates receive the authority rule through generated instructions
+FM_TEST_END 2026-08-21T17:28:28Z tests/fm-ask-user-authority.test.sh exit=0 duration_ms=70 gate_skip=false
+FM_TEST_BEGIN 2026-08-21T17:28:28Z tests/fm-backend-conpty.test.sh family=conpty expected_gate_skip=none
+ok - session ids are scoped by firstmate home (the pipe namespace is machine-global)
+ok - target parsing accepts one atom and refuses anything that could address another pipe
+ok - host gate refuses a non-Windows host loudly instead of failing later in a pty error
+ok - key vocabulary normalizes the spellings callers vary on and passes the rest through
+ok - agent_state passes the daemon's full recovery vocabulary through unchanged
+ok - an unrecognized state word degrades to unreadable, never to a recovery-licensing verdict
+ok - with no state answer the durable record decides even though the client exits nonzero, and a contradictory live pipe stays unreadable
+ok - a malformed target is unreadable, never dead
+ok - the three-state view collapses only authoritative absence to dead
+ok - busy state is a direct output-age measurement with an explicit unknown
+ok - capability descriptor declares styled + true cursor (the first non-tmux backend able to)
+ok - composer verdicts come from the shared classifier, cursor-anchored
+ok - an unusable cursor row refuses loudly instead of classifying the wrong shape
+ok - the composer is read in ONE client call, so the row and screen cannot straddle a redraw
+ok - create_task refuses an existing live session before spawning anything
+ok - create_task spawns a home-scoped shell session and confirms it answers before reporting success
+ok - literal text is delivered by file, so no payload is exposed to Windows command-line quoting
+ok - send_key normalizes then forwards
+ok - capture forwards a numeric scrollback depth and sanitizes anything else
+ok - list_live is scoped to this firstmate home and confirmed by a live ping, never by a stored pid
+ok - a leftover session directory with no answering pipe is not reported live
+ok - kill is best-effort and never forwards a target it could not parse
+ok - a well-formed conpty endpoint validates and reports its backend and target
+ok - a window that disagrees with conpty_session is refused, preserving task state
+ok - an endpoint bound to another task is refused
+ok - a conpty record with no session identifier is refused
+ok - conpty is registered as a known, spawn-capable, explicitly-selected backend needing no JSON parser
+ok - conpty adapter unit tests complete
+FM_TEST_END 2026-08-21T17:28:29Z tests/fm-backend-conpty.test.sh exit=0 duration_ms=961 gate_skip=false
+FM_TEST_BEGIN 2026-08-21T17:28:29Z tests/fm-brief.test.sh family=pure-contract-unit expected_gate_skip=none
+ok - fm-brief.sh: bash -n succeeds
+/tmp/fm-brief.2qfyWx/heredoc-in-substitution.sh:2
+ok - fm-brief.sh: no heredoc is nested inside a command substitution (Bash 3.2 parse-safe)
+ok - fm-brief.sh: --help renders the complete header
+ok - fm-brief.sh: no-mistakes/direct-PR/local-only briefs generate cleanly
+ok - fm-brief.sh: ship --mode is required and closed-set validated
+ok - fm-brief.sh: the explicit ship mode wins over the registered posture
+ok - fm-brief.sh: --yolo and scout/secondmate --mode are refused, never silently dropped
+ok - fm-brief.sh: faster paths use configured authority without stacked review
+ok - fm-brief.sh: no-mistakes DOD keeps its apostrophe prose, now parse-safe
+ok - fm-brief.sh: ship project-memory wording carries the AGENTS.md authoring bar
+ok - fm-brief.sh: --herdr-lab emits the complete hard safety contract
+ok - fm-brief.sh: --herdr-lab uses its quoted Firstmate-owned helper path
+ok - fm-brief.sh: ship and scout scaffolds make omitted Herdr intent fail-visible
+ok - fm-brief.sh: Herdr lab contract covers scouts and rejects secondmate misuse
+ok - fm-brief.sh: --no-projects scaffolds a project-less charter and guards misuse
+ok - fm-brief.sh: marked requests avoid generic acknowledgements and preserve material reporting
+ok - fm-brief.sh: relative directory inputs ignore CDPATH, render stable absolute charter paths, or fail loudly
+ok - fm-brief.sh: custom pause verb renders in every scaffold
+ok - fm-brief.sh: investigation and visual-review completions load the shared decision policy
+ok - fm-brief: scout and secondmate code paths still scaffold well-formed briefs
+FM_TEST_END 2026-08-21T17:28:29Z tests/fm-brief.test.sh exit=0 duration_ms=702 gate_skip=false
+FM_TEST_BEGIN 2026-08-21T17:28:29Z tests/fm-busy-state.test.sh family=unclassified expected_gate_skip=none
+ok - arm mints a gen sidecar and seeds busy fm-spawn at seq=1
+ok - apply advances seq under the armed gen and attributes the writing source
+ok - firstmate-owned interrupt and recovery events bind to the current gen
+ok - apply is refused for a task whose busy contract was never armed
+ok - retire waits for the writer lock and cannot remove a new incarnation
+ok - retire treats only an absent sidecar as already retired
+ok - a late event from a previous incarnation is rejected, record unchanged
+ok - a record from a stale incarnation classifies unknown, never idle
+ok - a converted adapter with no record classifies unknown, never idle
+ok - malformed records classify unknown malformed, never busy or idle
+ok - a record with no armed gen sidecar classifies unknown
+ok - a record is trusted only by the adapter whose source wrote it
+ok - converted adapters never classify busy from rendered footer text
+ok - the grok fallback is regex-scoped to grok and classifies only grok tasks
+ok - codex classifies unknown until a semantic source passes its verification gate
+ok - standalone kimi classifies unknown until the live verification gate opens
+ok - cursor classifies only from its transcript fold, never rendered text or native state
+ok - endpoint death is the only process-level override and yields dead, never busy
+ok - herdr's native verdict is trusted for busy only, and records outrank it
+ok - record parsing never clobbers the caller's positional parameters, glob setting, or fields
+ok - the boolean view reports busy only on an exact busy verdict
+all fm-busy-state tests passed
+FM_TEST_END 2026-08-21T17:28:30Z tests/fm-busy-state.test.sh exit=0 duration_ms=644 gate_skip=false
+FM_TEST_BEGIN 2026-08-21T17:28:30Z tests/fm-calm-pi-extension.test.sh family=pure-contract-unit expected_gate_skip=none
+skip: installed @earendil-works/pi-coding-agent package not found
+ok - Pi calm compatibility evidence never rejects a Pi version for being newer than 0.82.0, and still fails closed on a missing or malformed version
+skip: installed @earendil-works/pi-coding-agent package not found
+ok - missing Pi presentation class exports reach the independent adapter degradation path
+skip: installed @earendil-works/pi-coding-agent package not found
+skip: installed @earendil-works/pi-coding-agent package not found
+skip: installed @earendil-works/pi-coding-agent package not found
+skip: installed @earendil-works/pi-coding-agent package not found
+skip: pi or tmux not found for Pi operational follow-up E2E
+skip: pi or tmux not found for Pi Calm hidden-block geometry E2E
+skip: installed @earendil-works/pi-coding-agent package not found
+skip: pi or tmux not found for Pi calm interactive E2E
+FM_TEST_END 2026-08-21T17:28:30Z tests/fm-calm-pi-extension.test.sh exit=0 duration_ms=192 gate_skip=true
+FM_TEST_BEGIN 2026-08-21T17:28:30Z tests/fm-classify-decision-key.test.sh family=pure-contract-unit expected_gate_skip=none
+ok - a stated [key=X] opens X whether it precedes or follows the verb colon
+ok - a keyless needs-decision still opens and closes the default key
+ok - a resolution closes its decision regardless of either line's key position
+ok - blocked [key=X] opens X in both key positions
+ok - two colon-form keyed decisions never collapse into one shared bucket
+ok - a [key=x] mentioned mid-note is prose, never an opened or closed key
+ok - a malformed stated key is rejected in both positions, never folded as default
+ok - status_line_verb strips every bracket tag before the colon, in any order, and recovers the bare verb
+ok - a [corr=...] tag ahead of [key=...] no longer swallows the verb: opens and closes under the stated key
+ok - a [corr=...] tag with no stated key opens under 'default', exactly like a bare needs-decision line
+ok - a [key=x] tag alone (no corr tag) still opens x - no regression from the tag-stripping fix
+ok - blocked/resolved parse their bare verb with any bracket-tag order preceding the colon
+ok - the incremental fold matches the full fold across appends in both key positions
+FM_TEST_END 2026-08-21T17:28:31Z tests/fm-classify-decision-key.test.sh exit=0 duration_ms=784 gate_skip=false
+FM_TEST_BEGIN 2026-08-21T17:28:31Z tests/fm-claude-stop-autoarm.test.sh family=unclassified expected_gate_skip=none
+ok - auto-arm: inert in a linked child worktree even when in-flight
+ok - auto-arm: inert with no session lock
+ok - auto-arm: a demonstrably dead recorded session owner is reclaimed through fm-lock.sh before arming
+ok - auto-arm: inert without arm, rewake, or lock replacement when another live harness owns the home
+ok - auto-arm: inert while AFK owns supervision
+ok - auto-arm: stale-owner recovery leaves the AFK and supervision-need gates unchanged
+ok - auto-arm: resolves the outermost pid of a nested contiguous claude ancestry (bg-spare chain)
+ok - auto-arm: inert with nothing in flight and no X-mode need
+ok - auto-arm: actionable close translates to exactly one exit-2 rewake with reason
+ok - auto-arm: actionable close survives a healthy successor without duplicate delivery
+ok - auto-arm: bounded failure verification emits one automatic-mechanism alarm
+ok - auto-arm: consecutive failures keep Stop-owned retry without repeating notice
+ok - auto-arm: unverified clean close exhausts retries and fails closed
+ok - auto-arm: post-alarm actionable outcomes cannot continue or reset failure state
+ok - auto-arm: benign cycle end with a live watcher and fresh beacon stays silent across the next cycle
+ok - auto-arm: budget contention preserves the episode and forces a reset retry
+ok - auto-arm: X-mode poll need arms the cycle even with no tasks in flight
+ok - auto-arm: concurrent firings admit one owner and one rewake translation
+ok - auto-arm: need vanishing mid-cycle closes without a rewake
+ok - auto-arm: mid-cycle AFK hands triage to the daemon with no rewake
+ok - auto-arm: active in a marked secondmate home
+ok - fm-lock: shared session-lock lib preserves the status path
+FM_TEST_END 2026-08-21T17:29:32Z tests/fm-claude-stop-autoarm.test.sh exit=0 duration_ms=60460 gate_skip=false
+FM_TEST_BEGIN 2026-08-21T17:29:32Z tests/fm-composer-ghost.test.sh family=pure-contract-unit expected_gate_skip=none
+ok - fm_tmux_strip_ghost drops dim/faint runs, keeps normal and bold text
+ok - fm_tmux_strip_ghost handles combined SGR, ESC[22m, and reset-then-dim
+ok - fm_tmux_strip_ghost keeps bright colored text with 2 payloads
+ok - fm_tmux_strip_ghost drops a dark/muted truecolor foreground (grok placeholder)
+ok - fm_tmux_strip_ghost keeps muse's near-threshold glyph and its typed text
+ok - fm_pane_input_pending: a dim ghost-only composer is NOT pending
+ok - fm_pane_input_pending: dim ghost inside a bordered composer is NOT pending
+ok - fm_pane_input_pending: normal-intensity typed text is still pending
+ok - fm_pane_input_pending: bright colored text with 2 payloads is still pending
+ok - fm_pane_input_pending: a dark truecolor ghost-only composer (grok placeholder) is NOT pending
+ok - fm_tmux_composer_state: dark truecolor shell prompts read unknown
+ok - fm_pane_input_pending: real text plus a trailing ghost run is still pending
+ok - fm_tmux_composer_state: text above an empty cursor row is pending
+ok - fm_tmux_composer_state: a message wrapped across three rows is pending
+ok - fm_tmux_composer_state: a proven titled box tolerates a bottom-border cursor
+ok - fm_tmux_composer_identity: unknown busy state cannot become idle identity
+ok - fm_tmux_composer_state: typed Pi and Grok busy signatures inside a box are pending
+ok - fm_tmux_composer_state: a bare busy-footer row reads unknown (strict container-proof rule)
+ok - fm_tmux_composer_state: an unbounded bordered box fails closed as unknown
+ok - fm_tmux_composer_state: clipped and asymmetric composer edges fail closed
+ok - fm_tmux_composer_state: inconsistent box geometry fails closed
+ok - fm_tmux_composer_state: misaligned box bounds fail closed
+ok - fm_tmux_composer_state: unproved ghost and malformed geometry stay unknown while styled placeholder-like text stays pending-unproven
+ok - fm_tmux_composer_state: differing widths prefer pending or unknown, never empty
+ok - fm_tmux_composer_state: emoji and CJK text remain pending under the C locale
+ok - fm_tmux_composer_state: all tmux harnesses share empty and pending classification
+ok - fm_pane_input_pending: unrecognized states defer by default
+ok - fm_tmux_composer_state: one capture feeds the classifier; no band-capture race remains
+ok - fm_tmux_composer_state: absent Pi identity preserves Claude's enclosed bare verdict
+ok - fm_tmux_composer_state: only proven structural and non-bordered empty routes stay empty
+ok - fm_tmux_composer_state: panes without bordered structure retain compatibility fallback
+ok - fm_tmux_composer_state: interior edge glyphs retain non-bordered fallback
+ok - fm-peek output is escape-free (no raw -e bytes reach firstmate context)
+FM_TEST_END 2026-08-21T17:29:33Z tests/fm-composer-ghost.test.sh exit=0 duration_ms=1405 gate_skip=false
+FM_TEST_BEGIN 2026-08-21T17:29:33Z tests/fm-composer-lib.test.sh family=pure-contract-unit expected_gate_skip=none
+ok - fm_composer_classify_content: a bare shell prompt glyph (>/$/%/#) reads unknown, never empty
+ok - fm_composer_classify_content: stripped unbordered content is unknown except verified agent glyphs
+ok - fm_composer_classify_content: a bare shell prompt carrying a command is not empty
+ok - fm_composer_classify_content: a bare prompt glyph inside a bordered composer box reads empty (claude's own idle composer)
+ok - fm_composer_classify_content: agent prompt glyphs (❯ claude, › codex, ⟩ muse) read empty bordered or bare
+ok - fm_composer_classify_content: an empty composer reads empty
+ok - fm_composer_classify_content: idle matching is limited to proven placeholder positions
+ok - fm_composer_classify_content: idle matching preserves the caller's case mode
+ok - fm_composer_classify_content: real unsubmitted text reads pending (including a popup argument-hint fill)
+ok - matrix: claude's ❯+NBSP row reads empty on every profile in both locales (#1988)
+ok - matrix: codex's dim hint is empty when styling proves it, unknown (never pending) when it cannot
+ok - matrix: muse's ⟩ reads empty everywhere and survives losing the styled-glyph signal
+ok - matrix: cursor's reverse-video placeholder remnant reads empty; real typed text stays pending
+ok - matrix: herdr half-block rules bound a bare composer's wrap region
+ok - matrix: pi's separated composer needs identity + structure; the blank row alone never proves it
+ok - matrix: opencode's left-bar composer reads empty everywhere and scans the full active run
+ok - matrix: grok's titled bottom border is tolerated as a title, not read as ambiguity
+ok - matrix: kimi's bordered shell-glyph box reads empty through the shared owner (spawn's fourth copy retired)
+ok - matrix: the real claude-in-zellij --ansi dump reads empty in both locales
+ok - strict posture: blank and unidentified rows are unknown, never injectable empty
+ok - fm_composer_classify_screen: the bare composer's wrap region stays identified; structure breaks it
+ok - fm_composer_classify_screen: a row-leading agent glyph reanchors the live composer
+ok - fm_composer_classify_screen: a lower dead shell invalidates only cursorless stale composers
+ok - fm_composer_classify_screen: cursorless bare wrap regions participate in verdicts
+ok - fm_composer_classify_screen: cursorless containers reject only contiguous unclaimed activity
+ok - fm_composer_classify_screen: the bottom-most candidate wins; stale banners cannot
+ok - fm_composer_classify_screen: incomplete lower structure invalidates stale boxes
+ok - fm_composer_classify_screen: titled bottoms retain full box geometry
+ok - fm_composer_classify_screen: a proven box tolerates a bottom-border cursor
+ok - fm_composer_extract_selected_content: scopes user content and excludes furniture
+FM_TEST_END 2026-08-21T17:29:36Z tests/fm-composer-lib.test.sh exit=0 duration_ms=2973 gate_skip=false
+FM_TEST_BEGIN 2026-08-21T17:29:36Z tests/fm-crew-state.test.sh family=pure-contract-unit expected_gate_skip=none
+ok - active run-step is authoritative
+ok - stale needs-decision over active run is superseded
+ok - stale blocked over active run is superseded
+ok - genuine parked run is not flagged superseded
+ok - scalar gate parked run is not flagged superseded
+ok - gate block parked run is not flagged superseded
+ok - ci-ready status log beats monitoring run
+ok - ci-monitoring run with checks already green surfaces done
+ok - top-level ci status uses ci log green marker
+ok - terminal no-checks ci-monitor marker surfaces done
+ok - base-advance rearm after green stays working
+ok - pending no-checks ci-monitor marker stays working
+ok - ci-monitoring run with checks not yet green stays working
+ok - a fresh issue after an earlier green reading is not masked
+ok - stale checks-green status log does not mask CI relapse
+ok - ci fixing is not overridden by an earlier green marker
+ok - top-level fixing is not overridden by a stale ci running row
+ok - top-level fixing is not overridden by a stale done log
+ok - terminal passed run is authoritative
+ok - terminal failed run is authoritative
+ok - cross-branch run is attributed via the real runs list
+ok - cross-branch attribution picks the branch's most recent row
+ok - coarse run does not probe another branch's ci log
+ok - another branch's run is ignored, falls back
+ok - no run + a busy semantic record reads working, attributed to its source
+ok - a converted adapter never reads working from rendered footer text
+ok - grok still reads working through its isolated rendered-tail fallback
+ok - herdr's native busy verdict reads working with no record present
+ok - a mid-tool-call crew stays working because its record outranks herdr's generation state
+ok - an idle record with idle agent_status stays not-busy (no regression for a human-blocked agent)
+ok - no run + idle pane uses the status-log verb
+ok - no run + idle pane parses keyed status syntax
+ok - no run + idle pane on a paused: status reports state: paused with its reason
+ok - no run + idle pane honors the configured paused verb
+ok - a trailing resolved: event does not corrupt state render (idle stays idle)
+ok - dead window ignores stale status log
+ok - closed pane still reports a terminal run-step
+ok - closed pane still reports an active run-step
+ok - no timeout command uses perl bound
+ok - scout skips the run lookup
+ok - torn-down worktree is handled gracefully
+ok - missing meta is handled gracefully
+ok - crew_is_provably_working absorbs a validating crew found only via the runs-list fallback
+ok - crew_is_provably_working still surfaces a genuinely stopped crew (safety property preserved)
+ok - usage error exits 2
+ok - historical same-branch rewritten head is not attributed as current
+ok - active run with valid descendant fix head remains current
+ok - local work advanced past run head invalidates attribution
+ok - missing run head falls back instead of matching by branch
+all fm-crew-state tests passed
+FM_TEST_END 2026-08-21T17:29:41Z tests/fm-crew-state.test.sh exit=0 duration_ms=5376 gate_skip=false
+FM_TEST_BEGIN 2026-08-21T17:29:41Z tests/fm-decision-hold-lifecycle.test.sh family=pure-contract-unit expected_gate_skip=none
+ok - report-only unresolved decision is reproduced and completion refuses before loss
+ok - non-forced scout teardown always requires durable inventory verification
+ok - a declined decision closes with a recorded answer and no routed work
+ok - a decision closed outside the script is repairable and then clears teardown
+ok - an unanswered decision still blocks completion and resists both unrouted close paths
+ok - captain holds are idempotent, distinct, teardown-safe, Bearings-visible, and durably routed before close
+ok - completion and verification validate origins before constructing paths
+ok - ended visual review follows the same decision-hold completion owner
+ok - resolved findings and decision-like prose do not create false holds
+ok - terminal single-owner stale status decisions do not block empty inventory
+ok - main-home and secondmate-home captain holds remain correctly routed
+ok - resolve matches first/middle/last in quoted blocked_by and rejects a genuinely absent id
+ok - a bound channel's captured answers close their captain holds at answer time
+ok - a channel source with no decision binding closes nothing
+ok - the answer path keeps every guard the unrouted close path already had
+ok - the chat channel feeds the same keyed-answer intake a captured review does
+FM_TEST_END 2026-08-21T17:30:36Z tests/fm-decision-hold-lifecycle.test.sh exit=0 duration_ms=54190 gate_skip=false
+FM_TEST_BEGIN 2026-08-21T17:30:36Z tests/fm-gate-refuse.test.sh family=session-bootstrap expected_gate_skip=none
+ok - fm-gate-refuse-lib: refuses when NO_MISTAKES_GATE is set
+ok - fm-gate-refuse-lib: refuses when NO_MISTAKES_GATE is set empty
+ok - fm-gate-refuse-lib: refuses from a gate worktree via git-common-dir (marker unset)
+ok - fm-gate-refuse-lib: no-op for a normal session (neither signal, set -eu clean)
+ok - fm-spawn: refuses on marker and gate-worktree backstop; a normal crew spawn is unaffected
+ok - fm-send: refuses on marker and gate-worktree backstop; a normal steer is unaffected
+ok - fm-teardown: refuses on marker and gate-worktree backstop; a normal teardown is unaffected
+FM_TEST_END 2026-08-21T17:30:39Z tests/fm-gate-refuse.test.sh exit=0 duration_ms=3556 gate_skip=false
+FM_TEST_BEGIN 2026-08-21T17:30:39Z tests/fm-gitignore-config.test.sh family=unclassified expected_gate_skip=none
+ok - config/ is ignored as a directory, covering unlisted and nested paths
+ok - an unrelated path outside config/ remains visible to git
+FM_TEST_END 2026-08-21T17:30:39Z tests/fm-gitignore-config.test.sh exit=0 duration_ms=32 gate_skip=false
+FM_TEST_BEGIN 2026-08-21T17:30:39Z tests/fm-gotmp.test.sh family=session-bootstrap expected_gate_skip=none
+ok - fm-teardown removes the dir pointed to by tasktmp= in meta
+ok - fm-teardown skips gracefully when tasktmp= is absent (backward compat)
+ok - fm-teardown skips gracefully when tasktmp= points to a nonexistent dir
+FM_TEST_END 2026-08-21T17:30:40Z tests/fm-gotmp.test.sh exit=0 duration_ms=828 gate_skip=false
+FM_TEST_BEGIN 2026-08-21T17:30:40Z tests/fm-herdr-session-cleanup.test.sh family=backend-dispatch expected_gate_skip=none
+ok - process proof reads Linux Herdr argv arrays and rejects malformed executable identities
+ok - exact stale projection closes one exact pane under task then presentation locks
+ok - successful cleanup is idempotent on repeat
+ok - malformed title preserves the candidate
+ok - missing token preserves the candidate
+ok - malformed journal preserves the candidate
+ok - duplicate token preserves the candidate
+ok - duplicate title token preserves the candidate
+ok - zero journal match preserves the candidate
+ok - multiple journal matches preserves the candidate
+ok - cross-home journal preserves the candidate
+ok - v2 workspace binding mismatch preserves the candidate
+ok - v2 tab binding mismatch preserves the candidate
+ok - v2 pane binding mismatch preserves the candidate
+ok - v2 cleanup requires and accepts the exact journal endpoint binding
+ok - current task metadata preserves the candidate
+ok - registered agent preserves the candidate
+ok - unknown agent preserves the candidate
+ok - multiple tabs preserves the candidate
+ok - multiple panes preserves the candidate
+ok - non-idle shell preserves the candidate
+ok - child process or shell job preserves the candidate
+ok - unreadable snapshot preserves the candidate
+ok - unreadable topology check preserves the candidate
+ok - revalidation race preserves the candidate
+ok - active target preserves the candidate
+ok - focus refusal preserves the candidate
+ok - standalone bootstrap cannot run lock-owned stale projection cleanup
+ok - session start runs cleanup only after acquiring its home lock
+all fm-herdr-session-cleanup tests passed
+FM_TEST_END 2026-08-21T17:30:47Z tests/fm-herdr-session-cleanup.test.sh exit=0 duration_ms=7242 gate_skip=false
+FM_TEST_BEGIN 2026-08-21T17:30:47Z tests/fm-pr-merge.test.sh family=pr-forge expected_gate_skip=none
+ok - fm-pr-merge records pr= and pr_head= before invoking gh-axi pr merge
+ok - fm-pr-merge propagates a real merge failure without silently succeeding
+ok - fm-pr-merge forwards extra flags to gh-axi pr merge after the -- separator
+ok - fm-pr-merge refuses before merging when task meta is missing
+ok - fm-pr-merge refuses malformed PR URLs before calling gh-axi
+ok - fm-pr-merge refuses unsafe PR URL segments before recording state
+ok - fm-pr-merge refuses repo override args before recording state
+ok - fm-pr-merge does not add default --squash when the caller passes an explicit merge method
+ok - fm-pr-merge respects --method=<value> as an explicit merge method
+ok - fm-pr-merge parses a GitHub PR URL into gh-axi number and --repo arguments
+FM_TEST_END 2026-08-21T17:30:51Z tests/fm-pr-merge.test.sh exit=0 duration_ms=3694 gate_skip=false
+FM_TEST_BEGIN 2026-08-21T17:30:51Z tests/fm-pr-private-file-mode.test.sh family=pure-contract-unit expected_gate_skip=none
+ok - fm_pr_file_mode_is: the exact-mode assertion stays strict wherever chmod round-trips
+ok - fm_pr_file_mode_is: waives the exact-mode assertion only where the filesystem provably cannot express it
+ok - fm_pr_mode_enforced: a no-op chmod reads as not-enforcing even though mktemp already created the probe at 0600
+ok - fm_pr_private_file_valid: device pin, symlink refusal and link-count 1 all survive the waived mode assertion
+FM_TEST_END 2026-08-21T17:30:51Z tests/fm-pr-private-file-mode.test.sh exit=0 duration_ms=142 gate_skip=false
+FM_TEST_BEGIN 2026-08-21T17:30:51Z tests/fm-project-origin.test.sh family=unclassified expected_gate_skip=none
+ok - ordinary clone URLs are accepted and clone with the command the remote host runs
+ok - executable transports, option-shaped values, and unusable spellings are refused
+ALL TESTS PASSED
+FM_TEST_END 2026-08-21T17:30:51Z tests/fm-project-origin.test.sh exit=0 duration_ms=112 gate_skip=false
+FM_TEST_BEGIN 2026-08-21T17:30:51Z tests/fm-remote-entrypoint.test.sh family=unclassified expected_gate_skip=none
+ok - fm-remote-entrypoint.sh invoked via a PATH symlink resolves SCRIPT_DIR to the real bin/ directory
+ok - fm-remote-entrypoint.sh invoked directly still resolves SCRIPT_DIR correctly
+FM_TEST_END 2026-08-21T17:30:52Z tests/fm-remote-entrypoint.test.sh exit=0 duration_ms=99 gate_skip=false
+FM_TEST_BEGIN 2026-08-21T17:30:52Z tests/fm-review-diff.test.sh family=pr-forge expected_gate_skip=none
+ok - fm-review-diff falls back to recorded pr_head when pull head cannot be fetched
+ok - fm-review-diff fetches refs/pull/<n>/head when pr_head= is absent
+ok - fm-review-diff prefers freshly fetched PR head over a stale recorded pr_head=
+ok - fm-review-diff without pr= keeps the worktree-branch diff
+ok - fm-review-diff falls back to local branch with a warning when PR head is unreachable
+FM_TEST_END 2026-08-21T17:30:52Z tests/fm-review-diff.test.sh exit=0 duration_ms=814 gate_skip=false
+FM_TEST_BEGIN 2026-08-21T17:30:52Z tests/fm-send-popup-settle.test.sh family=pure-contract-unit expected_gate_skip=none
+ok - fm-send popup-settle: codex $skill -> long settle -> 1.2s
+ok - fm-send popup-settle: codex $skill exact task id -> long settle -> 1.2s
+ok - fm-send popup-settle: claude $-message -> fast path -> 0.3s
+ok - fm-send popup-settle: claude "$5/month" -> fast path -> 0.3s
+ok - fm-send popup-settle: explicit target $message -> fast path (unknown harness) -> 0.3s
+ok - fm-send popup-settle: claude /command -> long settle (slash unchanged) -> 1.2s
+ok - fm-send popup-settle: codex /command -> long settle (slash unchanged) -> 1.2s
+ok - fm-send popup-settle: codex plain text -> fast path -> 0.3s
+FM_TEST_END 2026-08-21T17:30:54Z tests/fm-send-popup-settle.test.sh exit=0 duration_ms=1931 gate_skip=false
+FM_TEST_BEGIN 2026-08-21T17:30:54Z tests/fm-send-settle.test.sh family=pure-contract-unit expected_gate_skip=none
+ok - fm-send: a successful text send pauses the default 1s after submit
+ok - fm-send: FM_SEND_SETTLE=0 produces no settle pause
+ok - fm-send: the settle pause is tunable via FM_SEND_SETTLE
+ok - fm-send: the --key path never pauses (settle scoped to text submit)
+ok - fm-send: a successful Claude Escape records the interrupt lifecycle edge
+FM_TEST_END 2026-08-21T17:30:55Z tests/fm-send-settle.test.sh exit=0 duration_ms=957 gate_skip=false
+FM_TEST_BEGIN 2026-08-21T17:30:55Z tests/fm-send-strict.test.sh family=backend-dispatch expected_gate_skip=none
+ok - fm-send strict: exact task/lane ids resolve through home metadata
+ok - fm-send --key: exit status follows delivery, and an undelivered key never reports success
+ok - fm-send strict: unset FM_HOME fails before target resolution
+ok - fm-send strict: unresolvable selectors do not fall back to tmux
+ok - fm-send strict: prefixless herdr pane ids are rejected before tmux fallback
+ok - fm-send strict: unmatched single-colon explicit targets must verify live before sending
+ok - fm-send strict: fm-prefixed Herdr sessions remain explicit backend targets
+ok - fm-send strict: healthy fm-<id> sends still type once and submit
+FM_TEST_END 2026-08-21T17:30:57Z tests/fm-send-strict.test.sh exit=0 duration_ms=1497 gate_skip=false
+FM_TEST_BEGIN 2026-08-21T17:30:57Z tests/fm-spawn-batch.test.sh family=backend-dispatch expected_gate_skip=none
+ok - batch dispatch re-execs and reports every id=repo pair
+ok - batch detection: single pair batches, non-pair rejected, single-task and slash-id stay single
+ok - batch dispatch requires the shared ship delivery contract before any pair runs
+ok - scout batch refuses ship delivery flags instead of ignoring them
+ok - projects/ paths are scoped through the firstmate home for single-task spawn
+FM_TEST_END 2026-08-21T17:30:58Z tests/fm-spawn-batch.test.sh exit=0 duration_ms=1419 gate_skip=false
+FM_TEST_BEGIN 2026-08-21T17:30:58Z tests/fm-spawn-pool-base-freshen.test.sh family=unclassified expected_gate_skip=none
+ok - a stale pooled worktree refreshes to current origin/main before a crew branch is created
+ok - a stale pooled worktree resolves and refreshes a non-main default branch
+ok - direct-PR ships and scouts both refresh stale pooled worktrees before launch
+ok - a dirty pooled worktree is refused without discarding its local work
+ok - an unresolved remote default branch refuses the pooled worktree
+ok - an unreachable origin refuses a potentially stale pooled worktree
+# all fm-spawn-pool-base-freshen tests passed
+FM_TEST_END 2026-08-21T17:31:12Z tests/fm-spawn-pool-base-freshen.test.sh exit=0 duration_ms=13727 gate_skip=false
+FM_TEST_BEGIN 2026-08-21T17:31:12Z tests/fm-supervision-events.test.sh family=watcher-wake-lock expected_gate_skip=none
+ok - handle_push_transition: a blocked crew enqueues a stale wake naming its window and wakes the supervisor
+ok - handle_push_transition: enqueue failure cannot commit the Herdr dedupe marker
+ok - handle_push_transition: a declared-pause crew is absorbed (no fast wake), left to the poll loop's long cadence
+ok - event_wait_or_sleep: herdr windows go on the event pane list, but kind=secondmate endpoints are excluded
+ok - event_wait_or_sleep: one cached capability probe owns validation across bounded waits
+ok - event_wait_or_sleep: a home with no push-capable window is inert (sleeps POLL, never touches the event path)
+ok - event_wait_or_sleep: consecutive event-path failures disable the fast-path and revert to pure polling (fail-closed)
+# fm-supervision-events.test.sh: all assertions passed
+FM_TEST_END 2026-08-21T17:31:13Z tests/fm-supervision-events.test.sh exit=0 duration_ms=516 gate_skip=false
+FM_TEST_BEGIN 2026-08-21T17:31:13Z tests/fm-supervision-instructions.test.sh family=pure-contract-unit expected_gate_skip=none
+ok - renderer prints exactly the selected harness block
+ok - renderer falls back to unknown.md for unverified harness names
+ok - renderer includes read-only, afk, and effective x-mode current-state stanzas
+ok - renderer repair-line mode is harness-aware and honors conditional state
+ok - renderer preserves every harness ordinary-continuation and missing-cycle repair path
+ok - pi-signed keeps its identity while sharing Pi's supervision protocol
+ok - grok supervision is Claude-shaped background notify with passive Stop-hook backstop
+ok - grok rendered command sources the effective x-mode config
+ok - pi supervision snippet renders the effective extension path
+FM_TEST_END 2026-08-21T17:31:13Z tests/fm-supervision-instructions.test.sh exit=0 duration_ms=246 gate_skip=false
+FM_TEST_BEGIN 2026-08-21T17:31:13Z tests/fm-tangle-guard.test.sh family=session-bootstrap expected_gate_skip=none
+ok - fm_primary_tangle_branch: feature branch alarms; default/detached/non-git stay silent
+ok - fm-guard: bordered tangle banner fires only for a feature branch and suppresses repair commands in read-only mode
+ok - fm-bootstrap: TANGLE problem line fires only for a feature branch and suppresses repair commands in detect-only mode
+ok - fm-brief: ship brief asserts worktree isolation before the branch step
+ok - fm-spawn: aborts unless the resolved worktree is a genuine, isolated worktree
+ok - fm-spawn: appends windows by session-colon, pins the name, and targets the window id
+FM_TEST_END 2026-08-21T17:31:24Z tests/fm-tangle-guard.test.sh exit=0 duration_ms=10565 gate_skip=false
+FM_TEST_BEGIN 2026-08-21T17:31:24Z tests/fm-task-delivery.test.sh family=pure-contract-unit expected_gate_skip=none
+ok - fm-spawn: a ship spawn requires a valid explicit mode and yolo before anything is created
+ok - fm-spawn: scout and secondmate spawns refuse ship delivery flags
+ok - fm-spawn: the brief's recorded mode and the spawn's explicit mode must agree
+ok - fm-spawn: a rigor downgrade against the registered posture is announced, never blocked
+ok - fm-spawn: a scout spawn resolves no delivery posture from the registry
+ok - fm-promote: promotion requires the delivery contract and records it exactly once
+ok - fm-project-mode: the conditional policy is accepted, mapped for mechanical callers, and readable raw
+# all fm-task-delivery tests passed
+FM_TEST_END 2026-08-21T17:31:26Z tests/fm-task-delivery.test.sh exit=0 duration_ms=2112 gate_skip=false
+FM_TEST_BEGIN 2026-08-21T17:31:26Z tests/fm-test-fixture-cleanup.test.sh family=unclassified expected_gate_skip=none
+ok - fm_test_tmproot cleans up its fixture root on normal exit
+ok - fm_test_tmproot cleans up its fixture root on SIGTERM
+ok - the cleanup registry cannot be injected through path precreation
+ok - failed fixture registration rolls back the new root
+ok - the orphan sweep reaps only old fixtures without a live owner
+FM_TEST_END 2026-08-21T17:31:26Z tests/fm-test-fixture-cleanup.test.sh exit=0 duration_ms=567 gate_skip=false
+FM_TEST_BEGIN 2026-08-21T17:31:26Z tests/fm-test-isolation-proof.test.sh family=pure-contract-unit expected_gate_skip=none
+ok - candidate --list is non-empty, sorted, unique, and real
+ok - serial classes remain excluded from the parallel candidate set
+ok - audited fake-backend and stub-network extras are candidates
+ok - exclusion list documents serial reasons
+ok - isolation-proof contract test is family-mapped
+ok - parallel shards consume the proven-isolated set only
+FM_TEST_END 2026-08-21T17:31:27Z tests/fm-test-isolation-proof.test.sh exit=0 duration_ms=449 gate_skip=false
+FM_TEST_BEGIN 2026-08-21T17:31:27Z tests/fm-tmux-submit-busy.test.sh family=pure-contract-unit expected_gate_skip=none
+ok - fm_tmux_submit_enter_core: busy pane + pending composer returns empty (message queued)
+ok - fm_tmux_submit_enter_core: idle pane + pending composer stays pending (genuine swallow preserved)
+ok - fm_tmux_submit_enter_core: wrapped input retains swallowed-Enter retries
+ok - fm_tmux_submit_enter_core: placeholder-like bare input retains swallowed-Enter retries
+ok - fm_tmux_submit_enter_core: busy pane clears composer on first Enter - returns empty
+ok - fm_tmux_submit_enter_core: idle pane clears composer on first Enter - returns empty as before
+ok - fm_tmux_submit_enter_core: busy conversion is limited to proven pending input
+ok - fm_tmux_submit_core: failed baseline capture disables busy unknown conversion
+ok - fm_tmux_submit_enter_core: pending-unproven retries without busy conversion
+ok - fm_tmux_submit_enter_core: unrecognized states skip busy conversion
+ok - fm_pane_is_busy: Claude spinner is scoped, multi-frame, and backward-compatible
+FM_TEST_END 2026-08-21T17:31:29Z tests/fm-tmux-submit-busy.test.sh exit=0 duration_ms=2681 gate_skip=false
+FM_TEST_BEGIN 2026-08-21T17:31:29Z tests/fm-trace-context-lib.test.sh family=pure-contract-unit expected_gate_skip=none
+ok - fm_trace_context_valid accepts a conformant W3C traceparent
+ok - fm_trace_context_valid rejects all-zero ids, ff version, uppercase, wrong length, missing field, shell metacharacters, and empty
+ok - a command-substitution-shaped value is rejected as inert data, never executed
+ok - fm_trace_context_hex yields exact-length lowercase hex, distinct per call
+ok - fm_trace_context_mint starts a valid sampled root trace
+ok - every mint is an unrelated fresh root - one trace per task, no parent adoption
+ok - a minted root is the fixed 55-char W3C form (hex and hyphens only), so firstmate originates no free-form content in the carrier
+ok - enablement is default-off; FM_TRACE_CONTEXT overrides with truthy/other precedence, and unset or empty defers to config/trace-context
+ok - session start normalizes config and environment precedence into frozen on/off state
+ok - session state is atomically published through a same-directory replacement
+ok - a stale on record is inactive when publication fails in a new locked session
+ok - missing or invalid frozen session state defaults off
+ok - resolve omits the carrier and returns success when the capability is off (byte-identical default)
+ok - resolve mints a valid traceparent when enabled
+ok - Secondmate home-session state stays off or on despite later file state; ambient TRACEPARENT is never adopted, so each routed task roots its own trace
+ok - resolve reuses a valid recorded traceparent verbatim on relaunch (stable identity across restarts)
+ok - disabling the capability omits the carrier even for a task with a recorded identity
+ok - a corrupt recorded traceparent is re-minted rather than propagated
+ok - resolve yields exactly one carrier per logical task, so the recorded and injected values are identical by construction
+ok - entropy failure omits telemetry safely: mint reports failure, resolve returns success with no carrier
+ok - the resolver has no sleep/timeout/command hang source and always returns success
+ok - the carrier is minted identically for every harness, backend, and spawn kind (no such branching in the lib code)
+ok - the lib code never reads a brief, prompt, report, or status - it cannot leak content
+ok - config/trace-context is inherited into secondmate homes, keeping the nested chain enabled end to end
+# fm-trace-context-lib.test.sh: all assertions passed
+FM_TEST_END 2026-08-21T17:31:30Z tests/fm-trace-context-lib.test.sh exit=0 duration_ms=280 gate_skip=false
+FM_TEST_BEGIN 2026-08-21T17:31:30Z tests/fm-transition-lib.test.sh family=pure-contract-unit expected_gate_skip=none
+ok - fm_transition_record builds a 5-field record and every accessor reads its field
+ok - fm_transition_record uses a single TAB between each of the five fields
+ok - fm_transition_record scrubs TAB/newline out of fields so the record stays exactly five columns
+ok - fm_transition_record tolerates empty workspace/from/agent fields
+ok - fm_transition_policy is the single-owner status->action table (blocked=actionable, working=absorb, idle/done=defer, else=fallback)
+# fm-transition-lib.test.sh: all assertions passed
+FM_TEST_END 2026-08-21T17:31:30Z tests/fm-transition-lib.test.sh exit=0 duration_ms=105 gate_skip=false
+FM_TEST_BEGIN 2026-08-21T17:31:30Z tests/fm-upstream-sync.test.sh family=pure-contract-unit expected_gate_skip=none
+ok - fm-upstream-sync.sh: reports an already-current port and does no work
+ok - fm-upstream-sync.sh: reports a clean merge and lands nothing
+ok - fm-upstream-sync.sh: reports conflicts with their exact paths and exits non-zero
+ok - fm-upstream-sync.sh: writes a machine-readable report a scheduled run can act on
+ok - fm-upstream-sync.sh: refuses a missing upstream remote instead of reporting a false all-clear
+FM_TEST_END 2026-08-21T17:31:31Z tests/fm-upstream-sync.test.sh exit=0 duration_ms=860 gate_skip=false
+FM_TEST_BEGIN 2026-08-21T17:31:31Z tests/fm-vendor-auth-probe.test.sh family=pure-contract-unit expected_gate_skip=none
+ok - the probe accepts no harness, model, or provider and so can hold no routing mapping
+ok - the probe never reads quota, leaving one intake snapshot to the dispatch owner
+ok - every probe result exits alike because the script renders no verdict
+ok - only a registered probe name runs, and an unregistered one is a usage error
+ok - an authenticated vendor session is reported as ground truth
+ok - an unauthenticated vendor session is reported as ground truth
+ok - unrecognized, blank-led, and silent probe output is indeterminate, never authenticated
+ok - an absent vendor CLI is reported rather than assumed authenticated
+ok - a hanging vendor CLI is hard-bounded, reported, and cannot wedge an intake
+ok - zero and all-zero bounds fall back to the default instead of removing the hard bound
+ok - a malformed bound is replaced by the default rather than forwarded
+ok - the bounded probe runs with stdin closed and cannot read caller input
+ok - the vendor CLI is invoked only through its two fixed, non-destructive argv forms
+ok - the fact line is one sanitized line with no raw vendor output or credential material
+ok - a vendor CLI version change is recorded and disclosed for re-verification
+ok - the pinned verified vendor version is recognized
+ok - --help succeeds and names the registered probes
+FM_TEST_END 2026-08-21T17:32:14Z tests/fm-vendor-auth-probe.test.sh exit=0 duration_ms=43530 gate_skip=false
+FM_TEST_BEGIN 2026-08-21T17:32:14Z tests/fm-wake-queue.test.sh family=watcher-wake-lock expected_gate_skip=none
+ok - an abandoned same-process lock hold is reclaimed; a parent's live hold is not
+ok - self-announced appends suppress only their own bytes and fail toward waking
+ok - historical annotations replay nothing already announced and keep everything new
+WAKE_ACK_REQUIRED: after handling completes run bin/fm-wake-drain.sh --ack-through 40 --recovery-generation 3492354.1787333536.0AYYq2
+ok - concurrent append plus drain preserves durable records through acknowledgement
+ok - signal written while no watcher runs is caught on next run
+WAKE_ACK_REQUIRED: after handling completes run bin/fm-wake-drain.sh --ack-through 1 --recovery-generation 3505884.1787333545.gmRdTf
+WARNING: queued wakes pending - drain them with bin/fm-wake-drain.sh before anything else.
+ok - stale wake is queued before suppressor state is advanced
+WAKE_ACK_REQUIRED: after handling completes run bin/fm-wake-drain.sh --ack-through 1 --recovery-generation 3507039.1787333546.9iOoM6
+WARNING: queued wakes pending - drain them with bin/fm-wake-drain.sh before anything else.
+ok - a not-provably-working stale wake is queued before its suppressor is advanced
+WAKE_ACK_REQUIRED: after handling completes run bin/fm-wake-drain.sh --ack-through 1 --recovery-generation 3507981.1787333547.i5uo5B
+ok - registered custom check output is queued before cadence suppression
+ok - concurrent drains replay until one post-handling acknowledgement consumes records
+WAKE_ACK_REQUIRED: after handling completes run bin/fm-wake-drain.sh --ack-through 4 --recovery-generation 3509226.1787333549.7RyhUw
+ok - drain collapses obvious duplicate heartbeat and signal records
+ok - drain asserts watcher liveness: warns on a lapse, stays silent for a live watcher with a fresh beacon
+WAKE_ACK_REQUIRED: after handling completes run bin/fm-wake-drain.sh --ack-through 8 --recovery-generation 3510049.1787333549.BhNMmw
+ok - structural signal enrichment is separate, deduped, home-local, and tier-zero for other wakes
+WAKE_ACK_REQUIRED: after handling completes run bin/fm-wake-drain.sh --ack-through 13 --recovery-generation 3510980.1787333550.Ay8qQn
+ok - every readable unread status line is annotated in full while invalid status files preserve their raw wakes
+WAKE_ACK_REQUIRED: after handling completes run bin/fm-wake-drain.sh --ack-through 1 --recovery-generation 3512616.1787333552.lqwWE7
+WAKE_ACK_REQUIRED: after handling completes run bin/fm-wake-drain.sh --ack-through 2 --recovery-generation 3512616.1787333552.lqwWE7
+ok - slow annotation releases the append lock and a deleted status file fails open
+WAKE_ACK_REQUIRED: after handling completes run bin/fm-wake-drain.sh --ack-through 1 --recovery-generation existing
+ok - wake append publishes atomic recovery evidence before durable rows
+ok - wake drain: generation-less legacy wakes are adopted and acknowledged
+ok - wake drain: a stale acknowledgement cannot retire or consume a newer recovery episode
+ok - wake drain: recovery acknowledgement failures are explicit and retryable
+ok - interruptions preserve durable rows until post-handling acknowledgement
+FM_TEST_END 2026-08-21T17:32:38Z tests/fm-wake-queue.test.sh exit=0 duration_ms=24046 gate_skip=false
+FM_TEST_BEGIN 2026-08-21T17:32:38Z tests/fm-windows-portability.test.sh family=pure-contract-unit expected_gate_skip=none
+ok - fm_proc_field: reads comm/args/ppid/pgid/sid from the MSYS /proc layout
+ok - fm_proc_field: falls back to ps -o where the /proc scalar files are absent
+ok - fm_proc_field: refuses an empty or non-numeric pid
+ok - fm_proc_field: refuses a field it has no /proc equivalent for
+ok - fm_platform_symlink_probe: proves symlink creation and leaves no residue
+ok - fm_platform_enable_native_symlinks: sets nativestrict on Windows, inert elsewhere, never overrides an explicit choice
+ok - fm_proc_pids_with_cwd_under: finds live processes rooted under a directory and forgets dead ones
+ok - fm_proc_pids_with_cwd_under: an unusable /proc returns failure, not an empty result
+ok - fm_proc_pids_with_cwd_under: a mount-aliased /proc cwd spelling still matches the caller's directory
+ok - fm_proc_pids_holding_path: a mount-aliased /proc fd target still matches the caller's path
+ok - fm_lock_same_path: widens a mount-aliased spelling through cygpath and stays strict everywhere else
+ok - fm_lock_points_to_owner: the strict readlink compare remains the primary, unresolved verdict
+ok - root .gitattributes: a core.autocrlf=true clone still lands LF, and the one binary blob survives
+FM_TEST_END 2026-08-21T17:32:40Z tests/fm-windows-portability.test.sh exit=0 duration_ms=1551 gate_skip=false
+FM_TEST_SUMMARY total=39 failed=0 skipped_gate=1 duration_ms=254076
+FM_TEST_SUMMARY_FAMILY family=afk count=1 duration_ms=1567 failed=0
+FM_TEST_SUMMARY_FAMILY family=backend-dispatch count=3 duration_ms=10158 failed=0
+FM_TEST_SUMMARY_FAMILY family=conpty count=1 duration_ms=961 failed=0
+FM_TEST_SUMMARY_FAMILY family=pr-forge count=2 duration_ms=4508 failed=0
+FM_TEST_SUMMARY_FAMILY family=pure-contract-unit count=20 duration_ms=120536 failed=0
+FM_TEST_SUMMARY_FAMILY family=session-bootstrap count=3 duration_ms=14949 failed=0
+FM_TEST_SUMMARY_FAMILY family=unclassified count=7 duration_ms=75641 failed=0
+FM_TEST_SUMMARY_FAMILY family=watcher-wake-lock count=2 duration_ms=24562 failed=0
+FM_TEST_SLOWEST rank=1 script=tests/fm-claude-stop-autoarm.test.sh duration_ms=60460
+FM_TEST_SLOWEST rank=2 script=tests/fm-decision-hold-lifecycle.test.sh duration_ms=54190
+FM_TEST_SLOWEST rank=3 script=tests/fm-vendor-auth-probe.test.sh duration_ms=43530
+FM_TEST_SLOWEST rank=4 script=tests/fm-wake-queue.test.sh duration_ms=24046
+FM_TEST_SLOWEST rank=5 script=tests/fm-spawn-pool-base-freshen.test.sh duration_ms=13727
+FM_TEST_SLOWEST rank=6 script=tests/fm-tangle-guard.test.sh duration_ms=10565
+FM_TEST_SLOWEST rank=7 script=tests/fm-herdr-session-cleanup.test.sh duration_ms=7242
+FM_TEST_SLOWEST rank=8 script=tests/fm-crew-state.test.sh duration_ms=5376
+FM_TEST_SLOWEST rank=9 script=tests/fm-pr-merge.test.sh duration_ms=3694
+FM_TEST_SLOWEST rank=10 script=tests/fm-gate-refuse.test.sh duration_ms=3556
+FM_TEST_SLOWEST rank=11 script=tests/fm-composer-lib.test.sh duration_ms=2973
+FM_TEST_SLOWEST rank=12 script=tests/fm-tmux-submit-busy.test.sh duration_ms=2681
+FM_TEST_SLOWEST rank=13 script=tests/fm-task-delivery.test.sh duration_ms=2112
+FM_TEST_SLOWEST rank=14 script=tests/fm-send-popup-settle.test.sh duration_ms=1931
+FM_TEST_SLOWEST rank=15 script=tests/fm-afk-return.test.sh duration_ms=1567
+fm-test-run: wrote timing artifact: /tmp/no-mistakes-evidence/01M0JMD3H94MKKF7SCM5C5QWR6/windows-lane-on-linux-timing.json
+exit=0
