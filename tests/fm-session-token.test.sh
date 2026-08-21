@@ -145,6 +145,35 @@ test_ancestry_unavailable_requires_both_platform_and_empty_walk() {
   pass "fm_session_ancestry_unavailable: true only when the platform cannot answer AND the walk found nothing"
 }
 
+# The refusal a Windows user without a token actually reads. Naming the ancestry
+# walk there is true and useless: it can never answer for anyone on that platform,
+# which is precisely why ownership is token-based. So the two refusals are
+# distinct, and each must stay on its own platform - a diagnostic that names an
+# impossible mechanism sends the reader after something they cannot affect.
+test_the_windows_refusal_names_the_token_not_ancestry() {
+  local home out
+  home=$(new_home)
+  out=$(run_lock "$home" "$WIN" "")
+  assert_contains "$out" "no firstmate session token" \
+    "refusal: a Windows session with no token must be told the token is what is missing"
+  assert_contains "$out" "CLAUDE_CODE_SESSION_ID" \
+    "refusal: the Windows refusal must name the variable that supplies the token"
+  assert_contains "$out" "Only Claude Code" \
+    "refusal: the Windows refusal must say which harness can supply one today"
+  assert_not_contains "$out" "cannot locate harness process in ancestry" \
+    "refusal: the Windows refusal must not cite a mechanism that can never work there"
+  assert_absent "$home/state/.lock" "refusal: a refused Windows session must acquire nothing"
+
+  # The POSIX refusal is unchanged: there an empty walk IS the real answer, and
+  # ancestry is exactly the right thing to name.
+  out=$(run_lock "$home" Linux "")
+  assert_contains "$out" "cannot locate harness process in ancestry" \
+    "refusal: off Windows the ancestry refusal must be unchanged"
+  assert_not_contains "$out" "no firstmate session token" \
+    "refusal: the token refusal must never appear off Windows, where ancestry is the real answer"
+  pass "lock refusal: Windows names the missing session token and its remedy; other platforms still name ancestry"
+}
+
 # --- 2 and 3. acquisition on the token path ---------------------------------
 
 test_token_acquires_and_records_a_plain_pid() {
@@ -314,6 +343,7 @@ test_release_is_inert_on_an_ancestry_owned_home() {
 
 test_token_is_ignored_where_ancestry_actually_works
 test_ancestry_unavailable_requires_both_platform_and_empty_walk
+test_the_windows_refusal_names_the_token_not_ancestry
 test_token_acquires_and_records_a_plain_pid
 test_same_session_reacquisition_is_idempotent
 test_a_later_session_reclaims_an_exited_one

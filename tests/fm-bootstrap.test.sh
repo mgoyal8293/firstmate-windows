@@ -635,6 +635,118 @@ ROWS
   pass "bootstrap: a session-provider backend gates its own CLI, never a false tmux requirement"
 }
 
+# --- conpty: the backend dependency that is NOT a PATH command ----------------
+#
+# WHY THIS EXISTS. A conpty home whose bin/backends/conpty/node_modules was never
+# installed passed every bootstrap check and then refused every spawn - and the
+# tmux `MISSING:` hint sends a Windows user onto conpty, so it was the path
+# bootstrap itself recommended. `node` being on PATH is true and says nothing
+# about the npm install, so presence of a command can never answer this; the
+# probe has to be the backend's own `fmpty.js doctor`.
+#
+# The cases below pin BOTH directions on purpose. A guard that only ever passes
+# is not evidence, so each broken shape is proven to FIRE and the healthy shape is
+# proven SILENT, using the same fixture with one thing changed between them.
+
+# A node stub standing in for the ConPTY client. `doctor` must print exactly `ok`
+# for the check to pass, which is the daemon's real contract; the stub answers
+# from FM_FAKE_CONPTY_DOCTOR_{OUT,RC} so a case can make the dependencies fail to
+# LOAD while node_modules is present - the second broken shape, distinct from a
+# missing directory.
+make_fake_conpty_home() {  # <case-dir> -> echoes fakebin dir
+  local dir=$1 fakebin
+  fakebin=$(make_fake_toolchain "$dir")
+  cat > "$fakebin/node" <<'SH'
+#!/usr/bin/env bash
+printf '%s\n' "${FM_FAKE_CONPTY_DOCTOR_OUT:-ok}"
+exit "${FM_FAKE_CONPTY_DOCTOR_RC:-0}"
+SH
+  chmod +x "$fakebin/node"
+  mkdir -p "$dir/conpty/node_modules/node-pty"
+  : > "$dir/conpty/fmpty.js"
+  printf '%s' "$fakebin"
+}
+
+# stdout only, exactly like the sibling backend cases: a fixture home is not a git
+# repository, so bootstrap's checkout inspection writes unrelated git noise to
+# stderr there. The diagnostics under test are stdout lines.
+run_conpty_bootstrap() {  # <case-dir> <fakebin>
+  PATH="$2:$BASE_PATH" FM_HOME="$1/home" FM_ROOT_OVERRIDE="$1/home" \
+    FM_BACKEND_CONPTY_DIR="$1/conpty" FM_FAKE_TREEHOUSE_LEASE_HELP=1 \
+    "$ROOT/bin/fm-bootstrap.sh"
+}
+
+test_conpty_backend_dependency_is_detected() {
+  local case_dir fakebin out expected
+  case_dir="$TMP_ROOT/conpty-deps"
+  mkdir -p "$case_dir/home/config"
+  printf '%s\n' manual > "$case_dir/home/config/backlog-backend"
+  printf '%s\n' conpty > "$case_dir/home/config/backend"
+  fakebin=$(make_fake_conpty_home "$case_dir")
+  expected="MISSING: conpty-backend-deps (install: (cd '$case_dir/conpty' && npm install --omit=dev))"
+
+  # 1. Healthy home: dependencies installed and the doctor answers ok. Silent.
+  out=$(run_conpty_bootstrap "$case_dir" "$fakebin")
+  [ -z "$out" ] || fail "a conpty home with its dependencies installed should be silent, got: $out"
+
+  # 2. The real F3 shape: node_modules absent. Must fire, with the exact install
+  #    command, so `fm-bootstrap.sh install conpty-backend-deps` can run it.
+  rm -rf "$case_dir/conpty/node_modules"
+  out=$(run_conpty_bootstrap "$case_dir" "$fakebin")
+  [ "$out" = "$expected" ] \
+    || fail "a conpty home with no installed backend dependencies must report them missing, got: $out"
+
+  # 3. Installed but not loadable - the shape a presence check would miss and the
+  #    doctor catches. Same line, because the remedy is the same.
+  mkdir -p "$case_dir/conpty/node_modules/node-pty"
+  out=$(FM_FAKE_CONPTY_DOCTOR_RC=1 FM_FAKE_CONPTY_DOCTOR_OUT="Cannot find module 'node-pty'" \
+    run_conpty_bootstrap "$case_dir" "$fakebin")
+  [ "$out" = "$expected" ] \
+    || fail "conpty dependencies present but unloadable must report missing, got: $out"
+
+  # 4. Restoring the dependency restores silence, so case 2 is the check firing
+  #    and not a fixture that can never pass.
+  out=$(run_conpty_bootstrap "$case_dir" "$fakebin")
+  [ -z "$out" ] || fail "a repaired conpty home should go silent again, got: $out"
+  pass "bootstrap: a conpty home is reported healthy only when its backend dependencies actually load"
+}
+
+test_conpty_dependency_check_is_scoped_to_conpty() {
+  local case_dir fakebin out
+  # The same fixture on the default backend must never emit the conpty line: this
+  # check is a per-backend delta, not a universal one.
+  case_dir="$TMP_ROOT/conpty-deps-not-selected"
+  mkdir -p "$case_dir/home/config"
+  printf '%s\n' manual > "$case_dir/home/config/backlog-backend"
+  fakebin=$(make_fake_conpty_home "$case_dir")
+  rm -rf "$case_dir/conpty/node_modules"
+  out=$(run_conpty_bootstrap "$case_dir" "$fakebin")
+  assert_not_contains "$out" "conpty-backend-deps" \
+    "bootstrap must not check conpty dependencies unless backend=conpty is selected"
+  pass "bootstrap: the conpty dependency check is gated on the resolved backend"
+}
+
+test_conpty_backend_deps_install_command_is_executable() {
+  local case_dir out
+  # `fm-bootstrap.sh install <tool>` evaluates the printed hint, so the hint must
+  # be a runnable command and not prose - the MISSING contract the
+  # bootstrap-diagnostics skill relies on.
+  case_dir="$TMP_ROOT/conpty-deps-install"
+  mkdir -p "$case_dir/conpty" "$case_dir/fakebin"
+  cat > "$case_dir/fakebin/npm" <<'SH'
+#!/usr/bin/env bash
+printf 'INSTALLED-IN:%s\n' "$PWD"
+SH
+  chmod +x "$case_dir/fakebin/npm"
+  out=$(FM_BACKEND_CONPTY_DIR="$case_dir/conpty" PATH="$case_dir/fakebin:$BASE_PATH" \
+    "$ROOT/bin/fm-bootstrap.sh" install conpty-backend-deps 2>&1)
+  assert_contains "$out" "npm install --omit=dev" \
+    "install conpty-backend-deps must run the documented npm install"
+  assert_contains "$out" "INSTALLED-IN:$case_dir/conpty" \
+    "install conpty-backend-deps must run npm inside the backend directory"
+  pass "bootstrap: install conpty-backend-deps runs the documented npm install in the backend directory"
+}
+
 test_herdr_install_requires_manual_action() {
   local out status
   out=$("$ROOT/bin/fm-bootstrap.sh" install herdr 2>&1)
@@ -1197,6 +1309,9 @@ test_orca_backend_gates_orca_tool_only_when_selected
 test_session_provider_backends_do_not_require_tmux
 test_session_provider_backends_gate_own_cli_not_tmux
 test_herdr_install_requires_manual_action
+test_conpty_backend_dependency_is_detected
+test_conpty_dependency_check_is_scoped_to_conpty
+test_conpty_backend_deps_install_command_is_executable
 test_cmux_bundled_cli_satisfies_dependency
 test_unknown_backend_reports_invalid_configuration
 test_json_backends_require_jq_not_tmux

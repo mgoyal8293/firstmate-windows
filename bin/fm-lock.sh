@@ -66,6 +66,15 @@ if me=$(fm_harness_ancestry_pid); then
 elif fm_session_ancestry_unavailable && fm_session_token_self >/dev/null 2>&1; then
   SESSION_TOKEN_PATH=1
   me=$$
+elif fm_session_ancestry_unavailable; then
+  # Windows, and no token. Naming the ancestry walk here would be true and
+  # useless: on Windows it can NEVER answer for anyone, because MSYS's /proc
+  # holds only MSYS processes and the harness is a native executable. The
+  # actionable fact is the missing token, and today only Claude Code exports one
+  # (bin/fm-session-lock-lib.sh's FM_SESSION_TOKEN_VARS). So say that, and say
+  # what the reader can do about it.
+  echo "error: no firstmate session token in this environment, so this session cannot prove it owns this home - on Windows ownership is a per-session token, never process ancestry, because a native harness never appears in MSYS's /proc. Only Claude Code exports one today (CLAUDE_CODE_SESSION_ID); under any other harness a Windows firstmate stays read-only - run firstmate from Claude Code, or continue read-only (docs/windows.md 'How the session lock is owned')" >&2
+  exit 1
 else
   echo "error: cannot locate harness process in ancestry" >&2
   exit 1

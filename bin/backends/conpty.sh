@@ -69,7 +69,10 @@ FM_HOME="${FM_HOME:-${FM_ROOT_OVERRIDE:-$FM_ROOT}}"
 # shellcheck source=bin/fm-composer-lib.sh
 . "$FM_BACKEND_CONPTY_ROOT/bin/fm-composer-lib.sh"
 
-FM_BACKEND_CONPTY_DIR="$FM_BACKEND_CONPTY_ROOT/bin/backends/conpty"
+# Overridable for the same reason FM_BACKEND_CONPTY_CLIENT is: a test needs to
+# point the dependency probe at a fixture directory rather than at the running
+# checkout's own bin/backends/conpty.
+FM_BACKEND_CONPTY_DIR="${FM_BACKEND_CONPTY_DIR:-$FM_BACKEND_CONPTY_ROOT/bin/backends/conpty}"
 FM_BACKEND_CONPTY_CLIENT="${FM_BACKEND_CONPTY_CLIENT:-$FM_BACKEND_CONPTY_DIR/fmpty.js}"
 
 # Default geometry. 120x40 matches the spike's verified size and is wide enough

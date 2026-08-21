@@ -774,6 +774,12 @@ install_cmd() {
     esac
   fi
   case "$1" in
+    # Not a package: the ConPTY session daemon's pinned runtime dependencies,
+    # installed once inside the backend's own directory. See
+    # docs/conpty-backend.md "Setup".
+    conpty-backend-deps)
+      echo "(cd '${FM_BACKEND_CONPTY_DIR:-$FM_ROOT/bin/backends/conpty}' && npm install --omit=dev)"
+      ;;
     tmux|node|git|gh|curl|jq|orca|zellij) echo "brew install $1  # or the platform's package manager" ;;
     cmux) echo "brew install --cask cmux  # or see https://cmux.com" ;;
     treehouse) echo "curl -fsSL https://kunchenguid.github.io/treehouse/install.sh | sh" ;;
@@ -1148,6 +1154,7 @@ fi
 # Local detection: presence, version floors, and configuration. Nothing here
 # leaves this machine, so it stays on the session-start critical path.
 detect_local_tools() {
+  local backend_dep
   if [ "$BACKEND_VALID" -eq 0 ]; then
     echo "BACKEND_INVALID: $BACKEND (known: $FM_BACKEND_KNOWN)"
   fi
@@ -1155,6 +1162,16 @@ detect_local_tools() {
     fm_backend_required_tool_available "$BACKEND" "$t" \
       || missing_tool_diagnostic "$t"
   done
+  # The resolved backend's non-PATH dependency, when it has one (bin/fm-backend.sh
+  # owns which backends do and how each is probed). Without this a conpty home
+  # with no installed daemon dependencies was reported completely healthy and then
+  # refused every spawn - and conpty is what the tmux hint above sends a Windows
+  # user to. Skipped when the backend value itself is invalid, because
+  # BACKEND_INVALID is the actionable line then.
+  if [ "$BACKEND_VALID" -eq 1 ] && backend_dep=$(fm_backend_required_dependency "$BACKEND"); then
+    fm_backend_required_dependency_available "$BACKEND" \
+      || missing_tool_diagnostic "$backend_dep"
+  fi
   for t in $COMMON_TOOLS; do
     command -v "$t" >/dev/null || missing_tool_diagnostic "$t"
   done

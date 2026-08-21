@@ -57,7 +57,15 @@ call site.
   `.claude/skills` is a tracked symlink, and a flattened checkout leaves the harness with zero project skills and no error.
 - Enable Windows Developer Mode (or grant `SeCreateSymbolicLinkPrivilege`).
   Without it `MSYS=winsymlinks:nativestrict` makes `ln -s` fail rather than copy - which is the safe failure, but no lock can be acquired.
-- Run `bin/fm-bootstrap.sh`. It proves both of the above and prints a `PLATFORM:` line naming the exact remedy when either is missing.
+- Select the ConPTY session provider: put `conpty` in this home's `config/backend`.
+  There is no tmux on Windows, and the default `tmux` backend cannot spawn anything here.
+- Install the ConPTY daemon's pinned runtime dependencies: `npm install --omit=dev` in `bin/backends/conpty`.
+  They are not vendored, so a fresh clone has none and no task can spawn until they are installed; it takes about six seconds and needs no compiler, because node-pty ships a prebuilt `win32-x64` binding.
+  [`conpty-backend.md`](conpty-backend.md) owns the rest of that backend's setup.
+- Run `bin/fm-bootstrap.sh`. It proves all of the above and prints a `PLATFORM:` line naming the exact remedy when the symlink or Developer Mode step is missing, and a `MISSING: conpty-backend-deps` line when the backend's dependencies are not installed.
+
+Run firstmate from Claude Code.
+The session lock is owned by a per-session token on Windows (see below), and Claude Code is the only verified harness that exports one today - under any other, this home can read but never spawn, steer, or merge.
 
 ## Validating on Windows
 
@@ -111,6 +119,15 @@ path rather than replacing it.**
   Claude's is `CLAUDE_CODE_SESSION_ID`, measured identical across `SessionStart`,
   the Bash tool's `PreToolUse`, `Stop` and `SessionEnd`, and equal to the
   `session_id` each hook payload carries on stdin.
+  **Claude's is the only row there is today**, and the phrasing "per harness"
+  describes the shape, not the coverage. The list is written to be extended, but
+  no other harness has been verified, so under `codex`, `opencode`, `pi`,
+  `pi-signed`, `grok`, `kimi` or `cursor` a Windows firstmate never acquires the
+  lock and stays read-only for the whole session - it can inspect, and nothing
+  more. Adding a row is separate work, not a widening anyone should do blind:
+  each needs evidence that the variable is session-scoped and present in that
+  harness's own Windows tool subprocesses, because honouring an unverified one
+  would let any process carrying it claim the lock.
 - `fm_session_ancestry_unavailable` gates the token path on BOTH the platform and
   an empty walk. The platform half is load-bearing: off Windows an empty walk is
   a real answer, and honouring a token there would let any process carrying the
