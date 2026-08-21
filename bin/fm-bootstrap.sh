@@ -1164,7 +1164,7 @@ if [ "${1:-}" = "install" ]; then
     fi
     cmd=${cmd%%  #*}
     echo "installing $t: $cmd"
-    if ! eval "$cmd"; then
+    if ! (set -o pipefail; eval "$cmd"); then
       echo "error: install of $t failed: $cmd" >&2
       install_failed=1
     fi

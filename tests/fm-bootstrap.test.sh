@@ -871,6 +871,43 @@ test_install_batch_attempts_every_tool() {
   pass "bootstrap: install attempts every approved tool and reports failure without abandoning the batch"
 }
 
+test_install_reports_a_failed_download_in_a_pipeline() {
+  local case_dir fakebin out status
+  # The treehouse and no-mistakes hints are `curl ... | sh` pipelines, and a
+  # failed curl leaves sh reading EOF and exiting 0 - so the whole pipeline can
+  # report success while nothing was downloaded. That is a captain told a tool
+  # installed when it did not.
+  case_dir="$TMP_ROOT/install-pipeline-failure"
+  fakebin="$case_dir/fakebin"
+  mkdir -p "$fakebin"
+  cat > "$fakebin/curl" <<'SH'
+#!/usr/bin/env bash
+if [ "${FM_FAKE_CURL_FAIL:-0}" = 1 ]; then
+  echo "curl: (6) Could not resolve host" >&2
+  exit 6
+fi
+printf 'echo TREEHOUSE-INSTALL-RAN\n'
+SH
+  chmod +x "$fakebin/curl"
+
+  out=$(FM_FAKE_CURL_FAIL=1 PATH="$fakebin:$BASE_PATH" \
+    "$ROOT/bin/fm-bootstrap.sh" install treehouse 2>&1)
+  status=$?
+  [ "$status" -ne 0 ] \
+    || fail "a download that failed must not report the tool as installed, got: $out"
+  assert_contains "$out" "install of treehouse failed" \
+    "the tool whose download failed must be named"
+
+  out=$(PATH="$fakebin:$BASE_PATH" \
+    "$ROOT/bin/fm-bootstrap.sh" install treehouse 2>&1)
+  status=$?
+  [ "$status" -eq 0 ] \
+    || fail "a install whose whole pipeline succeeds must still exit 0, got status $status: $out"
+  assert_contains "$out" "TREEHOUSE-INSTALL-RAN" \
+    "a successful download must still be piped into the shell and run"
+  pass "bootstrap: a failed stage of a piped install command cannot report success"
+}
+
 test_conpty_deps_hint_on_a_damaged_checkout_is_runnable() {
   local case_dir mirror entry base fakebin out status
   # A checkout whose bin/backends/conpty.sh is absent cannot ask the backend where
@@ -1533,6 +1570,7 @@ test_conpty_backend_deps_install_command_is_executable
 test_conpty_backend_deps_install_survives_awkward_path
 test_conpty_backend_deps_install_reports_failure
 test_install_batch_attempts_every_tool
+test_install_reports_a_failed_download_in_a_pipeline
 test_conpty_deps_hint_on_a_damaged_checkout_is_runnable
 test_conpty_dep_line_follows_the_universal_toolchain
 test_cmux_bundled_cli_satisfies_dependency
