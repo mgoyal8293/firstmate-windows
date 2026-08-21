@@ -1,0 +1,9 @@
+$ git -c core.autocrlf=true clone <this repo>   # Git for Windows' default
+  core.autocrlf in the clone      : 
+  tracked .gitattributes present  : yes
+  CR-carrying shell files (bin,tests): 0
+  assets/banner.png intact        : byte-identical to source
+  banner.png diff vs HEAD blob    : 0 lines
+
+# Control: the SAME clone and the SAME core.autocrlf=true, with the .gitattributes pin removed
+  CR-carrying shell files (bin,tests): 306

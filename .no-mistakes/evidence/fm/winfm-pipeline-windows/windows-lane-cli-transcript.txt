@@ -1,0 +1,130 @@
+
+===== 1. Lanes the runner offers (bin/fm-test-run.sh --list-lanes) =====
+portable-parallel-1
+portable-parallel-2
+portable-serial
+portable-serial-1of4
+portable-serial-2of4
+portable-serial-3of4
+portable-serial-4of4
+real-herdr-gated
+windows
+windows-1of4
+windows-2of4
+windows-3of4
+windows-4of4
+
+===== 2. The CI matrix, read out of .github/workflows/windows-ci.yml =====
+matrix.shard          = 1 2 3 4
+strategy.job-total    = 4
+FM_WINDOWS_LANE       = windows-${{ matrix.shard }}of${{ strategy.job-total }}
+
+===== 3. Whole lane: bin/fm-test-run.sh --list --lane windows =====
+tests/fm-afk-return.test.sh
+tests/fm-ask-user-authority.test.sh
+tests/fm-backend-conpty.test.sh
+tests/fm-brief.test.sh
+tests/fm-busy-state.test.sh
+tests/fm-calm-pi-extension.test.sh
+tests/fm-classify-decision-key.test.sh
+tests/fm-claude-stop-autoarm.test.sh
+tests/fm-composer-ghost.test.sh
+tests/fm-composer-lib.test.sh
+tests/fm-crew-state.test.sh
+tests/fm-decision-hold-lifecycle.test.sh
+tests/fm-gate-refuse.test.sh
+tests/fm-gitignore-config.test.sh
+tests/fm-gotmp.test.sh
+tests/fm-herdr-session-cleanup.test.sh
+tests/fm-pr-merge.test.sh
+tests/fm-pr-private-file-mode.test.sh
+tests/fm-project-origin.test.sh
+tests/fm-remote-entrypoint.test.sh
+tests/fm-review-diff.test.sh
+tests/fm-send-popup-settle.test.sh
+tests/fm-send-settle.test.sh
+tests/fm-send-strict.test.sh
+tests/fm-spawn-batch.test.sh
+tests/fm-spawn-pool-base-freshen.test.sh
+tests/fm-supervision-events.test.sh
+tests/fm-supervision-instructions.test.sh
+tests/fm-tangle-guard.test.sh
+tests/fm-task-delivery.test.sh
+tests/fm-test-fixture-cleanup.test.sh
+tests/fm-test-isolation-proof.test.sh
+tests/fm-tmux-submit-busy.test.sh
+tests/fm-trace-context-lib.test.sh
+tests/fm-transition-lib.test.sh
+tests/fm-upstream-sync.test.sh
+tests/fm-vendor-auth-probe.test.sh
+tests/fm-wake-queue.test.sh
+tests/fm-windows-portability.test.sh
+-- lane members: 39
+
+===== 4. Each CI shard resolves the lane name the job builds =====
+
+$ bin/fm-test-run.sh --list --lane windows-1of4   (rc=0, 6 scripts)
+    tests/fm-decision-hold-lifecycle.test.sh
+    tests/fm-backend-conpty.test.sh
+    tests/fm-gotmp.test.sh
+    tests/fm-supervision-events.test.sh
+    tests/fm-transition-lib.test.sh
+    tests/fm-remote-entrypoint.test.sh
+
+$ bin/fm-test-run.sh --list --lane windows-2of4   (rc=0, 7 scripts)
+    tests/fm-wake-queue.test.sh
+    tests/fm-send-settle.test.sh
+    tests/fm-classify-decision-key.test.sh
+    tests/fm-test-fixture-cleanup.test.sh
+    tests/fm-windows-portability.test.sh
+    tests/fm-pr-private-file-mode.test.sh
+    tests/fm-project-origin.test.sh
+
+$ bin/fm-test-run.sh --list --lane windows-3of4   (rc=0, 13 scripts)
+    tests/fm-crew-state.test.sh
+    tests/fm-claude-stop-autoarm.test.sh
+    tests/fm-spawn-pool-base-freshen.test.sh
+    tests/fm-send-strict.test.sh
+    tests/fm-tangle-guard.test.sh
+    tests/fm-review-diff.test.sh
+    tests/fm-afk-return.test.sh
+    tests/fm-task-delivery.test.sh
+    tests/fm-tmux-submit-busy.test.sh
+    tests/fm-upstream-sync.test.sh
+    tests/fm-supervision-instructions.test.sh
+    tests/fm-trace-context-lib.test.sh
+    tests/fm-calm-pi-extension.test.sh
+
+$ bin/fm-test-run.sh --list --lane windows-4of4   (rc=0, 13 scripts)
+    tests/fm-pr-merge.test.sh
+    tests/fm-herdr-session-cleanup.test.sh
+    tests/fm-composer-lib.test.sh
+    tests/fm-gate-refuse.test.sh
+    tests/fm-send-popup-settle.test.sh
+    tests/fm-vendor-auth-probe.test.sh
+    tests/fm-spawn-batch.test.sh
+    tests/fm-composer-ghost.test.sh
+    tests/fm-busy-state.test.sh
+    tests/fm-brief.test.sh
+    tests/fm-test-isolation-proof.test.sh
+    tests/fm-ask-user-authority.test.sh
+    tests/fm-gitignore-config.test.sh
+
+===== 5. Shards are a disjoint cover of the lane =====
+scripts in more than one shard: <none>
+lane-vs-union difference:       <identical>
+union size:                     39
+
+===== 6. A matrix that drifts from bin/fm-test-run.sh is refused, not partially run =====
+$ bin/fm-test-run.sh --list --lane windows-1of5
+fm-test-run: lane 'windows-1of5' asks for 5 windows shards but this runner is configured for 4 (see --list-lanes)
+rc=2
+
+$ bin/fm-test-run.sh --list --lane windows-5of4
+fm-test-run: lane 'windows-5of4' shard index is outside 1..4 (see --list-lanes)
+rc=2
+
+===== 7. Coverage guard (bin/fm-test-run.sh --check-coverage) =====
+FM_TEST_COVERAGE ok total=152 parallel=24 serial=116 serial_shards=4 herdr=12 unmeasured_serial=0
+FM_TEST_COVERAGE_WINDOWS ok windows=39 windows_shards=4 unmeasured_windows=0
+rc=0

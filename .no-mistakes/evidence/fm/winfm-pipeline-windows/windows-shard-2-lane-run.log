@@ -1,0 +1,103 @@
+FM_TEST_BEGIN 2026-08-21T20:20:39Z tests/fm-wake-queue.test.sh family=watcher-wake-lock expected_gate_skip=none
+ok - an abandoned same-process lock hold is reclaimed; a parent's live hold is not
+ok - self-announced appends suppress only their own bytes and fail toward waking
+ok - historical annotations replay nothing already announced and keep everything new
+WAKE_ACK_REQUIRED: after handling completes run bin/fm-wake-drain.sh --ack-through 6 --recovery-generation 2736415.1787343640.l5LboA
+ok - concurrent append plus drain preserves durable records through acknowledgement
+ok - signal written while no watcher runs is caught on next run
+WAKE_ACK_REQUIRED: after handling completes run bin/fm-wake-drain.sh --ack-through 1 --recovery-generation 2752311.1787343650.3wQRXp
+WARNING: queued wakes pending - drain them with bin/fm-wake-drain.sh before anything else.
+ok - stale wake is queued before suppressor state is advanced
+WAKE_ACK_REQUIRED: after handling completes run bin/fm-wake-drain.sh --ack-through 1 --recovery-generation 2753412.1787343650.P3moZS
+WARNING: queued wakes pending - drain them with bin/fm-wake-drain.sh before anything else.
+ok - a not-provably-working stale wake is queued before its suppressor is advanced
+WAKE_ACK_REQUIRED: after handling completes run bin/fm-wake-drain.sh --ack-through 1 --recovery-generation 2754342.1787343651.ggby9U
+ok - registered custom check output is queued before cadence suppression
+ok - concurrent drains replay until one post-handling acknowledgement consumes records
+WAKE_ACK_REQUIRED: after handling completes run bin/fm-wake-drain.sh --ack-through 4 --recovery-generation 2755596.1787343653.THHJRy
+ok - drain collapses obvious duplicate heartbeat and signal records
+ok - drain asserts watcher liveness: warns on a lapse, stays silent for a live watcher with a fresh beacon
+WAKE_ACK_REQUIRED: after handling completes run bin/fm-wake-drain.sh --ack-through 8 --recovery-generation 2756419.1787343654.y1MOjh
+ok - structural signal enrichment is separate, deduped, home-local, and tier-zero for other wakes
+WAKE_ACK_REQUIRED: after handling completes run bin/fm-wake-drain.sh --ack-through 13 --recovery-generation 2757321.1787343654.XruHNz
+ok - every readable unread status line is annotated in full while invalid status files preserve their raw wakes
+WAKE_ACK_REQUIRED: after handling completes run bin/fm-wake-drain.sh --ack-through 1 --recovery-generation 2758957.1787343656.ewKoyF
+WAKE_ACK_REQUIRED: after handling completes run bin/fm-wake-drain.sh --ack-through 2 --recovery-generation 2758957.1787343656.ewKoyF
+ok - slow annotation releases the append lock and a deleted status file fails open
+WAKE_ACK_REQUIRED: after handling completes run bin/fm-wake-drain.sh --ack-through 1 --recovery-generation existing
+ok - wake append publishes atomic recovery evidence before durable rows
+ok - wake drain: generation-less legacy wakes are adopted and acknowledged
+ok - wake drain: a stale acknowledgement cannot retire or consume a newer recovery episode
+ok - wake drain: recovery acknowledgement failures are explicit and retryable
+WAKE_ACK_REQUIRED: after handling completes run bin/fm-wake-drain.sh --ack-through 2 --recovery-generation 2763256.1787343662.vynQ2d
+ok - interruptions preserve durable rows until post-handling acknowledgement
+FM_TEST_END 2026-08-21T20:21:07Z tests/fm-wake-queue.test.sh exit=0 duration_ms=28030 gate_skip=false
+FM_TEST_BEGIN 2026-08-21T20:21:07Z tests/fm-send-settle.test.sh family=pure-contract-unit expected_gate_skip=none
+ok - fm-send: a successful text send pauses the default 1s after submit
+ok - fm-send: FM_SEND_SETTLE=0 produces no settle pause
+ok - fm-send: the settle pause is tunable via FM_SEND_SETTLE
+ok - fm-send: the --key path never pauses (settle scoped to text submit)
+ok - fm-send: a successful Claude Escape records the interrupt lifecycle edge
+FM_TEST_END 2026-08-21T20:21:08Z tests/fm-send-settle.test.sh exit=0 duration_ms=634 gate_skip=false
+FM_TEST_BEGIN 2026-08-21T20:21:08Z tests/fm-classify-decision-key.test.sh family=pure-contract-unit expected_gate_skip=none
+ok - a stated [key=X] opens X whether it precedes or follows the verb colon
+ok - a keyless needs-decision still opens and closes the default key
+ok - a resolution closes its decision regardless of either line's key position
+ok - blocked [key=X] opens X in both key positions
+ok - two colon-form keyed decisions never collapse into one shared bucket
+ok - a [key=x] mentioned mid-note is prose, never an opened or closed key
+ok - a malformed stated key is rejected in both positions, never folded as default
+ok - status_line_verb strips every bracket tag before the colon, in any order, and recovers the bare verb
+ok - a [corr=...] tag ahead of [key=...] no longer swallows the verb: opens and closes under the stated key
+ok - a [corr=...] tag with no stated key opens under 'default', exactly like a bare needs-decision line
+ok - a [key=x] tag alone (no corr tag) still opens x - no regression from the tag-stripping fix
+ok - blocked/resolved parse their bare verb with any bracket-tag order preceding the colon
+ok - the incremental fold matches the full fold across appends in both key positions
+FM_TEST_END 2026-08-21T20:21:08Z tests/fm-classify-decision-key.test.sh exit=0 duration_ms=575 gate_skip=false
+FM_TEST_BEGIN 2026-08-21T20:21:08Z tests/fm-test-fixture-cleanup.test.sh family=unclassified expected_gate_skip=none
+ok - fm_test_tmproot cleans up its fixture root on normal exit
+ok - fm_test_tmproot cleans up its fixture root on SIGTERM
+ok - the cleanup registry cannot be injected through path precreation
+ok - failed fixture registration rolls back the new root
+ok - the orphan sweep reaps only old fixtures without a live owner
+FM_TEST_END 2026-08-21T20:21:09Z tests/fm-test-fixture-cleanup.test.sh exit=0 duration_ms=514 gate_skip=false
+FM_TEST_BEGIN 2026-08-21T20:21:09Z tests/fm-windows-portability.test.sh family=pure-contract-unit expected_gate_skip=none
+ok - fm_proc_field: reads comm/args/ppid/pgid/sid from the MSYS /proc layout
+ok - fm_proc_field: falls back to ps -o where the /proc scalar files are absent
+ok - fm_proc_field: refuses an empty or non-numeric pid
+ok - fm_proc_field: refuses a field it has no /proc equivalent for
+ok - fm_platform_symlink_probe: proves symlink creation and leaves no residue
+ok - fm_platform_enable_native_symlinks: sets nativestrict on Windows, inert elsewhere, never overrides an explicit choice
+ok - fm_proc_pids_with_cwd_under: finds live processes rooted under a directory and forgets dead ones
+ok - fm_proc_pids_with_cwd_under: an unusable /proc returns failure, not an empty result
+ok - fm_proc_pids_with_cwd_under: a mount-aliased /proc cwd spelling still matches the caller's directory
+ok - fm_proc_pids_holding_path: a mount-aliased /proc fd target still matches the caller's path
+ok - fm_lock_same_path: widens a mount-aliased spelling through cygpath and stays strict everywhere else
+ok - fm_lock_points_to_owner: the strict readlink compare remains the primary, unresolved verdict
+ok - fm_pid_identity: bin/fm-proc-lib.sh answers from /proc where ps rejects -o, and detects pid reuse
+ok - root .gitattributes: a core.autocrlf=true clone still lands LF, and the one binary blob survives
+FM_TEST_END 2026-08-21T20:21:10Z tests/fm-windows-portability.test.sh exit=0 duration_ms=1429 gate_skip=false
+FM_TEST_BEGIN 2026-08-21T20:21:10Z tests/fm-pr-private-file-mode.test.sh family=pure-contract-unit expected_gate_skip=none
+ok - fm_pr_file_mode_is: the exact-mode assertion stays strict wherever chmod round-trips
+ok - fm_pr_file_mode_is: waives the exact-mode assertion only where the filesystem provably cannot express it
+ok - fm_pr_mode_enforced: a no-op chmod reads as not-enforcing even though mktemp already created the probe at 0600
+ok - fm_pr_private_file_valid: device pin, symlink refusal and link-count 1 all survive the waived mode assertion
+FM_TEST_END 2026-08-21T20:21:11Z tests/fm-pr-private-file-mode.test.sh exit=0 duration_ms=100 gate_skip=false
+FM_TEST_BEGIN 2026-08-21T20:21:11Z tests/fm-project-origin.test.sh family=unclassified expected_gate_skip=none
+ok - ordinary clone URLs are accepted and clone with the command the remote host runs
+ok - executable transports, option-shaped values, and unusable spellings are refused
+ALL TESTS PASSED
+FM_TEST_END 2026-08-21T20:21:11Z tests/fm-project-origin.test.sh exit=0 duration_ms=80 gate_skip=false
+FM_TEST_SUMMARY total=7 failed=0 skipped_gate=0 duration_ms=31531
+FM_TEST_SUMMARY_FAMILY family=pure-contract-unit count=4 duration_ms=2738 failed=0
+FM_TEST_SUMMARY_FAMILY family=unclassified count=2 duration_ms=594 failed=0
+FM_TEST_SUMMARY_FAMILY family=watcher-wake-lock count=1 duration_ms=28030 failed=0
+FM_TEST_SLOWEST rank=1 script=tests/fm-wake-queue.test.sh duration_ms=28030
+FM_TEST_SLOWEST rank=2 script=tests/fm-windows-portability.test.sh duration_ms=1429
+FM_TEST_SLOWEST rank=3 script=tests/fm-send-settle.test.sh duration_ms=634
+FM_TEST_SLOWEST rank=4 script=tests/fm-classify-decision-key.test.sh duration_ms=575
+FM_TEST_SLOWEST rank=5 script=tests/fm-test-fixture-cleanup.test.sh duration_ms=514
+FM_TEST_SLOWEST rank=6 script=tests/fm-pr-private-file-mode.test.sh duration_ms=100
+FM_TEST_SLOWEST rank=7 script=tests/fm-project-origin.test.sh duration_ms=80
+fm-test-run: wrote timing artifact: /tmp/nm-fm-test/fm-test-timing-windows-2.json
+
