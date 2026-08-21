@@ -193,6 +193,11 @@ spellings unchanged (measured). The strict string compare stays first and stays
 authoritative; where no `cygpath` exists the strict compare remains the only
 verdict, so this can widen a match and never silently accept an unresolvable one.
 
+It resolves the mount alias only.
+`fm_lock_same_path` calls `cygpath -m` without `-l`, so it cannot see through an 8.3 short component - the spelling GitHub's runners use for `%TEMP%` - and still compares a short spelling against a long one.
+The short-name expansion exists one layer down, in `fm_proc_cwd_prefixes` (`bin/fm-proc-lib.sh`), added for the `/proc` cwd read described in [`fm-test-windows-lane.md`](fm-test-windows-lane.md).
+The lock resolver has not been given it, and that gap is tracked as `winfm-portability-points-to-owner`.
+
 ## Run end to end on Windows
 
 Everything above this section was proven one component at a time.

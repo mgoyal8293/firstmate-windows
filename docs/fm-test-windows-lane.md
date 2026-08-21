@@ -222,6 +222,24 @@ That run was taken before the six green-by-skip scripts were dropped, so it cove
 `timeout-minutes: 40` is a hang tripwire with roughly 2.6x margin over a healthy 15.5-minute shard, not the expected end of the lane.
 GitHub's Windows runners are slower than the machine these numbers came from.
 
+### The hints those shards are packed from
+
+`windows_weight_hints` in `bin/fm-test-run.sh` holds the measured Git Bash duration for each of the 39 members - 3,713,000 ms in total - and a member with no entry there is packed at the flat `WINDOWS_DEFAULT_WEIGHT_MS`, 95205 ms.
+
+`--check-coverage` reports `unmeasured_windows=<n>` and names the members behind it, for the same reason it reports `unmeasured_serial` for the Linux serial lane: a member packed at the default is what unbalances a shard, and a Windows shard that overruns `timeout-minutes: 40` is cancelled with no verdict rather than merely slow.
+On the shipped lane it is **0**, and it should stay there: this lane's admission rule already requires a member to be measured green on Windows, so an unhinted member is one admitted without the measurement its own rule demands.
+Read that zero as narrowly as its serial counterpart in [fm-test-portable-shards.md](fm-test-portable-shards.md) - it says no member is packed at the default, not that the hints are still current.
+
+Refresh from a green run of this lane, whose four shards each upload their own timing artifact:
+
+```sh
+gh run download <run-id> -R mgoyal8293/firstmate-windows --pattern 'fm-test-timing-windows-*' -D /tmp/fm-windows
+jq -r '.scripts[] | [.path, .duration_ms] | @tsv' /tmp/fm-windows/*.json | LC_ALL=C sort
+bin/fm-test-run.sh --check-coverage
+```
+
+Green matters because a shard that failed part-way records a truncated duration for the script that failed; update the shard table above from the packer's own arithmetic afterwards.
+
 ## The fork-cost multiplier is not a single number
 
 The 14-18x headline is a central tendency, not a constant: measured per script it spans roughly 10x to 24x.

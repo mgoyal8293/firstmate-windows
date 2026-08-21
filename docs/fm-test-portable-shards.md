@@ -134,7 +134,8 @@ It separately verifies that the portable serial CI shards are non-empty, disjoin
 It reports, rather than refuses, `unmeasured_serial=<n>` and the names behind it: a newly added test legitimately has no measured duration until it has run once, but an unmeasured script is packed as if it were average, and enough of them unbalance a shard.
 It separately verifies that every script the Windows lane lists exists and that the Windows CI shards are non-empty, disjoint, and together equal that lane.
 The Windows lane is a measured subset overlay rather than another part of the partition above, so it is deliberately excluded from the union check.
-[fm-test-windows-lane.md](fm-test-windows-lane.md) owns that lane's membership, evidence, and shard count.
+It reports `unmeasured_windows=<n>` and the names behind it on the same terms as `unmeasured_serial`.
+[fm-test-windows-lane.md](fm-test-windows-lane.md) owns that lane's membership, evidence, shard count, and weight hints.
 
 ## Timing artifacts
 
