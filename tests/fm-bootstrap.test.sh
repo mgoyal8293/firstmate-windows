@@ -794,6 +794,87 @@ SH
   pass "bootstrap: a failed backend-dependency install fails loudly instead of reporting success"
 }
 
+# A fake npm that records every invocation and fails only for the package named
+# in FM_FAKE_NPM_FAIL, so a batch can be driven with exactly one broken entry.
+make_fake_npm() {  # <case-dir> -> echoes fakebin dir
+  local fakebin=$1/fakebin
+  mkdir -p "$fakebin"
+  cat > "$fakebin/npm" <<'SH'
+#!/usr/bin/env bash
+printf 'NPM-RAN:%s\n' "$*"
+[ -n "${FM_FAKE_NPM_FAIL:-}" ] || exit 0
+case " $* " in
+  *" $FM_FAKE_NPM_FAIL "*) exit 1 ;;
+esac
+exit 0
+SH
+  chmod +x "$fakebin/npm"
+  printf '%s' "$fakebin"
+}
+
+test_install_batch_attempts_every_tool() {
+  local case_dir fakebin out status
+  # `install <tool>...` is a batch command and one captain approval covers the
+  # whole list, so a failure partway through must not strand the tools after it.
+  case_dir="$TMP_ROOT/install-batch"
+  fakebin=$(make_fake_npm "$case_dir")
+
+  # First entry fails: the second must still be attempted, both failures named,
+  # and the overall status non-zero.
+  out=$(FM_FAKE_NPM_FAIL=tasks-axi PATH="$fakebin:$BASE_PATH" \
+    "$ROOT/bin/fm-bootstrap.sh" install tasks-axi quota-axi 2>&1)
+  status=$?
+  [ "$status" -ne 0 ] \
+    || fail "a batch containing a failing install must exit non-zero, got: $out"
+  assert_contains "$out" "NPM-RAN:install -g tasks-axi" \
+    "the failing first tool must actually be attempted"
+  assert_contains "$out" "NPM-RAN:install -g quota-axi" \
+    "a tool after a failed one must still be attempted"
+  assert_contains "$out" "install of tasks-axi failed" \
+    "each failed install must be named"
+  assert_not_contains "$out" "install of quota-axi failed" \
+    "a tool that installed cleanly must not be reported as failed"
+
+  # Nothing failing: the same batch must still report success.
+  out=$(PATH="$fakebin:$BASE_PATH" \
+    "$ROOT/bin/fm-bootstrap.sh" install tasks-axi quota-axi 2>&1)
+  status=$?
+  [ "$status" -eq 0 ] \
+    || fail "a batch whose installs all succeed must exit 0, got status $status: $out"
+  assert_contains "$out" "NPM-RAN:install -g quota-axi" \
+    "a fully successful batch must attempt every tool"
+  pass "bootstrap: install attempts every approved tool and reports failure without abandoning the batch"
+}
+
+test_conpty_deps_hint_names_a_broken_checkout() {
+  local case_dir mirror entry base out status
+  # A checkout whose bin/backends/conpty.sh is absent cannot resolve the install
+  # directory from its owner, and an install hint with no command in it is the
+  # unactionable diagnostic this whole check exists to remove. Mirror bin/ by
+  # symlink with only that adapter withheld and drive the real subcommand.
+  case_dir="$TMP_ROOT/conpty-deps-broken-checkout"
+  mirror="$case_dir/bin"
+  mkdir -p "$mirror/backends"
+  for entry in "$ROOT"/bin/*; do
+    base=$(basename "$entry")
+    [ "$base" = backends ] || ln -s "$entry" "$mirror/$base"
+  done
+  for entry in "$ROOT"/bin/backends/*; do
+    base=$(basename "$entry")
+    [ "$base" = conpty.sh ] || ln -s "$entry" "$mirror/backends/$base"
+  done
+
+  out=$(bash "$mirror/fm-bootstrap.sh" install conpty-backend-deps 2>&1)
+  status=$?
+  [ "$status" -ne 0 ] \
+    || fail "install conpty-backend-deps on a checkout with no conpty adapter must fail, got: $out"
+  assert_not_contains "$out" "unknown tool" \
+    "a checkout missing the conpty adapter must not be reported as an unknown tool"
+  assert_contains "$out" "bin/backends/conpty.sh could not be loaded" \
+    "the message must name the real problem"
+  pass "bootstrap: an unresolvable conpty install directory yields an honest message, never an empty hint"
+}
+
 test_herdr_install_requires_manual_action() {
   local out status
   out=$("$ROOT/bin/fm-bootstrap.sh" install herdr 2>&1)
@@ -1361,6 +1442,8 @@ test_conpty_dependency_check_is_scoped_to_conpty
 test_conpty_backend_deps_install_command_is_executable
 test_conpty_backend_deps_install_survives_awkward_path
 test_conpty_backend_deps_install_reports_failure
+test_install_batch_attempts_every_tool
+test_conpty_deps_hint_names_a_broken_checkout
 test_cmux_bundled_cli_satisfies_dependency
 test_unknown_backend_reports_invalid_configuration
 test_json_backends_require_jq_not_tmux

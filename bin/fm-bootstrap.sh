@@ -804,6 +804,14 @@ manual_install_url() {
   case "$1" in
     herdr) echo "https://herdr.dev" ;;
     cursor-agent) echo "https://cursor.com/cli" ;;
+    # conpty-backend-deps is normally auto-installable, so it only reaches this
+    # path when the adapter that owns the install directory cannot be loaded at
+    # all. Then no npm install can help and the real problem is the checkout, so
+    # say that rather than emitting an install hint with no command in it.
+    conpty-backend-deps)
+      fm_backend_source conpty >/dev/null 2>&1 && return 1
+      echo "repair this firstmate checkout - bin/backends/conpty.sh could not be loaded, so the backend's install directory cannot be resolved (docs/conpty-backend.md)"
+      ;;
     *) return 1 ;;
   esac
 }
@@ -1138,6 +1146,10 @@ startup_memory_budget_setup() {
 if [ "${1:-}" = "install" ]; then
   shift
   [ $# -gt 0 ] || { echo "usage: fm-bootstrap.sh install <tool>..." >&2; exit 1; }
+  # One captain approval covers the whole list, so every named tool is attempted
+  # even after one fails; the failures are reported per tool and the exit status
+  # stays honest at the end.
+  install_failed=0
   for t in "$@"; do
     if ! cmd=$(install_cmd "$t"); then
       instructions=$(manual_install_url "$t") || { echo "error: unknown tool $t" >&2; exit 1; }
@@ -1148,10 +1160,10 @@ if [ "${1:-}" = "install" ]; then
     echo "installing $t: $cmd"
     if ! eval "$cmd"; then
       echo "error: install of $t failed: $cmd" >&2
-      exit 1
+      install_failed=1
     fi
   done
-  exit 0
+  exit "$install_failed"
 fi
 
 # This is the first mutating sweep at a locked session boundary. It pauses an
