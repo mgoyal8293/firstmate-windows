@@ -568,6 +568,177 @@ test_windows_shard_lane_refusals() {
   pass "windows shard lanes refuse mismatched, out-of-range, and countless names"
 }
 
+# FM_TEST_COVERAGE_WINDOWS is the guard's machine-read status line, so it is
+# parsed into fields here rather than matched as text: unmeasured_windows= and
+# windows= are distinct fields that a substring match conflates.
+windows_coverage_field() {  # <coverage guard stdout> <field>
+  printf '%s\n' "$1" | awk -v f="$2" '
+    $1 == "FM_TEST_COVERAGE_WINDOWS" {
+      for (i = 2; i <= NF; i++) {
+        n = index($i, "=")
+        if (n > 0 && substr($i, 1, n - 1) == f) print substr($i, n + 1)
+      }
+    }
+  '
+}
+
+# A sandbox root the REAL guard runs in: the runner resolves its own root from
+# its location, so a copy beside a mirrored inventory drives the production code
+# path while one edit below is the only difference from the shipped tree. Same
+# construction as test_unmeasured_serial_report_names_the_unhinted_script.
+windows_guard_sandbox() {  # <slug> -> echoes sandbox root
+  local sandbox f
+  sandbox=$(fm_test_tmproot "$1") || return 1
+  mkdir -p "$sandbox/bin" "$sandbox/tests" || return 1
+  cp "$RUNNER" "$sandbox/bin/fm-test-run.sh" || return 1
+  cp "$ROOT/bin/fm-test-isolation-proof.sh" "$sandbox/bin/fm-test-isolation-proof.sh" || return 1
+  for f in "$ROOT"/tests/*.test.sh; do
+    : > "$sandbox/tests/$(basename "$f")" || return 1
+  done
+  printf '%s\n' "$sandbox"
+}
+
+test_windows_coverage_report_counts_the_shipped_lane() {
+  local dir out err rc lane_count shard_count windows shards unmeasured
+  dir=$(fm_test_tmproot fm-test-run-wincoverage) || fail "could not create a fixture root"
+  set +e
+  out=$("$RUNNER" --check-coverage 2>"$dir/err.txt")
+  rc=$?
+  set -e
+  err=$(cat "$dir/err.txt")
+  [ "$rc" = 0 ] || fail "coverage guard must pass on the shipped lists: $out $err"
+  # The Windows lane is a separate overlay with its own report, so a Linux-lane
+  # verdict says nothing about it.
+  printf '%s\n' "$out" \
+    | grep -Eq '^FM_TEST_COVERAGE_WINDOWS ok windows=[0-9]+ windows_shards=[0-9]+ unmeasured_windows=[0-9]+$' \
+    || fail "guard must report windows=, windows_shards= and unmeasured_windows=: $out"
+  # The sizes must be the lane's own, not constants the report could print for
+  # any inventory.
+  lane_count=$("$RUNNER" --list --lane windows | wc -l | tr -d ' ')
+  shard_count=$("$RUNNER" --list-lanes | grep -c '^windows-[0-9]*of[0-9]*$')
+  windows=$(windows_coverage_field "$out" windows)
+  shards=$(windows_coverage_field "$out" windows_shards)
+  unmeasured=$(windows_coverage_field "$out" unmeasured_windows)
+  [ "$windows" = "$lane_count" ] \
+    || fail "reported windows=$windows must equal the lane's $lane_count members: $out"
+  [ "$shards" = "$shard_count" ] \
+    || fail "reported windows_shards=$shards must equal the $shard_count shard lanes: $out"
+  # Zero because the lane's admission rule is that a member joins once it is
+  # measured green on Windows (docs/fm-test-windows-lane.md), and the counter
+  # below proves this zero can move.
+  [ "$unmeasured" = 0 ] \
+    || fail "every windows lane member must carry a measured hint, got unmeasured_windows=$unmeasured: $err"
+  rm -rf "$dir"
+  pass "coverage guard reports the windows lane size, shard count, and unmeasured members"
+}
+
+test_unmeasured_windows_report_names_the_unhinted_member() {
+  local sandbox runner out err rc baseline count expected probe hinted
+  probe=tests/fm-zzz-windows-probe.test.sh
+  hinted=tests/fm-decision-hold-lifecycle.test.sh
+  sandbox=$(windows_guard_sandbox fm-test-run-unmeasured-windows) \
+    || fail "could not create sandbox root"
+  runner="$sandbox/bin/fm-test-run.sh"
+
+  # Baseline first, so the assertion is this case's delta rather than the shipped
+  # tree's own hint coverage.
+  set +e
+  out=$("$runner" --check-coverage 2>"$sandbox/baseline-err.txt")
+  rc=$?
+  set -e
+  [ "$rc" = 0 ] \
+    || fail "coverage guard must pass on the mirrored sandbox: $out $(cat "$sandbox/baseline-err.txt")"
+  baseline=$(windows_coverage_field "$out" unmeasured_windows)
+  case $baseline in
+    ''|*[!0-9]*) fail "sandbox guard did not report an unmeasured windows count: $out" ;;
+  esac
+
+  # Admit a member to the hand-written lane list without measuring it - the exact
+  # drift between the two parallel lists that this counter exists to see - and
+  # leave windows_weight_hints alone.
+  : > "$sandbox/$probe"
+  awk -v probe="$probe" '
+    { print }
+    /^list_windows\(\) \{$/ { inlist = 1 }
+    inlist && /^  cat <</ { print probe; inlist = 0 }
+  ' "$runner" > "$sandbox/patched.sh" || fail "could not build the patched sandbox runner"
+  cmp -s "$runner" "$sandbox/patched.sh" \
+    && fail "the fixture must actually admit an unhinted member to the sandbox lane list"
+  cat "$sandbox/patched.sh" > "$runner" || fail "could not install the patched sandbox runner"
+
+  set +e
+  out=$("$runner" --check-coverage 2>"$sandbox/err.txt")
+  rc=$?
+  set -e
+  err=$(cat "$sandbox/err.txt")
+  # Reported, never refused, for the same reason the serial counter is: a member
+  # legitimately has no measurement until it has run once.
+  [ "$rc" = 0 ] || fail "an unhinted windows member must not fail the coverage guard: $out $err"
+  assert_contains "$out" "FM_TEST_COVERAGE_WINDOWS ok" "windows coverage marker in sandbox"
+  count=$(windows_coverage_field "$out" unmeasured_windows)
+  expected=$((baseline + 1))
+  # A count that cannot move proves nothing: swapped comm operands or a divergent
+  # sort order leave it at the baseline for a lane that just gained an unhinted
+  # member.
+  [ "$count" = "$expected" ] \
+    || fail "one unhinted member must raise unmeasured_windows from $baseline to $expected, got $count: $out"
+  printf '%s\n' "$err" | grep -Fq "$probe" \
+    || fail "guard must name the unhinted windows member on stderr: $err"
+  # And a measured member must not be swept in with it.
+  printf '%s\n' "$err" | grep -Fq "$hinted" \
+    && fail "guard named a measured windows member as unmeasured: $err"
+  rm -rf "$sandbox"
+  pass "coverage guard counts and names windows lane members with no measured duration"
+}
+
+test_windows_shards_must_cover_the_windows_lane() {
+  local sandbox runner out err rc dropped
+  # The lightest lane member, so dropping it cannot empty a shard and trip the
+  # earlier empty-shard refusal instead of the partition check under test.
+  dropped=tests/fm-gitignore-config.test.sh
+  sandbox=$(windows_guard_sandbox fm-test-run-windows-partition) \
+    || fail "could not create sandbox root"
+  runner="$sandbox/bin/fm-test-run.sh"
+
+  set +e
+  out=$("$runner" --check-coverage 2>"$sandbox/baseline-err.txt")
+  rc=$?
+  set -e
+  [ "$rc" = 0 ] \
+    || fail "coverage guard must pass on the mirrored sandbox: $out $(cat "$sandbox/baseline-err.txt")"
+
+  # Lose one member from the shard assignment while the lane still lists it. The
+  # shipped code reads one list on both sides, so the only way to prove the check
+  # would catch a lost member is to make the two sides genuinely disagree.
+  awk -v drop="$dropped" '
+    /^run_coverage_guard\(\) \{$/ {
+      print "windows_assignments() {"
+      print "  lane_assignments \"$WINDOWS_SHARDS\" list_windows windows_weight_for | grep -Fv \"" drop "\""
+      print "}"
+    }
+    { print }
+  ' "$runner" > "$sandbox/patched.sh" || fail "could not build the patched sandbox runner"
+  cmp -s "$runner" "$sandbox/patched.sh" \
+    && fail "the fixture must actually drop a member from the windows shard assignment"
+  cat "$sandbox/patched.sh" > "$runner" || fail "could not install the patched sandbox runner"
+
+  set +e
+  out=$("$runner" --check-coverage 2>"$sandbox/err.txt")
+  rc=$?
+  set -e
+  err=$(cat "$sandbox/err.txt")
+  [ "$rc" -ne 0 ] \
+    || fail "windows shards that do not cover the lane must refuse, got exit 0: $out"
+  printf '%s\n' "$err" | grep -Fq 'windows shards must equal the windows lane' \
+    || fail "the refusal must name the windows partition check: $err"
+  printf '%s\n' "$err" | grep -Fq "$dropped" \
+    || fail "the refusal must name the member the shards lost: $err"
+  assert_not_contains "$out" "FM_TEST_COVERAGE_WINDOWS ok" \
+    "a refused windows partition must not also report a coverage line"
+  rm -rf "$sandbox"
+  pass "coverage guard refuses windows shards that do not cover the windows lane"
+}
+
 test_jobs_requires_proven_isolated() {
   local tmp rc shard_lane
   tmp=$(mktemp -d "${TMPDIR:-/tmp}/fm-test-run-jobs.XXXXXX")
@@ -995,12 +1166,33 @@ print scripts.first
 # its ambient PATH and its seed - is what lets a tool be genuinely unreachable,
 # which the real /usr/bin can never be made to be.
 lfharness_bin() {  # <dir> <tool>...
-  local dir=$1 tool real
+  local dir=$1 tool real shell
   shift
   mkdir -p "$dir"
+  shell=$(command -v bash) || fail "bash must be resolvable to stage the harness coreutils"
   for real in dirname tr sed grep printf env; do
     tool=$(command -v "$real" 2>/dev/null) || continue
-    ln -sf "$tool" "$dir/$real"
+    # A shell builtin resolves to a bare name with no binary behind it, and
+    # neither a link nor a wrapper can stand in for one.
+    case "$tool" in
+      /*) ;;
+      *) continue ;;
+    esac
+    # On Windows an MSYS binary finds msys-2.0.dll through PATH, so a symlink
+    # reached through a PATH carrying only the link's own directory exits before
+    # it runs; an exec wrapper keeps the real binary running from its own
+    # directory. Same technique and reason as stage_tool_for_restricted_path in
+    # tests/fm-windows-portability.test.sh and make_no_timeout_toolbin in
+    # tests/fm-crew-state.test.sh.
+    case "$(uname -s)" in
+      MINGW*|MSYS*|CYGWIN*)
+        printf '#!%s\nexec "%s" "$@"\n' "$shell" "$tool" > "$dir/$real"
+        chmod +x "$dir/$real"
+        ;;
+      *)
+        ln -sf "$tool" "$dir/$real"
+        ;;
+    esac
   done
   for tool in "$@"; do
     printf '#!/usr/bin/env bash\necho %s stub\n' "$tool" > "$dir/$tool"
@@ -1271,6 +1463,9 @@ test_portable_serial_shards_partition_the_serial_lane
 test_unmeasured_serial_report_names_the_unhinted_script
 test_portable_serial_shard_lane_refusals
 test_windows_shard_lane_refusals
+test_windows_coverage_report_counts_the_shipped_lane
+test_unmeasured_windows_report_names_the_unhinted_member
+test_windows_shards_must_cover_the_windows_lane
 test_jobs_requires_proven_isolated
 test_jobs_parallel_scheduler_and_failure_propagation
 test_herdr_ci_family_run_has_a_step_timeout
