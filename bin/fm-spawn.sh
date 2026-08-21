@@ -54,7 +54,9 @@
 #   auto-detected tmux stays silent; zellij and orca are never auto-detected.
 #   codex-app is not a known backend yet; docs/codex-app-backend.md owns that
 #   blocked backend contract. Default tmux spawns do not write backend= to meta;
-#   absent backend= means tmux. cmux does not support --secondmate spawns yet.
+#   absent backend= means tmux - except on Windows, where backend= is always
+#   written because no tmux exists there for the default to name. cmux does
+#   not support --secondmate spawns yet.
 #   A backend spawn refusal (missing dependency, version gate, unauthenticated
 #   socket, or unsupported secondmate mode) is terminal for that selected backend;
 #   callers must surface it instead of silently retrying another backend.
@@ -997,8 +999,12 @@ if [ "$RELAUNCH" -eq 1 ]; then
   fm_backend_validate_spawn "$BACKEND" || exit 1
   fm_backend_source "$BACKEND" || exit 1
   # A relaunch must PROVE the previous agent is gone before it launches another
-  # one into the same endpoint, and only tmux and herdr have a recovery-grade
-  # classifier that can (bin/fm-control-lib.sh owns that capability table).
+  # one into the same endpoint, so it is admitted only for the backends with a
+  # recovery-grade agent-state classifier. bin/fm-control-lib.sh's
+  # fm_control_backend_state_verified is the single owner of that capability
+  # table, so this gate never restates the list; widening it there also widens
+  # `fm-spawn --relaunch`, which is coherent because a relaunch on a listed
+  # backend still needs its own endpoint adoption (conpty's is below).
   fm_control_backend_state_verified "$BACKEND" || {
     echo "error: backend '$BACKEND' has no recovery-grade agent-state classifier, so a relaunch cannot prove the previous agent exited; refusing rather than risking two agents in one endpoint" >&2
     exit 1
@@ -2701,7 +2707,19 @@ preserve_relaunch_meta() {
   # backend= is written only for a non-default (non-tmux) backend, so the
   # default path's meta stays byte-identical (absent backend= means tmux;
   # data/fm-backend-design-d7's P1 compatibility contract).
-  [ "$BACKEND" = tmux ] || echo "backend=$BACKEND"
+  #
+  # WINDOWS ARM. That contract is load-bearing for every existing POSIX home,
+  # so the absent-value default itself is NOT touched: fm_backend_of_meta still
+  # answers tmux, and a POSIX home's existing meta files keep reading back
+  # exactly as they always have. What changes is only what a Windows home
+  # WRITES. There is no tmux on Windows, so an absent backend= there would name
+  # a session provider that cannot exist; recording it explicitly means no
+  # Windows meta ever depends on the default. Reinterpreting the absent value
+  # per home was the alternative and is worse: it would retroactively change how
+  # already-written records read whenever config/backend changed.
+  if [ "$BACKEND" != tmux ] || fm_platform_is_windows; then
+    echo "backend=$BACKEND"
+  fi
   if [ "$BACKEND" = herdr ]; then
     echo "herdr_session=$HERDR_SES"
     echo "herdr_workspace_id=$HERDR_WORKSPACE_ID"

@@ -156,6 +156,101 @@ if fm_backend_tmux_resolve_bare_selector "no-such-window-xyz" 2>/dev/null; then
 fi
 pass "real tmux: fm_backend_tmux_resolve_bare_selector fails for a window that does not exist"
 
+# --- target_exists (the cheap read-only presence probe) ----------------------
+#
+# The property under test is EQUIVALENCE, not a particular verdict: the adapter
+# function and the fm_backend_target_exists dispatcher must answer exactly what
+# the raw `tmux display-message -p -t <target> '#{pane_id}'` call they replaced
+# answered, for the same targets. That is the whole safety argument for moving
+# the probe out of bin/fm-backend.sh's dispatcher and out of fm-crew-state.sh's
+# pane_readable. Asserting a fixed verdict instead would encode this tmux
+# build's own target-resolution behaviour, which the refactor neither owns nor
+# changes.
+probe_verdicts() {  # <target> -> "<raw> <adapter> <dispatcher>", each 0 or 1
+  local target=$1 raw adapter dispatcher
+  tmux display-message -p -t "$target" '#{pane_id}' >/dev/null 2>&1 && raw=0 || raw=1
+  fm_backend_tmux_target_exists "$target" && adapter=0 || adapter=1
+  fm_backend_target_exists tmux "$target" && dispatcher=0 || dispatcher=1
+  printf '%s %s %s' "$raw" "$adapter" "$dispatcher"
+}
+
+for probe_target in "$TARGET" "$SESSION:fm-no-such-window" "no-such-session:fm-smoke1" ""; do
+  verdicts=$(probe_verdicts "$probe_target")
+  read -r raw_v adapter_v dispatcher_v <<< "$verdicts"
+  [ "$adapter_v" = "$raw_v" ] \
+    || fail "fm_backend_tmux_target_exists disagrees with the raw pane_id probe for '$probe_target' (raw=$raw_v adapter=$adapter_v)"
+  [ "$dispatcher_v" = "$raw_v" ] \
+    || fail "fm_backend_target_exists tmux disagrees with the raw pane_id probe for '$probe_target' (raw=$raw_v dispatcher=$dispatcher_v)"
+done
+pass "real tmux: fm_backend_tmux_target_exists and the fm_backend_target_exists dispatcher return the raw pane_id probe's verdict for a live window, an unknown window, an unknown session, and an empty target"
+
+# A live window must still read as present, so the equivalence above cannot go
+# vacuous by every path failing together.
+fm_backend_tmux_target_exists "$TARGET" \
+  || fail "fm_backend_tmux_target_exists must report a live window as present"
+pass "real tmux: the equivalence is not vacuous - a live window reads as present"
+
+# --- leader_pid (teardown's last-resort process-group reaper) ----------------
+
+raw_leader=$(tmux display-message -p -t "$TARGET" '#{pane_pid}' 2>/dev/null)
+adapter_leader=$(fm_backend_tmux_leader_pid "$TARGET") \
+  || fail "fm_backend_tmux_leader_pid failed for a live window"
+dispatch_leader=$(fm_backend_leader_pid tmux "$TARGET") \
+  || fail "fm_backend_leader_pid tmux failed for a live window"
+case "$raw_leader" in ''|*[!0-9]*) fail "the raw pane_pid read did not return a pid: '$raw_leader'" ;; esac
+[ "$adapter_leader" = "$raw_leader" ] \
+  || fail "fm_backend_tmux_leader_pid returned '$adapter_leader', the raw pane_pid read returned '$raw_leader'"
+[ "$dispatch_leader" = "$raw_leader" ] \
+  || fail "fm_backend_leader_pid tmux returned '$dispatch_leader', the raw pane_pid read returned '$raw_leader'"
+kill -0 "$adapter_leader" 2>/dev/null \
+  || fail "the reported pane leader pid $adapter_leader is not a live process"
+pass "real tmux: fm_backend_tmux_leader_pid and the fm_backend_leader_pid dispatcher return the raw '#{pane_pid}' read, and it names a live process"
+
+# --- list_live / list_task_windows (the no-metadata discovery inventory) -----
+#
+# Again the property is EQUIVALENCE with the raw pipeline that used to run
+# inline in fm-supervise-daemon.sh's window_for_task(): the adapter's target
+# column and the fm_backend_list_task_windows dispatcher must both reproduce
+# `tmux list-windows -a -F '#{session_name}:#{window_name}' | grep ':fm-'`
+# exactly, including its ordering.
+
+tmux new-window -t "$SESSION" -n not-a-task-window \
+  || fail "real tmux: could not create the non-task window the filter must exclude"
+
+raw_list=$(tmux list-windows -a -F '#{session_name}:#{window_name}' 2>/dev/null | grep ':fm-' || true)
+adapter_list=$(fm_backend_tmux_list_live | cut -f1)
+dispatch_list=$(fm_backend_list_task_windows tmux | cut -f1)
+
+[ "$adapter_list" = "$raw_list" ] \
+  || fail "fm_backend_tmux_list_live's targets differ from the raw list-windows pipeline"$'\n'"--- raw ---"$'\n'"$raw_list"$'\n'"--- adapter ---"$'\n'"$adapter_list"
+[ "$dispatch_list" = "$raw_list" ] \
+  || fail "fm_backend_list_task_windows tmux differs from the raw list-windows pipeline"$'\n'"--- raw ---"$'\n'"$raw_list"$'\n'"--- dispatcher ---"$'\n'"$dispatch_list"
+case "$raw_list" in
+  *"$TARGET"*) : ;;
+  *) fail "the inventory equivalence is vacuous: the live task window is not in the raw list"$'\n'"$raw_list" ;;
+esac
+case "$raw_list" in
+  *not-a-task-window*) fail "the fm- filter let a non-task window through"$'\n'"$raw_list" ;;
+esac
+pass "real tmux: fm_backend_tmux_list_live and the fm_backend_list_task_windows dispatcher reproduce the raw list-windows|grep ':fm-' pipeline exactly, including its non-task-window exclusion"
+
+adapter_labels=$(fm_backend_tmux_list_live | cut -f2)
+[ "$adapter_labels" = "$WINDOW" ] \
+  || fail "fm_backend_tmux_list_live's label column should be the bare window name, got '$adapter_labels'"
+pass "real tmux: fm_backend_tmux_list_live prints the shared '<target>\\t<label>' shape every other adapter's list_live prints"
+
+# The dispatcher passes BOTH columns through: the discovery caller matches a
+# task id on the label and addresses the endpoint with the target, so dropping
+# either column breaks the fallback on some backend.
+dispatch_labels=$(fm_backend_list_task_windows tmux | cut -f2)
+[ "$dispatch_labels" = "$adapter_labels" ] \
+  || fail "fm_backend_list_task_windows tmux dropped or altered the label column: adapter '$adapter_labels', dispatcher '$dispatch_labels'"
+[ "$(fm_backend_list_task_windows tmux)" = "$(fm_backend_tmux_list_live)" ] \
+  || fail "fm_backend_list_task_windows tmux is not the adapter's list_live verbatim"
+pass "real tmux: the fm_backend_list_task_windows dispatcher preserves the adapter's '<target>\\t<label>' pair verbatim"
+
+tmux kill-window -t "$SESSION:not-a-task-window" 2>/dev/null || true
+
 # --- kill and recovery-grade missing-window classification ------------------
 
 fm_backend_tmux_kill "$TARGET"

@@ -1394,26 +1394,31 @@ $dir_pids"
   TASK_PIDS=$(printf '%s\n' "$pids" | grep -E '^[0-9]+$' | sort -un || true)
 }
 
+# The last-resort reaper: no lsof, and no /proc cwd scan either (that arm is
+# Windows-only by design, see pids_with_cwd_under), so the processes holding the
+# worktree cannot be enumerated. Signal the pane's whole process group instead,
+# which needs the one thing only the session provider knows - the pid tmux
+# started in the pane. That read now goes through fm_backend_leader_pid
+# (bin/fm-backend.sh), which runs the byte-identical tmux command for a tmux
+# task and fails for every backend with no such primitive. Failing IS the old
+# `[ "$BACKEND" != tmux ]` early return: same warning, same return 0, same
+# "no fallback available" outcome, without this script naming a backend.
 reap_task_backend_process_group() {  # <label>
   local label=$1 leader leader_start pgid current_pgid own_pgid
-  if [ "$BACKEND" != tmux ]; then
-    echo "warning: lsof is unavailable; cannot resolve a process-group fallback for $BACKEND task $ID" >&2
-    return 0
-  fi
-  leader=$(tmux display-message -p -t "$T" '#{pane_pid}' 2>/dev/null) || leader=""
+  leader=$(fm_backend_leader_pid "$BACKEND" "$T" 2>/dev/null) || leader=""
   case "$leader" in ''|*[!0-9]*)
-    echo "warning: lsof is unavailable; cannot resolve the tmux pane process group for $ID" >&2
+    echo "warning: lsof is unavailable; cannot resolve a process-group fallback for $BACKEND task $ID" >&2
     return 0
     ;;
   esac
   leader_start=$(task_process_identity "$leader") || {
-    echo "warning: lsof is unavailable; cannot identify the tmux pane process group for $ID" >&2
+    echo "warning: lsof is unavailable; cannot identify the $BACKEND pane process group for $ID" >&2
     return 0
   }
   pgid=$(fm_proc_field "$leader" pgid) || pgid=""
   pgid=$(printf '%s' "$pgid" | tr -d '[:space:]')
   case "$pgid" in ''|*[!0-9]*|0|1)
-    echo "warning: lsof is unavailable; cannot resolve the tmux pane process group for $ID" >&2
+    echo "warning: lsof is unavailable; cannot resolve the $BACKEND pane process group for $ID" >&2
     return 0
     ;;
   esac

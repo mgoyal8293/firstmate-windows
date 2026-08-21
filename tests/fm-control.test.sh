@@ -25,6 +25,10 @@ set -u
 . "$ROOT/bin/fm-control-lib.sh"
 # shellcheck source=/dev/null
 . "$ROOT/bin/fm-marker-lib.sh"
+# fm_backend_agent_state, so the state-verified list can be checked against the
+# dispatcher it is supposed to mirror rather than against a second hand-kept list.
+# shellcheck source=/dev/null
+. "$ROOT/bin/fm-backend.sh"
 
 CONTROL="$ROOT/bin/fm-control.sh"
 SEND="$ROOT/bin/fm-send.sh"
@@ -343,7 +347,7 @@ test_unverified_harness_is_refused() {
 
 test_backend_key_capability_matrix() {
   local backend key
-  for backend in tmux herdr zellij cmux; do
+  for backend in tmux herdr zellij cmux conpty; do
     # C-u is the composer clear muse's interrupt needs; every session provider
     # but Orca normalizes it (bin/backends/*.sh).
     for key in Escape Enter C-c C-u; do
@@ -432,15 +436,32 @@ test_unverified_state_backends_refuse_stop_verbs() {
   pass "fm-control: a backend that cannot prove an agent stopped refuses exit and relaunch"
 }
 
-test_state_verified_backends_are_exactly_tmux_and_herdr() {
+# This list must stay identical to fm_backend_agent_state's own arms in
+# bin/fm-backend.sh: a backend belongs here because it genuinely classifies, and
+# the assertion below reads that dispatcher rather than restating a hand-kept
+# list, so the two cannot drift apart silently.
+test_state_verified_backends_match_the_agent_state_dispatcher() {
+  local backend verdict
   fm_control_backend_state_verified tmux || fail "tmux has a recovery-grade classifier"
   fm_control_backend_state_verified herdr || fail "herdr has a recovery-grade classifier"
-  local backend
+  fm_control_backend_state_verified conpty || fail "conpty has a recovery-grade classifier"
   for backend in zellij orca cmux; do
     fm_control_backend_state_verified "$backend" \
       && fail "$backend has no recovery-grade classifier and must not claim one"
   done
-  pass "fm-control-lib: stop-proving verbs are gated on the backends that really classify agent state"
+  # A backend the control plane trusts must not answer `unverified` from the
+  # dispatcher, and one it refuses must.
+  for backend in zellij orca cmux; do
+    verdict=$(fm_backend_agent_state "$backend" "no:such-target" 2>/dev/null)
+    [ "$verdict" = unverified ] \
+      || fail "$backend is refused by the control plane but fm_backend_agent_state answered '$verdict', not unverified"
+  done
+  for backend in tmux herdr conpty; do
+    verdict=$(fm_backend_agent_state "$backend" "no:such-target" 2>/dev/null)
+    [ "$verdict" = unverified ] \
+      && fail "$backend is trusted by the control plane but fm_backend_agent_state has no classifier for it"
+  done
+  pass "fm-control-lib: stop-proving verbs are gated on exactly the backends fm_backend_agent_state really classifies"
 }
 
 # --- 3. exact-id scoping ----------------------------------------------------
@@ -880,7 +901,7 @@ test_backend_key_capability_matrix
 test_harness_kind_capability
 test_orca_refuses_an_escape_harness_interrupt
 test_unverified_state_backends_refuse_stop_verbs
-test_state_verified_backends_are_exactly_tmux_and_herdr
+test_state_verified_backends_match_the_agent_state_dispatcher
 test_window_label_is_refused_with_the_exact_id
 test_explicit_endpoint_is_refused
 test_unknown_task_is_refused

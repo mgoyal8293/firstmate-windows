@@ -56,8 +56,10 @@ FM_ROOT="${FM_ROOT_OVERRIDE:-$(cd "$SCRIPT_DIR/.." && pwd)}"
 FM_HOME="${FM_HOME:-${FM_ROOT_OVERRIDE:-$FM_ROOT}}"
 STATE="${FM_STATE_OVERRIDE:-$FM_HOME/state}"
 
-# shellcheck source=bin/fm-tmux-lib.sh
-. "$SCRIPT_DIR/fm-tmux-lib.sh"
+# Every endpoint read here is dispatched (fm_backend_target_exists,
+# fm_backend_capture, fm_busy_classify), so no session provider's own library is
+# sourced directly; bin/fm-backend.sh loads the adapter the task actually
+# records, and that adapter loads whatever it needs.
 # shellcheck source=bin/fm-backend.sh
 . "$SCRIPT_DIR/fm-backend.sh"
 # shellcheck source=bin/fm-classify-lib.sh
@@ -149,7 +151,13 @@ BACKEND_TARGET=$(fm_backend_target_of_meta "$META")
 EXPECTED_LABEL="fm-$ID"
 pane_readable() {  # <target>
   case "$TASK_BACKEND" in
-    tmux) tmux display-message -p -t "$1" '#{pane_id}' >/dev/null 2>&1 ;;
+    # fm_backend_target_exists's tmux arm runs the byte-identical probe this
+    # arm used to issue inline (`tmux display-message -p -t <target>
+    # '#{pane_id}'`), so the tmux verdict is unchanged and this script no
+    # longer names a session provider's command itself. The non-tmux arm keeps
+    # its capture read deliberately: target_exists is a plain presence probe,
+    # while these adapters answer "readable" by actually reading the surface.
+    tmux) fm_backend_target_exists "$TASK_BACKEND" "$1" "$EXPECTED_LABEL" ;;
     *) fm_backend_capture "$TASK_BACKEND" "$1" 1 "$EXPECTED_LABEL" >/dev/null 2>&1 ;;
   esac
 }

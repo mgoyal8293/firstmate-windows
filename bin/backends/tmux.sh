@@ -25,6 +25,26 @@
 # shellcheck source=bin/fm-cursor-lib.sh
 . "$FM_BACKEND_LIB_DIR/fm-cursor-lib.sh"
 
+# fm_backend_tmux_list_live: recovery/orphan discovery - every live window
+# whose name looks like a firstmate task window (fm-<id>), from tmux's own
+# server-wide inventory. One "<session>:<window_name>\t<window_name>" line per
+# match, the shape every other adapter's list_live already prints
+# (bin/backends/herdr.sh, zellij.sh, cmux.sh, conpty.sh). Read-only; a tmux
+# server that is not running simply lists nothing.
+#
+# This is the exact `tmux list-windows -a -F '#{session_name}:#{window_name}' |
+# grep ':fm-'` pipeline that used to run inline in fm-supervise-daemon.sh's
+# backend-agnostic window_for_task(); the grep stays on the composed
+# session:window line so the match set is unchanged.
+fm_backend_tmux_list_live() {
+  local line
+  while IFS= read -r line; do
+    case "$line" in
+      *:fm-*) printf '%s\t%s\n' "$line" "${line##*:}" ;;
+    esac
+  done < <(tmux list-windows -a -F '#{session_name}:#{window_name}' 2>/dev/null || true)
+}
+
 # fm_backend_tmux_resolve_bare_selector: the live-window-listing fallback for a
 # selector that is neither an explicit target nor a task selector routed
 # through meta - an ad hoc window name with no recorded task. Mirrors the
@@ -34,6 +54,34 @@ fm_backend_tmux_resolve_bare_selector() {  # <name>
   local name=$1
   tmux list-windows -a -F '#{session_name}:#{window_name}' | grep -m1 ":$name\$" \
     || { echo "error: no window named $name" >&2; return 1; }
+}
+
+# fm_backend_tmux_target_exists: the cheap, read-only "is this window still
+# there?" probe. Byte-identical to the `tmux display-message -p -t <target>
+# '#{pane_id}'` call it replaces, which used to sit inline in
+# bin/fm-backend.sh's fm_backend_target_exists arm and, duplicated, in
+# fm-crew-state.sh's pane_readable. Every other backend already answered that
+# question from its own adapter; tmux was the last one asking it from the
+# dispatcher.
+fm_backend_tmux_target_exists() {  # <target>
+  tmux display-message -p -t "$1" '#{pane_id}' >/dev/null 2>&1
+}
+
+# fm_backend_tmux_leader_pid: the pid of the process tmux started in <target>'s
+# pane - the pane's own shell, and so the leader of the process group every
+# descendant the pane spawned belongs to. Teardown's last-resort reaper uses it
+# when lsof is missing and no /proc cwd scan is available, to signal that group
+# rather than leave a leaked worktree holder behind.
+#
+# Byte-identical to the `tmux display-message -p -t <target> '#{pane_pid}'` call
+# that used to run inline in fm-teardown.sh's reap_task_backend_process_group.
+# Fails (prints nothing) when tmux cannot answer, which the caller treats as
+# "no process-group fallback available" exactly as before.
+fm_backend_tmux_leader_pid() {  # <target>
+  local pid
+  pid=$(tmux display-message -p -t "$1" '#{pane_pid}' 2>/dev/null) || return 1
+  case "$pid" in ''|*[!0-9]*) return 1 ;; esac
+  printf '%s' "$pid"
 }
 
 # fm_backend_tmux_capture: bounded plain-text pane capture. Mirrors

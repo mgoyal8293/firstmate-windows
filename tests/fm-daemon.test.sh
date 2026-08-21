@@ -20,6 +20,12 @@ if [ -z "${FM_TEST_DAEMON_SOURCED:-}" ]; then
   # shellcheck source=bin/fm-supervise-daemon.sh
   . "$DAEMON"
 fi
+# The composer/submit cases below test bin/fm-tmux-lib.sh's own tmux primitives
+# (fm_tmux_composer_state, fm_tmux_submit_core), which the daemon reaches
+# through backend dispatch rather than by sourcing. Source their owner directly
+# instead of relying on a caller to have pulled them in.
+# shellcheck source=bin/fm-tmux-lib.sh
+. "$ROOT/bin/fm-tmux-lib.sh"
 
 TMP_ROOT=$(fm_test_tmproot fm-daemon-tests)
 FM_DAEMON_PRIMARY_HARNESS=claude
@@ -1628,6 +1634,122 @@ test_fm_send_exits_nonzero_on_unproven_submit() {
 # for the duration of that one call only, so these tests are deterministic
 # regardless of what runtime backend is running this test suite itself.
 
+# window_for_task's no-metadata fallback asks the home's OWN backend for its
+# live inventory. Each adapter's list_live is faked here (the _FM_BACKEND_*_SOURCED
+# guard keeps the dispatcher from loading the real adapter), so the assertion is
+# about the dispatcher/consumer pair, not about any backend CLI: the inventory's
+# opaque target column is backend-shaped and carries no task id anywhere but
+# tmux, so the id has to be matched on the uniform "fm-<id>" label column and the
+# target returned as the endpoint handle.
+test_window_for_task_matches_live_endpoint_by_label_on_every_backend() {
+  local dir state out
+
+  dir=$(make_supercase window-for-task-label-match)
+  state="$dir/state"
+
+  # conpty: a colonless "fm-<home>-<id>" target - a task id derived from the
+  # target reads as "<home>-<id>" and can never match.
+  out=$(
+    _FM_BACKEND_CONPTY_SOURCED=1
+    fm_backend_conpty_list_live() { printf 'fm-acme-t7\tfm-t7\n'; }
+    FM_BACKEND=conpty window_for_task "$(_stale_key t7)" "$state"
+  ) || fail "window_for_task found no conpty endpoint for t7 although its inventory lists one"
+  [ "$out" = "fm-acme-t7$(printf '\t')t7" ] \
+    || fail "window_for_task should return the conpty endpoint's target and the id it matched, got '$out'"
+
+  # herdr/zellij: "<session>:<pane-id>" - the last colon segment is a pane id.
+  out=$(
+    _FM_BACKEND_HERDR_SOURCED=1
+    fm_backend_herdr_session() { printf 'firstmate'; }
+    fm_backend_herdr_list_live() { printf 'firstmate:%%3\tfm-t8\n'; }
+    FM_BACKEND=herdr window_for_task "$(_stale_key t8)" "$state"
+  ) || fail "window_for_task found no herdr endpoint for t8 although its inventory lists one"
+  [ "$out" = "firstmate:%3$(printf '\t')t8" ] \
+    || fail "window_for_task should return the herdr endpoint's pane target and the id it matched, got '$out'"
+
+  # tmux is unchanged: its label IS the window name, so the same label match
+  # selects exactly the window the target-derived id used to select.
+  out=$(
+    _FM_BACKEND_TMUX_SOURCED=1
+    fm_backend_tmux_list_live() { printf 'other:fm-t1\tfm-t1\nfirstmate:fm-t9\tfm-t9\n'; }
+    FM_BACKEND=tmux window_for_task "$(_stale_key t9)" "$state"
+  ) || fail "window_for_task found no tmux window for t9 although its inventory lists one"
+  [ "$out" = "firstmate:fm-t9$(printf '\t')t9" ] \
+    || fail "window_for_task should return the tmux window target for t9 and the id it matched, got '$out'"
+
+  # tmux equivalence, demonstrated rather than asserted: the id threaded out of
+  # window_for_task is exactly the one window_to_task recovers from a tmux target.
+  [ "${out#*$'\t'}" = "$(window_to_task "${out%%$'\t'*}" "$state")" ] \
+    || fail "on tmux the threaded id '${out#*$'\t'}' differs from window_to_task's '$(window_to_task "${out%%$'\t'*}" "$state")'"
+
+  # A task with no live endpoint still reports "not found" rather than matching
+  # some other task's entry.
+  if out=$(
+    _FM_BACKEND_CONPTY_SOURCED=1
+    fm_backend_conpty_list_live() { printf 'fm-acme-t7\tfm-t7\n'; }
+    FM_BACKEND=conpty window_for_task "$(_stale_key t404)" "$state"
+  ); then
+    fail "window_for_task matched '$out' for a task absent from the inventory"
+  fi
+
+  pass "window_for_task: the no-metadata fallback matches the inventory's fm-<id> label and returns the backend's own target plus the id it matched, on conpty and herdr as well as tmux"
+}
+
+# The consumer half of the same path. A torn meta (backend recorded, window= never
+# written) is exactly what the no-metadata fallback exists for: window_for_task
+# falls through to the live inventory, and housekeeping must then identify the task
+# by the id the lookup matched. Re-deriving it from the returned target only works
+# on tmux, so on any other backend the status file, the stale marker and the pause
+# marker are all addressed under a key that belongs to no task.
+test_housekeeping_identifies_a_discovered_endpoint_on_a_non_tmux_backend() {
+  local dir state wedges
+
+  # (a) the status path: a declared pause on the discovered task must be seen,
+  # which means $state/<task>.status has to be the task's own status file.
+  dir=$(make_supercase discovered-endpoint-status-path)
+  state="$dir/state"
+  fm_write_meta "$state/t7.meta" "backend=conpty" "kind=ship" "harness=pi"
+  printf 'paused: holding for the upstream tool release\n' > "$state/t7.status"
+  _now > "$state/.subsuper-stale-t7"
+  (
+    _FM_BACKEND_CONPTY_SOURCED=1
+    # shellcheck disable=SC2329 # invoked indirectly through fm_backend_list_task_windows
+    fm_backend_conpty_list_live() { printf 'fm-acme-t7\tfm-t7\n'; }
+    FM_BACKEND=conpty FM_STATE_OVERRIDE="$state" FM_ESCALATE_BATCH_SECS=999999 \
+      housekeeping "$state"
+  )
+  [ -e "$state/.subsuper-paused-t7" ] \
+    || fail "housekeeping did not read the discovered conpty task's own status file, so its declared pause never became a pause marker"
+  [ -e "$state/.subsuper-stale-t7" ] \
+    && fail "the paused task's stale marker was not cleared under its own key"
+
+  # (b) the escalate arm: stale_marker_remove has to clear the marker housekeeping
+  # is looping over, or the same wedge line is appended on every tick forever.
+  dir=$(make_supercase discovered-endpoint-escalate-key)
+  state="$dir/state"
+  fm_write_meta "$state/t8.meta" "backend=conpty" "kind=ship" "harness=pi"
+  printf 'working: still grinding\n' > "$state/t8.status"
+  echo $(( $(date +%s) - 5000 )) > "$state/.subsuper-stale-t8"
+  (
+    _FM_BACKEND_CONPTY_SOURCED=1
+    # shellcheck disable=SC2329 # invoked indirectly through fm_backend_list_task_windows
+    fm_backend_conpty_list_live() { printf 'fm-acme-t8\tfm-t8\n'; }
+    fm_backend_capture() { printf 'idle prompt $\n'; }
+    fm_busy_classify() { printf 'idle'; }
+    FM_BACKEND=conpty FM_STATE_OVERRIDE="$state" FM_ESCALATE_BATCH_SECS=999999 \
+      FM_HEARTBEAT_SCAN_SECS=999999 housekeeping "$state"
+    FM_BACKEND=conpty FM_STATE_OVERRIDE="$state" FM_ESCALATE_BATCH_SECS=999999 \
+      FM_HEARTBEAT_SCAN_SECS=999999 housekeeping "$state"
+  )
+  [ -e "$state/.subsuper-stale-t8" ] \
+    && fail "the escalated stale marker was removed under a key derived from the opaque target, so it survives and re-fires every tick"
+  wedges=$(grep -c 'possible wedge' "$state/.subsuper-escalations" 2>/dev/null || true)
+  [ "$wedges" = 1 ] \
+    || fail "expected exactly one wedge escalation across two housekeeping ticks, got $wedges"
+
+  pass "housekeeping: a discovered non-tmux endpoint is identified by the id window_for_task matched, so its status file, pause marker and stale marker all use the task's own key"
+}
+
 test_discover_supervisor_backend_precedence() {
   local out
   out=$(FM_SUPERVISOR_BACKEND=herdr TMUX_PANE='%9' HERDR_ENV=1 HERDR_PANE_ID=w1:p1 discover_supervisor_backend)
@@ -1639,12 +1761,22 @@ test_discover_supervisor_backend_precedence() {
   out=$(FM_SUPERVISOR_BACKEND='' TMUX_PANE='' HERDR_ENV=1 HERDR_PANE_ID=w1:p1 discover_supervisor_backend)
   [ "$out" = herdr ] || fail "HERDR_ENV=1 with HERDR_PANE_ID present should resolve to herdr: $out"
 
-  if out=$(FM_SUPERVISOR_BACKEND='' TMUX_PANE='' HERDR_ENV='' HERDR_PANE_ID='' discover_supervisor_backend); then
+  # The bare fallback is the home's OWN resolved backend, not a hardcoded tmux:
+  # a home running something else was being told its supervisor pane "is not a
+  # tmux pane" when the real answer is that its own backend has no injection
+  # primitives here. It still returns non-zero, and on a tmux home it still
+  # prints tmux, which is what keeps existing homes unchanged.
+  if out=$(FM_BACKEND=zellij FM_SUPERVISOR_BACKEND='' TMUX_PANE='' HERDR_ENV='' HERDR_PANE_ID='' discover_supervisor_backend); then
     fail "bare fallback (no override, no TMUX_PANE, no HERDR_ENV) should return non-zero"
   fi
-  [ "$out" = tmux ] || fail "bare fallback should still print tmux: $out"
+  [ "$out" = zellij ] || fail "bare fallback should name the home's own backend, got: $out"
 
-  pass "discover_supervisor_backend: override > TMUX_PANE > HERDR_ENV+HERDR_PANE_ID > tmux fallback"
+  if out=$(FM_BACKEND=tmux FM_SUPERVISOR_BACKEND='' TMUX_PANE='' HERDR_ENV='' HERDR_PANE_ID='' discover_supervisor_backend); then
+    fail "bare fallback should return non-zero on a tmux home too"
+  fi
+  [ "$out" = tmux ] || fail "bare fallback on a tmux home should still print tmux: $out"
+
+  pass "discover_supervisor_backend: override > TMUX_PANE > HERDR_ENV+HERDR_PANE_ID > the home's own backend as the bare fallback"
 }
 
 test_discover_supervisor_target_herdr() {
@@ -1919,6 +2051,8 @@ test_inject_wedge_alarm_throttles_when_marker_cannot_be_written
 test_fm_send_exits_nonzero_on_confirmed_swallow
 test_fm_send_exits_nonzero_on_initial_send_failure
 test_fm_send_exits_nonzero_on_unproven_submit
+test_window_for_task_matches_live_endpoint_by_label_on_every_backend
+test_housekeeping_identifies_a_discovered_endpoint_on_a_non_tmux_backend
 test_discover_supervisor_backend_precedence
 test_discover_supervisor_target_herdr
 test_pane_is_busy_herdr_native_busy_state

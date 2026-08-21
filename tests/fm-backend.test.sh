@@ -519,6 +519,23 @@ test_backend_validate_spawn_accepts_orca() {
   pass "fm_backend_validate_spawn: all implemented lifecycle backends are spawn-supported"
 }
 
+# fm_backend_leader_pid exists for exactly one caller (fm-teardown.sh's
+# last-resort process-group reaper) and deliberately has no arm for a backend
+# that cannot name a pane leader pid. Failing there is what reproduces the
+# reaper's old `[ "$BACKEND" != tmux ]` early return, so the absence has to be
+# asserted, not assumed. The tmux arm's byte-identity with the raw
+# `display-message '#{pane_pid}'` call is covered against a real tmux server in
+# tests/fm-backend-tmux-smoke.test.sh, and the reaper's end-to-end use of it in
+# tests/fm-teardown.test.sh's lsof-absent case.
+test_leader_pid_only_where_a_pane_leader_exists() {
+  local backend out
+  for backend in herdr zellij orca cmux conpty bogus; do
+    out=$(fm_backend_leader_pid "$backend" "some:target" 2>/dev/null)       && fail "fm_backend_leader_pid should have no answer for $backend, got '$out'"
+    [ -z "$out" ] || fail "fm_backend_leader_pid printed '$out' for $backend, which has no pane leader pid"
+  done
+  pass "fm_backend_leader_pid: fails and prints nothing for every backend with no pane-leader primitive, so teardown falls back exactly as it did before"
+}
+
 test_meta_get_and_backend_of_meta() {
   local meta=$TMP_ROOT/meta-get.meta
   fm_write_meta "$meta" "window=firstmate:fm-x1" "harness=claude"
@@ -1059,6 +1076,41 @@ test_spawn_default_backend_writes_no_meta_field() {
   pass "fm-spawn.sh: an explicit --backend tmux resolves silently and writes no backend= (missing means tmux)"
 }
 
+# The a11 compatibility contract has two halves and they are asserted
+# separately, because the whole point is that only one of them changes.
+#
+#   READ side (unchanged, everywhere): an absent backend= still means tmux -
+#   test_meta_get_and_backend_of_meta above pins that, and it is what keeps
+#   every meta an existing POSIX home already wrote reading back correctly.
+#   WRITE side: a Windows home records backend= even for tmux, so no metadata
+#   written there ever leans on a default naming a session provider that cannot
+#   exist on that platform.
+test_spawn_windows_records_backend_even_for_tmux() {
+  local proj wt data id state config out fb
+  proj="$TMP_ROOT/winbackend-project"; wt="$TMP_ROOT/winbackend-wt"; data="$TMP_ROOT/winbackend-data"
+  id="winbackendz5"
+  fm_git_worktree "$proj" "$wt" "fm/$id"
+  fb=$(make_spawn_fakebin "$TMP_ROOT/winbackend-fake" "$wt")
+  mkdir -p "$data/$id"; printf 'brief\n' > "$data/$id/brief.md"
+  state="$TMP_ROOT/winbackend-state"; config="$TMP_ROOT/winbackend-config"
+  mkdir -p "$state" "$config"
+
+  out=$(PATH="$fb:$PATH" FM_ROOT_OVERRIDE="$ROOT" \
+    FM_STATE_OVERRIDE="$state" FM_DATA_OVERRIDE="$data" FM_CONFIG_OVERRIDE="$config" \
+    FM_PROJECTS_OVERRIDE="$TMP_ROOT/unused-projects" FM_SPAWN_NO_GUARD=1 TMUX="fake,1,0" \
+    FM_PLATFORM_UNAME_OVERRIDE=MINGW64_NT-10.0-26200 \
+    FM_TMUX_LOG="$TMP_ROOT/winbackend.log" \
+    "$ROOT/bin/fm-spawn.sh" "$id" "$proj" claude --mode no-mistakes --yolo off --backend tmux 2>&1)
+  expect_code 0 $? "spawn should succeed on the Windows platform arm"$'\n'"$out"
+  assert_grep 'backend=tmux' "$state/$id.meta" \
+    "a Windows home must record backend= explicitly instead of relying on the absent-value default"
+  # And the recorded value must read back as itself, not merely as the default.
+  [ "$(fm_backend_of_meta "$state/$id.meta")" = tmux ] \
+    || fail "the explicitly recorded backend= did not read back as tmux"
+  rm -rf "/tmp/fm-$id"
+  pass "fm-spawn.sh: on Windows backend= is written even for tmux, so no Windows metadata depends on the absent-value default"
+}
+
 test_spawn_explicit_backend_flag_beats_autodetect_herdr_env() {
   local proj wt data id state config out fb
   proj="$TMP_ROOT/explicit-backend-project"; wt="$TMP_ROOT/explicit-backend-wt"; data="$TMP_ROOT/explicit-backend-data"
@@ -1125,6 +1177,7 @@ test_backend_name_cmux_fallback_notice
 test_backend_name_autodetect_notice
 test_backend_name_explicit_beats_detection
 test_backend_validate_refuses_unknown
+test_leader_pid_only_where_a_pane_leader_exists
 test_backend_source_shell_portable
 test_backend_validate_spawn_accepts_orca
 test_meta_get_and_backend_of_meta
@@ -1138,5 +1191,6 @@ test_spawn_refuses_unknown_backend_flag
 test_spawn_refuses_codex_app_backend_flag
 test_spawn_refuses_unknown_fm_backend_env
 test_spawn_default_backend_writes_no_meta_field
+test_spawn_windows_records_backend_even_for_tmux
 test_spawn_explicit_backend_flag_beats_autodetect_herdr_env
 test_spawn_autodetect_nesting_resolves_tmux_silently

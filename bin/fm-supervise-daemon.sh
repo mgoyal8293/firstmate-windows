@@ -78,10 +78,15 @@
 #                                   resolves the runtime firstmate itself is
 #                                   executing inside - $TMUX_PANE selects tmux,
 #                                   $HERDR_ENV=1 selects herdr - falling back to
-#                                   tmux). zellij, orca, and cmux are not yet
-#                                   supported as supervisor backends; the daemon
-#                                   refuses loudly at startup rather than trying
-#                                   tmux primitives against a non-tmux pane.
+#                                   the home's own resolved backend, which is
+#                                   tmux on a tmux home and its own name
+#                                   elsewhere). zellij, orca, cmux, and conpty
+#                                   are not yet supported as supervisor
+#                                   backends; the daemon refuses loudly at
+#                                   startup rather than trying tmux primitives
+#                                   against a non-tmux pane, and on such a home
+#                                   that refusal is reached without any explicit
+#                                   selection.
 #          FM_INJECT_SKIP           |-prefixes force-self-handle bypassing
 #                                   classification (default "heartbeat"); empty
 #                                   disables. Use sparingly: it overrides the
@@ -127,7 +132,8 @@
 #          FM_INJECT_CONFIRM_RETRIES Enter-retry attempts on a swallowed Enter
 #                                   (default 3); the digest is typed once, only
 #                                   Enter is retried. Composer-empty detection is
-#                                   structural and style-aware (bin/fm-tmux-lib.sh):
+#                                   structural and style-aware (the shared shape
+#                                   owner bin/fm-composer-lib.sh):
 #                                   it drops dim/faint ghost text and strips the
 #                                   harness's box borders before deciding, so a
 #                                   ghost-only or bordered-but-empty composer is
@@ -147,15 +153,21 @@ FM_DAEMON_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 FM_ROOT="${FM_ROOT_OVERRIDE:-$(cd "$FM_DAEMON_DIR/.." && pwd)}"
 FM_HOME="${FM_HOME:-${FM_ROOT_OVERRIDE:-$FM_ROOT}}"
 
-# Shared tmux pane primitives for supervisor injection (busy/composer detection
-# + verify-retry submit). Sourced at top level so BOTH the executed daemon and
-# the unit tests (which source this file for its pure functions) get the
-# corrected composer detection. Stale task rechecks use fm-backend.sh below.
-# shellcheck source=bin/fm-tmux-lib.sh
-. "$FM_DAEMON_DIR/fm-tmux-lib.sh"
-
+# Backend dispatch: the supervisor-pane busy read, composer classification, and
+# verified submit all go through fm_backend_busy_state /
+# fm_backend_composer_state / fm_backend_send_text_submit, so each session
+# provider answers with its own primitives and this daemon holds none of tmux's.
+# bin/fm-tmux-lib.sh is loaded by bin/backends/tmux.sh when (and only when) the
+# tmux adapter is the one dispatched to; sourcing it here as well pulled tmux's
+# composer/submit core into every away-mode daemon regardless of backend.
 # shellcheck source=bin/fm-backend.sh
 . "$FM_DAEMON_DIR/fm-backend.sh"
+
+# The harness-scoped rendered-tail busy match (fm_busy_lines_match) is owned by
+# the shared, backend-independent shape library, not by any adapter; it used to
+# arrive here only as a transitive effect of sourcing tmux's own library.
+# shellcheck source=bin/fm-composer-lib.sh
+. "$FM_DAEMON_DIR/fm-composer-lib.sh"
 
 # Canonical construction and parsing for every Firstmate operational input.
 # shellcheck source=bin/fm-operational-input.sh
@@ -169,9 +181,11 @@ FM_HOME="${FM_HOME:-${FM_ROOT_OVERRIDE:-$FM_ROOT}}"
 . "$FM_DAEMON_DIR/fm-classify-lib.sh"
 
 # Supervisor-pane discovery (FM_SUPERVISOR_TARGET_DEFAULT,
-# FM_SUPERVISOR_BACKEND_DEFAULT, discover_supervisor_target,
-# discover_supervisor_backend). Shared with the script-owned away launcher
-# (bin/fm-afk-launch.sh) so the captain-pane resolution has exactly one owner.
+# FM_SUPERVISOR_BACKEND_DEFAULT, fm_supervisor_default_backend,
+# discover_supervisor_target, discover_supervisor_backend). Shared with the
+# script-owned away launcher (bin/fm-afk-launch.sh) so the captain-pane
+# resolution has exactly one owner. That owner also documents which of the two
+# backend defaults a loaded caller is meant to read.
 # shellcheck source=bin/fm-supervisor-target-lib.sh
 . "$FM_DAEMON_DIR/fm-supervisor-target-lib.sh"
 
@@ -182,8 +196,11 @@ FM_HOME="${FM_HOME:-${FM_ROOT_OVERRIDE:-$FM_ROOT}}"
 
 # --- tunables ---------------------------------------------------------------
 # Supervisor backends this daemon knows how to inject into today. zellij, orca,
-# and cmux are real backends elsewhere in firstmate (bin/fm-backend.sh) but this
-# daemon has no verified composer/busy primitives wired up for them yet - see
+# cmux, and conpty are real backends elsewhere in firstmate (bin/fm-backend.sh)
+# but this daemon has no verified composer/busy primitives wired up for them
+# yet. For conpty the gap sits above the primitives: there is no ConPTY analogue
+# of $TMUX_PANE, so firstmate cannot name the pane it is ITSELF running in
+# (docs/conpty-backend.md's away-mode limit owns that). See
 # docs/herdr-backend.md and AGENTS.md section 4's
 # harness-verification discipline. Selecting one refuses loudly at startup
 # instead of silently running tmux primitives against a pane that is not a tmux
@@ -205,7 +222,8 @@ WEDGE_ALARM_NOTIFIER_PID=
 # status_is_captain_relevant, window_to_task, scan_captain_relevant_statuses) now
 # live in bin/fm-classify-lib.sh, shared with the always-on watcher.
 # Composer-empty detection, submit acknowledgement, and the harness-scoped
-# supervisor-pane busy guard live in bin/fm-tmux-lib.sh.
+# supervisor-pane busy guard are the backend's own (bin/fm-backend.sh dispatches
+# them; bin/fm-tmux-lib.sh is tmux's implementation).
 # FM_BUSY_REGEX also overrides Grok's isolated task-state fallback.
 INJECT_FAIL_SLEEP_DEFAULT=30
 INJECT_CONFIRM_RETRIES_DEFAULT=3
@@ -440,10 +458,10 @@ stale_marker_record() {  # <window> <state>  — create if absent
   [ -e "$marker" ] || _now > "$marker"
 }
 
-stale_marker_remove() {  # <window> <state>
-  local win=$1 state=$2 key
-  key=$(_stale_key "$(window_to_task "$win" "$state")")
-  rm -f "$state/.subsuper-stale-$key"
+stale_marker_remove() {  # <window> <state> [task]
+  local win=$1 state=$2 task=${3:-}
+  [ -n "$task" ] || task=$(window_to_task "$win" "$state")
+  rm -f "$state/.subsuper-stale-$(_stale_key "$task")"
 }
 
 # Pause marker: state/.subsuper-paused-<key> holds the epoch a declared pause was
@@ -451,10 +469,10 @@ stale_marker_remove() {  # <window> <state>
 # longer than a wedge) and re-surfaces the pause once per window. Recording is
 # create-if-absent so the timestamp is stable across a churny idle pane (many
 # distinct stale hashes map to one marker), keeping the cadence hash-immune.
-pause_marker_record() {  # <window> <state> - create if absent
-  local win=$1 state=$2 key marker
-  key=$(_stale_key "$(window_to_task "$win" "$state")")
-  marker="$state/.subsuper-paused-$key"
+pause_marker_record() {  # <window> <state> [task] - create if absent
+  local win=$1 state=$2 task=${3:-} marker
+  [ -n "$task" ] || task=$(window_to_task "$win" "$state")
+  marker="$state/.subsuper-paused-$(_stale_key "$task")"
   [ -e "$marker" ] || _now > "$marker"
 }
 
@@ -464,9 +482,9 @@ pause_marker_remove() {  # <window> <state>
   rm -f "$state/.subsuper-paused-$key"
 }
 
-clear_pause_tracking() {  # <window> <state>
-  local win=$1 state=$2 task key watcher_key
-  task=$(window_to_task "$win" "$state")
+clear_pause_tracking() {  # <window> <state> [task]
+  local win=$1 state=$2 task=${3:-} key watcher_key
+  [ -n "$task" ] || task=$(window_to_task "$win" "$state")
   key=$(_stale_key "$task")
   watcher_key=$(_stale_key "$win")
   rm -f "$state/.subsuper-paused-$key" "$state/.subsuper-stale-$key" \
@@ -474,17 +492,17 @@ clear_pause_tracking() {  # <window> <state>
     "$state/.stale-$watcher_key" "$state/.stale-since-$watcher_key" "$state/.wedge-escalations-$watcher_key"
 }
 
-reconcile_pause_tracking() {  # <window> <state> <last-status-line>
-  local win=$1 state=$2 last=$3 task key marker watcher_key
-  task=$(window_to_task "$win" "$state")
+reconcile_pause_tracking() {  # <window> <state> <last-status-line> [task]
+  local win=$1 state=$2 last=$3 task=${4:-} key marker watcher_key
+  [ -n "$task" ] || task=$(window_to_task "$win" "$state")
   key=$(_stale_key "$task")
   marker="$state/.subsuper-paused-$key"
   watcher_key=$(_stale_key "$win")
   if status_is_paused "$last"; then
-    stale_marker_remove "$win" "$state"
-    pause_marker_record "$win" "$state"
+    stale_marker_remove "$win" "$state" "$task"
+    pause_marker_record "$win" "$state" "$task"
   elif [ -e "$marker" ] || [ -e "$state/.paused-$watcher_key" ]; then
-    clear_pause_tracking "$win" "$state"
+    clear_pause_tracking "$win" "$state" "$task"
   fi
 }
 
@@ -505,7 +523,7 @@ migrate_watcher_pause_markers() {  # <state>
 }
 
 sync_pause_markers_from_signal() {  # <state> <signal files>
-  local state=$1 paths=$2 f last task win
+  local state=$1 paths=$2 f last task win found
   local -a files
   read -r -a files <<<"$paths"
   for f in "${files[@]}"; do
@@ -513,9 +531,10 @@ sync_pause_markers_from_signal() {  # <state> <signal files>
     [ -e "$f" ] || continue
     last=$(last_status_line "$f")
     task=$(basename "$f"); task=${task%.status}
-    win=$(window_for_task "$task" "$state" 2>/dev/null || true)
-    [ -n "$win" ] || continue
-    reconcile_pause_tracking "$win" "$state" "$last"
+    found=$(window_for_task "$task" "$state" 2>/dev/null || true)
+    [ -n "$found" ] || continue
+    win=${found%%$'\t'*}
+    reconcile_pause_tracking "$win" "$state" "$last" "$task"
   done
 }
 
@@ -602,16 +621,16 @@ pane_input_pending() {  # <target> [backend]
   [ "$(fm_backend_composer_state "$backend" "$target" 2>/dev/null)" != empty ]
 }
 
-task_window_backend() {  # <window> <state>
-  local win=$1 state=$2 task meta
-  task=$(window_to_task "$win" "$state")
+task_window_backend() {  # <window> <state> [task]
+  local win=$1 state=$2 task=${3:-} meta
+  [ -n "$task" ] || task=$(window_to_task "$win" "$state")
   meta="$state/$task.meta"
   fm_backend_of_meta "$meta"
 }
 
-task_window_harness() {  # <window> <state>
-  local win=$1 state=$2 task meta
-  task=$(window_to_task "$win" "$state")
+task_window_harness() {  # <window> <state> [task]
+  local win=$1 state=$2 task=${3:-} meta
+  [ -n "$task" ] || task=$(window_to_task "$win" "$state")
   meta="$state/$task.meta"
   grep '^harness=' "$meta" 2>/dev/null | cut -d= -f2- || true
 }
@@ -621,11 +640,11 @@ task_window_harness() {  # <window> <state>
 # when the endpoint could not be read at all. Only an exact busy verdict is
 # working: unknown semantic state never becomes busy and never becomes a
 # silent idle, so a stale pane whose state cannot be proven surfaces.
-stale_window_is_busy() {  # <window> <state>
-  local win=$1 state=$2 backend harness label task tail40 verdict
-  backend=$(task_window_backend "$win" "$state")
-  harness=$(task_window_harness "$win" "$state")
-  task=$(window_to_task "$win" "$state")
+stale_window_is_busy() {  # <window> <state> [task]
+  local win=$1 state=$2 task=${3:-} backend harness label tail40 verdict
+  [ -n "$task" ] || task=$(window_to_task "$win" "$state")
+  backend=$(task_window_backend "$win" "$state" "$task")
+  harness=$(task_window_harness "$win" "$state" "$task")
   label="fm-$task"
   tail40=$(fm_backend_capture "$backend" "$win" 40 "$label" 2>/dev/null) || return 2
   verdict=$(fm_busy_classify "$backend" "$win" "$harness" "$task" "$state" "$tail40")
@@ -959,7 +978,7 @@ _oldest_line_age() {  # <buf> -> seconds since the oldest buffered item first ar
 #  3) heartbeat scan: every HEARTBEAT_SCAN_SECS, grep state/*.status for a
 #     captain-relevant line the per-wake classifier missed and escalate it.
 housekeeping() {  # <state>
-  local state=$1 now due f key task win marker age last max_defer oldest pause_secs
+  local state=$1 now due f key task win found marker age last max_defer oldest pause_secs
   now=$(_now)
   migrate_watcher_pause_markers "$state"
 
@@ -999,25 +1018,26 @@ housekeeping() {  # <state>
     key="${marker##*.subsuper-stale-}"
     # Reconstruct the backend target from metadata, with the live tmux list as the
     # legacy fallback for old markers that predate meta lookup.
-    win=$(window_for_task "$key" "$state" 2>/dev/null || true)
-    if [ -z "$win" ]; then
+    found=$(window_for_task "$key" "$state" 2>/dev/null || true)
+    if [ -z "$found" ]; then
       # Window gone (task torn down): drop the marker, nothing to escalate.
       rm -f "$marker"; continue
     fi
-    task=$(window_to_task "$win" "$state")
+    win=${found%%$'\t'*}
+    task=${found#*$'\t'}
     last=$(last_status_line "$state/$task.status")
     if [ -n "$last" ] && status_is_paused "$last"; then
-      reconcile_pause_tracking "$win" "$state" "$last"
+      reconcile_pause_tracking "$win" "$state" "$last" "$task"
       continue
     fi
     age=$(( now - $(cat "$marker" 2>/dev/null || echo "$now") ))
     [ "$age" -ge "${FM_STALE_ESCALATE_SECS:-$STALE_ESCALATE_SECS_DEFAULT}" ] || continue
-    stale_window_is_busy "$win" "$state"
+    stale_window_is_busy "$win" "$state" "$task"
     case "$?" in
       0) rm -f "$marker" ;;
       2) rm -f "$marker" ;;
       *) escalate_add "$state" "stale persisted ${age}s (possible wedge): $win"
-         stale_marker_remove "$win" "$state" ;;
+         stale_marker_remove "$win" "$state" "$task" ;;
     esac
   done
 
@@ -1031,19 +1051,20 @@ housekeeping() {  # <state>
   for marker in "$state"/.subsuper-paused-*; do
     [ -e "$marker" ] || continue
     key="${marker##*.subsuper-paused-}"
-    win=$(window_for_task "$key" "$state" 2>/dev/null || true)
-    if [ -z "$win" ]; then
+    found=$(window_for_task "$key" "$state" 2>/dev/null || true)
+    if [ -z "$found" ]; then
       rm -f "$marker"; continue
     fi
-    task=$(window_to_task "$win" "$state")
+    win=${found%%$'\t'*}
+    task=${found#*$'\t'}
     last=$(last_status_line "$state/$task.status")
     if [ -z "$last" ] || ! status_is_paused "$last"; then
-      reconcile_pause_tracking "$win" "$state" "$last"
+      reconcile_pause_tracking "$win" "$state" "$last" "$task"
       continue
     fi
     age=$(( now - $(cat "$marker" 2>/dev/null || echo "$now") ))
     [ "$age" -ge "$pause_secs" ] || continue
-    stale_window_is_busy "$win" "$state"
+    stale_window_is_busy "$win" "$state" "$task"
     case "$?" in
       0) rm -f "$marker" ;;
       2) rm -f "$marker" ;;
@@ -1076,20 +1097,58 @@ housekeeping() {  # <state>
   fi
 }
 
+# The home's own session-provider backend, resolved at most once per daemon
+# run. It cannot change while the daemon is alive, and the read is not free:
+# with neither FM_BACKEND nor config/backend set, fm_backend_name reaches the
+# cmux app-ancestry fallback, which forks per ancestor hop. Every window_for_task
+# call site is a command substitution, so fm_super_main primes this in the
+# daemon's own shell; an unprimed caller (a unit test sourcing this file)
+# resolves on demand instead.
+_FM_HOME_BACKEND=""
+_home_backend() {
+  if [ -z "$_FM_HOME_BACKEND" ]; then
+    # 2>/dev/null: fm_backend_name's herdr/cmux auto-detect NOTICE is spawn-time
+    # advice, not a diagnostic this read-only lookup should log every cycle.
+    _FM_HOME_BACKEND=$(fm_backend_name 2>/dev/null) || _FM_HOME_BACKEND=""
+    [ -n "$_FM_HOME_BACKEND" ] || _FM_HOME_BACKEND=tmux
+  fi
+  printf '%s' "$_FM_HOME_BACKEND"
+}
+
 # Find a recorded or live window target whose task id matches the marker key.
-window_for_task() {  # <task-key> [state]
-  local key=$1 state=${2:-$(_state_root)} meta task w t
+#
+# The metadata loop answers in the normal case. The second loop is the
+# no-metadata fallback, and it used to run a bare `tmux list-windows` pipeline
+# inside this backend-agnostic function - so on any home not running tmux it
+# asked the wrong session provider (or, where tmux is not installed at all,
+# nothing). It now asks the home's OWN backend through
+# fm_backend_list_task_windows (bin/fm-backend.sh), whose tmux arm runs the
+# byte-identical pipeline: on a tmux home the candidate list is unchanged.
+#
+# The match is on the inventory's LABEL column, which every adapter emits as a
+# uniform "fm-<id>". The target column is opaque and backend-shaped, so a task
+# id cannot be recovered from it on anything but tmux; the label carries the id
+# on every backend, and the target is what the caller gets back to address the
+# endpoint with.
+#
+# Both halves are therefore printed as "<target>\t<task>": the target addresses
+# the endpoint, and the task is the identity this function MATCHED ON, which the
+# caller would otherwise have to recover from the opaque target. Callers use the
+# printed id instead of re-deriving one, since only tmux targets carry it.
+window_for_task() {  # <task-key> [state] -> "<target>\t<task>"
+  local key=$1 state=${2:-$(_state_root)} meta task w label
   for meta in "$state"/*.meta; do
     [ -e "$meta" ] || continue
     task=$(basename "$meta"); task=${task%.meta}
     [ "$(_stale_key "$task")" = "$key" ] || continue
     w=$(fm_backend_target_of_meta "$meta")
-    [ -n "$w" ] && { printf '%s' "$w"; return 0; }
+    [ -n "$w" ] && { printf '%s\t%s' "$w" "$task"; return 0; }
   done
-  for w in $(tmux list-windows -a -F '#{session_name}:#{window_name}' 2>/dev/null | grep ':fm-' || true); do
-    t=$(window_to_task "$w" "$state")
-    [ "$(_stale_key "$t")" = "$key" ] && { printf '%s' "$w"; return 0; }
-  done
+  while IFS=$'\t' read -r w label; do
+    [ -n "$w" ] && [ -n "$label" ] || continue
+    task=${label#fm-}
+    [ "$(_stale_key "$task")" = "$key" ] && { printf '%s\t%s' "$w" "$task"; return 0; }
+  done < <(fm_backend_list_task_windows "$(_home_backend)" 2>/dev/null)
   return 1
 }
 
@@ -1369,7 +1428,8 @@ fm_super_main() {
 
   # --- auto-discover the supervisor BACKEND (tmux vs herdr) first -----------
   # Priority: FM_SUPERVISOR_BACKEND override > $TMUX_PANE (tmux) > $HERDR_ENV=1
-  # (herdr) > tmux fallback. Resolved before the target below, since target
+  # (herdr) > fm_supervisor_default_backend, the home's own resolved backend.
+  # Resolved before the target below, since target
   # discovery composes a herdr "<session>:<pane-id>" string using the same
   # $HERDR_PANE_ID/$HERDR_SESSION markers this checks. Exporting the result
   # into FM_SUPERVISOR_BACKEND makes inject_msg/pane_is_busy/pane_input_pending
@@ -1383,7 +1443,7 @@ fm_super_main() {
     elif [ "${HERDR_ENV:-}" = "1" ] && [ -n "${HERDR_PANE_ID:-}" ]; then
       backend_source="HERDR_ENV"
     else
-      backend_source="FALLBACK($FM_SUPERVISOR_BACKEND_DEFAULT)"
+      backend_source="FALLBACK($(fm_supervisor_default_backend))"
     fi
   fi
   discovered_backend=$(discover_supervisor_backend) || true
@@ -1491,6 +1551,8 @@ fm_super_main() {
     "$WATCH" >"$CUR_TMP" 2>>"$WATCH_ERR" &
     WATCHER_PID=$!
   }
+
+  _home_backend >/dev/null
 
   local rc reason
   while true; do

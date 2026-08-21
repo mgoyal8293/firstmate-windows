@@ -165,6 +165,29 @@ test_unmatched_single_colon_target_must_exist() {
   pass "fm-send strict: unmatched single-colon explicit targets must verify live before sending"
 }
 
+# The single-colon ad hoc target used to be assumed tmux unconditionally, which
+# on a home running any other session provider verified a same-shaped target
+# against a backend the home does not run. The assumption is now the home's own
+# resolved backend. The tmux case above is the unchanged half; this is the half
+# that used to be wrong.
+test_unmatched_single_colon_target_assumes_the_homes_own_backend() {
+  local dir fb home err log rc
+  dir="$TMP_ROOT/nontmux-explicit"; mkdir -p "$dir"
+  fb=$(make_stubs "$dir"); home=$(setup_home nontmuxexplicit); err="$dir/send.err"; log="$dir/tmux.log"; : > "$log"
+  mkdir -p "$home/config"
+  printf '%s\n' zellij > "$home/config/backend"
+
+  PATH="$fb:$PATH" FM_HOME="$home" FM_ROOT_OVERRIDE="$home" FM_TMUX_LOG="$log" FM_SEND_SETTLE=0 \
+    "$SEND" sess:missing "hello" >/dev/null 2>"$err"; rc=$?
+  [ "$rc" -ne 0 ] || fail "an unresolvable single-colon target should still fail on a non-tmux home"
+  assert_contains "$(cat "$err")" "backend=zellij" \
+    "a zellij home should verify an ad hoc target against zellij, not against tmux"
+  assert_not_contains "$(cat "$err")" "backend=tmux" \
+    "a zellij home must not assume tmux for an ad hoc target"
+  [ ! -s "$log" ] || fail "a non-tmux home reached for tmux anyway"$'\n'"$(cat "$log")"
+  pass "fm-send strict: an ad hoc single-colon target is verified against the home's own backend, not an assumed tmux"
+}
+
 test_fm_prefixed_herdr_session_is_an_explicit_target() {
   local dir fb home err log herdr_log rc
   dir="$TMP_ROOT/fm-remote-explicit"; mkdir -p "$dir"
@@ -231,5 +254,6 @@ test_unset_fm_home_fails
 test_unresolvable_target_does_not_tmux_fallback
 test_prefixless_herdr_pane_id_fails
 test_unmatched_single_colon_target_must_exist
+test_unmatched_single_colon_target_assumes_the_homes_own_backend
 test_fm_prefixed_herdr_session_is_an_explicit_target
 test_healthy_fm_id_send_still_works

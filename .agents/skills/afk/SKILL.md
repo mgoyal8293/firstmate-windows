@@ -216,7 +216,8 @@ the operational prefix lets firstmate distinguish it from a real captain message
   (tmux vs herdr) and TARGET independently, mirroring
   `bin/fm-backend.sh`'s own runtime auto-detection. Backend: `FM_SUPERVISOR_BACKEND`
   override, then `$TMUX_PANE` set (tmux), then `$HERDR_ENV=1` with
-  `$HERDR_PANE_ID` present (herdr), then a tmux fallback. Target:
+  `$HERDR_PANE_ID` present (herdr), then the home's own resolved backend as
+  the bare fallback. Target:
   `FM_SUPERVISOR_TARGET` override (a tmux target or a herdr
   `"<session>:<pane-id>"` target), then `$TMUX_PANE`, then
   `"${HERDR_SESSION:-default}:${HERDR_PANE_ID}"` under herdr, then a
