@@ -668,7 +668,7 @@ portable_serial_shard_index() {
 # The Windows lane: an explicit allowlist rather than a derived remainder.
 #
 # Git Bash pays 14-18x more per process than Linux, so the derived
-# portable-serial remainder - 115 scripts, ~34 min on Linux - is several hours
+# portable-serial remainder - 116 scripts, 42.33 min on Linux - is many hours
 # on Windows and cannot be made to fit any job timeout by sharding alone: the
 # longest single script sets a floor no shard count can lower. This lane
 # therefore carries a measured subset instead.

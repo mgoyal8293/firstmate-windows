@@ -21,16 +21,21 @@ That multiplier does not fall evenly: it is worst on short scripts, where fixed
 process-startup cost dominates.
 
 The consequence is arithmetic, not opinion.
-`portable-serial` is a derived remainder of 115 scripts.
-Its recorded duration hints cover 69 of them and total 1143762 ms; the other 46
-carry the 20000 ms default, so the lane is roughly 34 minutes of Linux work.
-At 16x that is about **9 hours**.
+`portable-serial` is a derived remainder of 116 scripts.
+Every one of them now carries a measured hint - `--check-coverage` reports
+`unmeasured_serial=0` - totalling 2539694 ms, so the lane is 42.33 minutes of
+Linux work. Those weights are measured on green run
+[32159215212](https://github.com/mgoyal8293/firstmate-windows/actions/runs/32159215212)
+at head `580d64fb`, refreshed by the change that landed as df66e63;
+`docs/fm-test-portable-shards.md` owns them.
+At 14-18x that is about **9.9 to 12.7 hours**, or 11.3 hours at 16x.
 
 Sharding cannot fix this, because the longest single script sets a floor no
 shard count can lower.
-`tests/fm-pr-check-security.test.sh` alone is 199573 ms on Linux -
+`tests/fm-pr-check-security.test.sh` alone is 236511 ms on Linux -
 `docs/fm-test-portable-shards.md` already calls it "the floor for any shard
-count" - which is roughly **53 minutes** on Windows in one indivisible unit.
+count" - which is roughly **55 to 71 minutes** on Windows, 63 minutes at 16x, in
+one indivisible unit.
 
 So the Windows lane carries a **measured subset**, sharded, rather than the
 whole suite.
@@ -347,19 +352,32 @@ slower than the machine these numbers came from.
 
 ## The fork-cost multiplier is not a single number
 
-The 14-18x headline holds for mid-sized scripts, but the ratio grows as a script
-does more process work, because MSYS process creation - not the test's own logic -
-dominates. Measured against this repo's recorded Linux durations:
+The 14-18x headline is a central tendency, not a constant: measured per script it
+spans roughly 10x to 24x. The Linux column below is measured on this WSL2
+development box by a full-suite run at head `c96c301` (all four scripts are
+byte-identical at the current head); the Git Bash column is this lane's own
+measured Windows weights. The two columns come from different machines, so read
+the ratios as the size of the fork-cost gap rather than a controlled
+single-machine comparison.
 
 | script | Linux | Git Bash | ratio |
 |---|---:|---:|---:|
-| `fm-decision-hold-lifecycle` | 30.8s | 860s | 27.9x |
-| `fm-crew-state` | 25.4s | 171s | 6.7x |
-| `fm-brief` | 2.2s | 21s | 9.5x |
-| `fm-composer-lib` | 0.064s | 119s | ~1860x |
+| `fm-decision-hold-lifecycle` | 82.6s | 860s | 10.4x |
+| `fm-crew-state` | 9.7s | 171s | 17.6x |
+| `fm-brief` | 1.2s | 21s | 17.1x |
+| `fm-composer-lib` | 5.0s | 119s | 23.8x |
+
+Note what this does **not** show: the ratio does not simply grow with a script's
+process work. The longest member here, `fm-decision-hold-lifecycle` at 860s, has
+the *lowest* ratio of the four, and the shortest, `fm-brief`, sits mid-range. An
+earlier revision of this table asserted the opposite on the strength of a 0.064s
+Linux figure for `fm-composer-lib`; that figure cannot be right, because the
+script runs 30 passing assertions and measures 5.0s, so the 1860x ratio it
+implied has been withdrawn.
 
 This is why the lane's balance uses measured Windows durations rather than Linux
-hints scaled by a constant: a constant multiplier mis-sizes both ends.
+hints scaled by a constant: the spread is real and it is not predictable from
+Linux duration, so a constant multiplier mis-sizes members in both directions.
 
 ## Scripts excluded, and why
 
@@ -481,7 +499,7 @@ the files this work owns, so it is flagged rather than changed.
 ### `fm-decision-hold-lifecycle.test.sh` - confirmed fork cost
 
 Not a failure. Given a bound longer than the scout's 400s it passes:
-**rc=0, 16 ok, 0 failed, in 860s** against 30.8s on Linux - a 27.9x multiplier.
+**rc=0, 16 ok, 0 failed, in 860s** against 82.6s on Linux - a 10.4x multiplier.
 It is in the lane, and it is the script that sets the shard floor.
 
 ### Failing on Windows (worklist, not addressed here)
