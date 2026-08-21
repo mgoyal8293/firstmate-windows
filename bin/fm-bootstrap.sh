@@ -787,7 +787,12 @@ install_cmd() {
     # installed once inside the backend's own directory, which the backend itself
     # owns and resolves. See docs/conpty-backend.md "Setup".
     conpty-backend-deps)
-      fm_backend_source conpty >/dev/null 2>&1 || return 1
+      # The backend owns where its dependencies install, so ask it rather than
+      # re-deriving the path. A checkout too damaged to load the adapter at all
+      # still gets a runnable command for where that directory belongs, because
+      # this line must never be an install hint with no command in it.
+      fm_backend_source conpty >/dev/null 2>&1 \
+        || FM_BACKEND_CONPTY_DIR="$FM_ROOT/bin/backends/conpty"
       echo "(cd $(shell_quote "$FM_BACKEND_CONPTY_DIR") && npm install --omit=dev)"
       ;;
     tmux|node|git|gh|curl|jq|orca|zellij) echo "brew install $1  # or the platform's package manager" ;;
@@ -804,14 +809,6 @@ manual_install_url() {
   case "$1" in
     herdr) echo "https://herdr.dev" ;;
     cursor-agent) echo "https://cursor.com/cli" ;;
-    # conpty-backend-deps is normally auto-installable, so it only reaches this
-    # path when the adapter that owns the install directory cannot be loaded at
-    # all. Then no npm install can help and the real problem is the checkout, so
-    # say that rather than emitting an install hint with no command in it.
-    conpty-backend-deps)
-      fm_backend_source conpty >/dev/null 2>&1 && return 1
-      echo "repair this firstmate checkout - bin/backends/conpty.sh could not be loaded, so the backend's install directory cannot be resolved (docs/conpty-backend.md)"
-      ;;
     *) return 1 ;;
   esac
 }
@@ -1152,9 +1149,13 @@ if [ "${1:-}" = "install" ]; then
   install_failed=0
   for t in "$@"; do
     if ! cmd=$(install_cmd "$t"); then
-      instructions=$(manual_install_url "$t") || { echo "error: unknown tool $t" >&2; exit 1; }
-      echo "error: $t requires manual installation (instructions: $instructions)" >&2
-      exit 1
+      if instructions=$(manual_install_url "$t"); then
+        echo "error: $t requires manual installation (instructions: $instructions)" >&2
+      else
+        echo "error: unknown tool $t" >&2
+      fi
+      install_failed=1
+      continue
     fi
     cmd=${cmd%%  #*}
     echo "installing $t: $cmd"
@@ -1187,19 +1188,22 @@ detect_local_tools() {
     fm_backend_required_tool_available "$BACKEND" "$t" \
       || missing_tool_diagnostic "$t"
   done
+  for t in $COMMON_TOOLS; do
+    command -v "$t" >/dev/null || missing_tool_diagnostic "$t"
+  done
   # The resolved backend's non-PATH dependency, when it has one (bin/fm-backend.sh
   # owns which backends do and how each is probed). Without this a conpty home
   # with no installed daemon dependencies was reported completely healthy and then
   # refused every spawn - and conpty is what the tmux hint above sends a Windows
   # user to. Skipped when the backend value itself is invalid, because
-  # BACKEND_INVALID is the actionable line then.
+  # BACKEND_INVALID is the actionable line then. Reported after the universal
+  # toolchain because the probe depends on it: on a box with no node yet the
+  # remedy here is an npm install that cannot run, so the line that can must
+  # come first.
   if [ "$BACKEND_VALID" -eq 1 ] && backend_dep=$(fm_backend_required_dependency "$BACKEND"); then
     fm_backend_required_dependency_available "$BACKEND" \
       || missing_tool_diagnostic "$backend_dep"
   fi
-  for t in $COMMON_TOOLS; do
-    command -v "$t" >/dev/null || missing_tool_diagnostic "$t"
-  done
   # The treehouse lease-support upgrade check is only relevant when the resolved
   # backend actually requires treehouse (every backend except orca, which owns its
   # own worktrees); an orca home must not be told to upgrade a provider it never uses.

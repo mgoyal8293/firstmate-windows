@@ -843,18 +843,44 @@ test_install_batch_attempts_every_tool() {
     || fail "a batch whose installs all succeed must exit 0, got status $status: $out"
   assert_contains "$out" "NPM-RAN:install -g quota-axi" \
     "a fully successful batch must attempt every tool"
+
+  # An unrecognised name is the same defect: it must not strand the rest of the
+  # approved list either.
+  out=$(PATH="$fakebin:$BASE_PATH" \
+    "$ROOT/bin/fm-bootstrap.sh" install not-a-real-tool quota-axi 2>&1)
+  status=$?
+  [ "$status" -ne 0 ] \
+    || fail "a batch containing an unknown tool must exit non-zero, got: $out"
+  assert_contains "$out" "unknown tool not-a-real-tool" \
+    "the unknown tool must be named"
+  assert_contains "$out" "NPM-RAN:install -g quota-axi" \
+    "a tool after an unknown one must still be attempted"
+
+  # A manual-installation entry is work the captain does by hand, so it keeps its
+  # actionable instructions line and a non-zero status, but still must not
+  # abandon the tools after it.
+  out=$(PATH="$fakebin:$BASE_PATH" \
+    "$ROOT/bin/fm-bootstrap.sh" install herdr quota-axi 2>&1)
+  status=$?
+  [ "$status" -ne 0 ] \
+    || fail "a batch containing a manual-install tool must exit non-zero, got: $out"
+  assert_contains "$out" "herdr requires manual installation (instructions: https://herdr.dev)" \
+    "the manual-install entry must keep its actionable instructions"
+  assert_contains "$out" "NPM-RAN:install -g quota-axi" \
+    "a tool after a manual-install one must still be attempted"
   pass "bootstrap: install attempts every approved tool and reports failure without abandoning the batch"
 }
 
-test_conpty_deps_hint_names_a_broken_checkout() {
-  local case_dir mirror entry base out status
-  # A checkout whose bin/backends/conpty.sh is absent cannot resolve the install
-  # directory from its owner, and an install hint with no command in it is the
-  # unactionable diagnostic this whole check exists to remove. Mirror bin/ by
+test_conpty_deps_hint_on_a_damaged_checkout_is_runnable() {
+  local case_dir mirror entry base fakebin out status
+  # A checkout whose bin/backends/conpty.sh is absent cannot ask the backend where
+  # its dependencies install, and an install hint with no command in it is the
+  # unactionable diagnostic this check exists to remove. The line must stay on the
+  # documented MISSING: channel with a command that actually runs. Mirror bin/ by
   # symlink with only that adapter withheld and drive the real subcommand.
-  case_dir="$TMP_ROOT/conpty-deps-broken-checkout"
+  case_dir="$TMP_ROOT/conpty-deps-damaged-checkout"
   mirror="$case_dir/bin"
-  mkdir -p "$mirror/backends"
+  mkdir -p "$mirror/backends" "$case_dir/home/config"
   for entry in "$ROOT"/bin/*; do
     base=$(basename "$entry")
     [ "$base" = backends ] || ln -s "$entry" "$mirror/$base"
@@ -863,16 +889,80 @@ test_conpty_deps_hint_names_a_broken_checkout() {
     base=$(basename "$entry")
     [ "$base" = conpty.sh ] || ln -s "$entry" "$mirror/backends/$base"
   done
+  printf '%s\n' manual > "$case_dir/home/config/backlog-backend"
+  printf '%s\n' conpty > "$case_dir/home/config/backend"
+  fakebin=$(make_fake_toolchain "$case_dir")
+  cat > "$fakebin/npm" <<'SH'
+#!/usr/bin/env bash
+printf 'INSTALLED-IN:%s\n' "$PWD"
+SH
+  chmod +x "$fakebin/npm"
 
-  out=$(bash "$mirror/fm-bootstrap.sh" install conpty-backend-deps 2>&1)
+  # Detection: the documented MISSING: channel, never MISSING_MANUAL:.
+  out=$(PATH="$fakebin:$BASE_PATH" FM_HOME="$case_dir/home" FM_ROOT_OVERRIDE="$case_dir/home" \
+    FM_FAKE_TREEHOUSE_LEASE_HELP=1 bash "$mirror/fm-bootstrap.sh" 2>/dev/null)
+  assert_contains "$out" "MISSING: conpty-backend-deps (install: (cd " \
+    "a damaged checkout must still report the dependency on the MISSING: channel with a command"
+  assert_not_contains "$out" "MISSING_MANUAL" \
+    "the conpty dependency must never be routed through the manual-instructions channel"
+
+  # Remedy: that command has to run.
+  out=$(PATH="$fakebin:$BASE_PATH" bash "$mirror/fm-bootstrap.sh" install conpty-backend-deps 2>&1)
   status=$?
-  [ "$status" -ne 0 ] \
-    || fail "install conpty-backend-deps on a checkout with no conpty adapter must fail, got: $out"
+  [ "$status" -eq 0 ] \
+    || fail "the install hint emitted on a damaged checkout must be runnable, got status $status: $out"
+  assert_contains "$out" "INSTALLED-IN:$case_dir/bin/backends/conpty" \
+    "the emitted command must npm install in the backend directory"
   assert_not_contains "$out" "unknown tool" \
     "a checkout missing the conpty adapter must not be reported as an unknown tool"
-  assert_contains "$out" "bin/backends/conpty.sh could not be loaded" \
-    "the message must name the real problem"
-  pass "bootstrap: an unresolvable conpty install directory yields an honest message, never an empty hint"
+  pass "bootstrap: a damaged checkout still gets a runnable MISSING: install command for the conpty dependency"
+}
+
+# A stand-in for BASE_PATH with one command genuinely hidden. Shadowing by
+# shipping a non-executable file does not work - PATH lookup just keeps walking -
+# so the only way to prove absence is a PATH that never contains the command.
+make_base_path_without() {  # <case-dir> <tool> -> echoes the shadow PATH dir
+  local case_dir=$1 tool=$2 farm dir entry base
+  farm="$case_dir/shadow-path"
+  mkdir -p "$farm"
+  printf '%s\n' "$BASE_PATH" | tr ':' '\n' | while IFS= read -r dir; do
+    [ -n "$dir" ] && [ -d "$dir" ] || continue
+    for entry in "$dir"/*; do
+      base=${entry##*/}
+      if [ "$base" != "$tool" ] && [ ! -e "$farm/$base" ]; then
+        ln -s "$entry" "$farm/$base"
+      fi
+    done
+  done
+  printf '%s' "$farm"
+}
+
+test_conpty_dep_line_follows_the_universal_toolchain() {
+  local case_dir fakebin shadow out dep_line node_line
+  # The conpty probe runs the backend's own doctor, which needs node, so on a
+  # first-contact box with no node yet it reports the dependency with an npm
+  # remedy that cannot possibly run. The reader must not be handed that above the
+  # line that can run, so the backend delta comes after the universal toolchain.
+  case_dir="$TMP_ROOT/conpty-deps-ordering"
+  mkdir -p "$case_dir/home/config"
+  printf '%s\n' manual > "$case_dir/home/config/backlog-backend"
+  printf '%s\n' conpty > "$case_dir/home/config/backend"
+  fakebin=$(make_fake_conpty_home "$case_dir")
+  rm -f "$fakebin/node"
+  shadow=$(make_base_path_without "$case_dir" node)
+
+  out=$(PATH="$fakebin:$shadow" FM_HOME="$case_dir/home" FM_ROOT_OVERRIDE="$case_dir/home" \
+    FM_BACKEND_CONPTY_DIR="$case_dir/conpty" FM_FAKE_TREEHOUSE_LEASE_HELP=1 \
+    "$ROOT/bin/fm-bootstrap.sh" 2>/dev/null)
+  node_line=$(printf '%s\n' "$out" | grep -n 'MISSING: node ' | cut -d: -f1)
+  dep_line=$(printf '%s\n' "$out" | grep -n 'MISSING: conpty-backend-deps' | cut -d: -f1)
+  [ -n "$node_line" ] \
+    || fail "a home with no node must name node, got: $out"
+  [ -n "$dep_line" ] \
+    || fail "a conpty home whose dependency probe cannot run must still report it, got: $out"
+  [ "$node_line" -lt "$dep_line" ] \
+    || fail "the npm remedy must not be ranked above the missing node that blocks it, got: $out"
+  pass "bootstrap: the backend dependency remedy is never ranked above the missing node it needs"
 }
 
 test_herdr_install_requires_manual_action() {
@@ -1443,7 +1533,8 @@ test_conpty_backend_deps_install_command_is_executable
 test_conpty_backend_deps_install_survives_awkward_path
 test_conpty_backend_deps_install_reports_failure
 test_install_batch_attempts_every_tool
-test_conpty_deps_hint_names_a_broken_checkout
+test_conpty_deps_hint_on_a_damaged_checkout_is_runnable
+test_conpty_dep_line_follows_the_universal_toolchain
 test_cmux_bundled_cli_satisfies_dependency
 test_unknown_backend_reports_invalid_configuration
 test_json_backends_require_jq_not_tmux
