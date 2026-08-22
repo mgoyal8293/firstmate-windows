@@ -368,6 +368,30 @@ outcome: passed
 EOF
 }
 
+# `outcome: checks-passed` is the pipeline's own statement that the checks went
+# green while the PR waits to be merged. Its ci step is left `running` here
+# deliberately: on a repo where merge is the captain's call that is what the
+# monitor phase records, and the point of the case is that the verdict does not
+# depend on the ci-step word. The accompanying ci status for a real
+# checks-passed run is unobserved on this fork; see
+# docs/verification/crew-state-verdicts.md.
+run_checks_passed() {  # <branch>
+  cat <<EOF
+run:
+  id: "01RUN"
+  branch: $1
+  status: running
+  head: "${FM_FAKE_RUN_HEAD:-abc1234}"
+  pr: "https://github.com/o/r/pull/5"
+  findings: none
+  steps[3]{step,status,findings,duration_ms}:
+    intent,completed,0,0
+    push,completed,0,0
+    ci,running,0,0
+outcome: checks-passed
+EOF
+}
+
 # The same terminal pass with NO steps table at all - the record carries nothing
 # that could show whether ci ran. Absence of evidence, spelled differently from a
 # skipped row.
@@ -1880,6 +1904,100 @@ $(branch_sync_block 01OTHERRUNIDENTIFIER0000000 "$FM_FAKE_RUN_HEAD" "$FM_FAKE_RU
   pass "a branch_sync head does not satisfy a missing run head"
 }
 
+# `outcome: checks-passed` is CI evidence in its own right, unlike `outcome:
+# passed`, which says only that the pipeline completed. Requiring a corroborating
+# `ci,completed` row would silently withhold the ready-for-review signal on the
+# fleet where merge is the captain's call and the ci step stays `running`.
+test_checks_passed_outcome_is_done_without_a_completed_ci_row() {
+  reset_fakes
+  local d out
+  d=$(new_case checks-passed)
+  make_repo_on_branch "$d/wt" fm/feat-checksgreen
+  make_fakebin "$d" >/dev/null
+  fm_write_meta "$d/state/checksgreen.meta" "window=fm:fm-checksgreen" "worktree=$d/wt" "kind=ship"
+  FM_FAKE_AXI_STATUS="$(run_checks_passed fm/feat-checksgreen)"
+  out=$(run_crew_state "$d" checksgreen)
+  assert_contains "$out" "state: done" "checks-passed is its own CI evidence"
+  assert_contains "$out" "checks green: PR ready for review" "the captain gets the ready-for-review signal"
+  assert_contains "$out" "source: run-step" "the run itself is the source"
+  assert_not_contains "$out" "no CI evidence" "the run's own outcome names the checks as passed"
+  pass "a checks-passed outcome is done without a completed ci row"
+}
+
+# A PR URL this reader has no forge client for is a PERMANENT condition, and it
+# used to be reported with the same word as a timed-out or unauthenticated gh.
+# On the coarse path that conflation is load-bearing, because a completed row
+# parks unless the forge confirms a landing: without the distinction, every
+# finished run on a non-GitHub project parks with no way to tell it from a
+# transient failure that will clear on the next heartbeat.
+test_gitlab_merge_request_is_named_not_reported_as_a_forge_failure() {
+  reset_fakes
+  local d short out
+  d=$(new_case coarse-gitlab)
+  make_repo_on_branch "$d/wt" fm/feat-gitlab
+  short=$(git -C "$d/wt" rev-parse --short=7 HEAD)
+  make_fakebin "$d" >/dev/null
+  fm_write_meta "$d/state/gitlab.meta" "window=fm:fm-gitlab" "worktree=$d/wt" "kind=ship" "harness=claude"
+  FM_FAKE_AXI_STATUS="$(run_running fm/other-crew)"
+  FM_FAKE_RUNS_LIST="$(cat <<EOF
+  running    fm/other-crew aaaaaaa  2026-08-21 15:30
+  completed  fm/feat-gitlab ${short}  2026-08-21 15:05  https://gitlab.com/grp/sub/proj/-/merge_requests/12
+EOF
+)"
+  # gh would answer if it were asked; the point is that it never is.
+  FM_FAKE_GH_PR='{"mergeStateStatus":"CLEAN","state":"MERGED","url":"https://gitlab.com/grp/sub/proj/-/merge_requests/12"}'
+  out=$(run_crew_state "$d" gitlab)
+  assert_not_contains "$out" "state: done" "nothing proves a run landed without CI evidence or a forge answer"
+  assert_contains "$out" "state: parked" "an unqueryable provider keeps the run non-terminal"
+  assert_contains "$out" "no forge client for gitlab" "the permanent condition names the provider"
+  assert_not_contains "$out" "PR state unverified" "a permanent condition must not read as a transient forge failure"
+  assert_not_contains "$out" "PR merged" "a merge claim is never emitted for a PR that was never read"
+  pass "a gitlab merge request is named, not reported as a forge failure"
+}
+
+test_unrecognized_pr_url_is_named_not_reported_as_a_forge_failure() {
+  reset_fakes
+  local d short out
+  d=$(new_case coarse-badurl)
+  make_repo_on_branch "$d/wt" fm/feat-badurl
+  short=$(git -C "$d/wt" rev-parse --short=7 HEAD)
+  make_fakebin "$d" >/dev/null
+  fm_write_meta "$d/state/badurl.meta" "window=fm:fm-badurl" "worktree=$d/wt" "kind=ship" "harness=claude"
+  FM_FAKE_AXI_STATUS="$(run_running fm/other-crew)"
+  # A host that merely ends in github.com is a different host; the URL identity
+  # owner refuses it, and so must this reader.
+  FM_FAKE_RUNS_LIST="$(cat <<EOF
+  running    fm/other-crew aaaaaaa  2026-08-21 15:30
+  completed  fm/feat-badurl ${short}  2026-08-21 15:05  https://evil-github.com/o/r/pull/6
+EOF
+)"
+  FM_FAKE_GH_PR='{"mergeStateStatus":"CLEAN","state":"MERGED","url":"https://evil-github.com/o/r/pull/6"}'
+  out=$(run_crew_state "$d" badurl)
+  assert_not_contains "$out" "state: done" "an unrecognized PR url cannot confirm a landing"
+  assert_contains "$out" "PR url not recognized" "the unrecognized url is named for what it is"
+  assert_not_contains "$out" "PR merged" "a look-alike host must never reach the real forge"
+  pass "an unrecognized PR url is named, not reported as a forge failure"
+}
+
+# FM_CREW_STATE_NO_FORGE is documented as truthy, which in this repo means
+# anything other than empty or 0/false/no/off.
+test_no_forge_knob_honors_a_truthy_word() {
+  reset_fakes
+  local d out
+  d=$(new_case no-forge-truthy)
+  make_repo_on_branch "$d/wt" fm/feat-noforge
+  make_fakebin "$d" >/dev/null
+  fm_write_meta "$d/state/noforge.meta" "window=fm:fm-noforge" "worktree=$d/wt" "kind=ship"
+  FM_FAKE_AXI_STATUS="$(run_passed_ci_completed fm/feat-noforge)"
+  FM_FAKE_GH_PR='{"mergeStateStatus":"UNKNOWN","state":"MERGED","url":"https://github.com/o/r/pull/9"}'
+  out=$(FM_CREW_STATE_NO_FORGE=true run_crew_state "$d" noforge)
+  assert_contains "$out" "unverified" "a truthy knob skips the forge read"
+  assert_not_contains "$out" "PR merged" "a skipped forge read never renders as a landing"
+  out=$(FM_CREW_STATE_NO_FORGE=0 run_crew_state "$d" noforge)
+  assert_contains "$out" "PR merged" "0 is not truthy, so the forge is still read"
+  pass "the no-forge knob honors a truthy word"
+}
+
 # Ownership proof. Geometry cannot tell an unfetched pipeline head from a pruned
 # rewrite, so a terminal verdict is withheld there - but the run record itself
 # settles it, because `axi status` read from the task worktree reports which run
@@ -2020,6 +2138,10 @@ test_branch_sync_for_another_run_does_not_prove_ownership
 test_branch_sync_for_another_head_does_not_prove_ownership
 test_branch_sync_for_another_checkout_does_not_prove_ownership
 test_ci_skipped_pass_never_reads_as_done
+test_checks_passed_outcome_is_done_without_a_completed_ci_row
+test_gitlab_merge_request_is_named_not_reported_as_a_forge_failure
+test_unrecognized_pr_url_is_named_not_reported_as_a_forge_failure
+test_no_forge_knob_honors_a_truthy_word
 test_terminal_pass_without_a_steps_table_is_not_done
 test_terminal_pass_with_a_pending_ci_step_is_not_done
 test_coarse_completed_row_without_a_merge_is_not_done

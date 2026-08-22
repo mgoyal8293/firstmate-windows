@@ -63,13 +63,21 @@
 #   * an active step running or fixing            -> working, with its activity
 #   * a gate awaiting a response                  -> parked at that gate
 #   * outcome failed or cancelled                 -> failed
-#   * outcome passed/checks-passed, ci COMPLETED  -> done, and the merged/closed
+#   * outcome checks-passed                       -> done, checks green, PR ready
+#     for review. That word is a statement about the CHECKS, so it is CI evidence
+#     in its own right and needs no corroborating ci-step row. Where merge is
+#     left to the captain the ci step stays `running` for the whole monitor
+#     phase, so requiring one would withhold the very signal a captain waits for.
+#   * outcome passed, ci COMPLETED                -> done, and the merged/closed
 #     claim is emitted ONLY when the forge confirms it (fm_crew_forge_pr_state)
-#   * outcome passed/checks-passed, ci NOT COMPLETED -> NOT done. CI evidence is
-#     a WHITELIST: only this run's own `ci` step recorded as `completed` proves
-#     that CI ran for this work. Skipped, absent, or any other status word is the
-#     ABSENCE of that evidence, and it reports parked: it needs a ruling, not a
-#     landing. See fm_crew_terminal_pass_verdict.
+#   * outcome passed, ci NOT COMPLETED            -> NOT done. `passed` says only
+#     that the PIPELINE completed, so it can hide a skipped ci step - the
+#     destructive direction. CI evidence is a WHITELIST here: only this run's own
+#     `ci` step recorded as `completed` proves that CI ran. Skipped, absent, or
+#     any other status word is the ABSENCE of that evidence, and it reports
+#     parked: it needs a ruling, not a landing. Same rule for a run whose status
+#     is `completed` with no outcome word at all.
+#     See fm_crew_terminal_pass_verdict.
 #   * a coarse runs-list `completed` row carries no steps table at all, so it can
 #     never satisfy that whitelist: it reads done only when the forge confirms
 #     merged or closed, and parked otherwise. See
@@ -366,32 +374,49 @@ fm_crew_runs_newest_row_for_branch() {  # <runs-output> <branch>
 
 # --- forge confirmation -----------------------------------------------------
 
-# "<owner>/<repo>|<number>" parsed from a GitHub PR URL; empty when the URL is
-# not a recognizable PR.
-fm_crew_pr_ref() {  # <pr-url>
-  printf '%s' "$1" \
-    | sed -n 's#^https\{0,1\}://[^/]*github\.com/\([^/]\{1,\}\)/\([^/]\{1,\}\)/pull/\([0-9]\{1,\}\).*#\1/\2|\3#p'
-}
-
-# The forge's own word on a PR: merged, closed, open, or unverified, optionally
-# followed by " <mergeStateStatus>". This is the guard that stops the unsafe
-# direction: a merged-or-closed claim is only ever emitted from THIS answer,
-# never inferred from run state. Unverified is not a failure to report - it is
-# the honest answer when gh is absent, unauthenticated, bounded out, or the PR
-# is unreadable, and it must never be rendered as a landing.
+# The forge's own word on a PR, as exactly one of:
+#   merged | closed | open   the forge answered, optionally followed by
+#                            " <mergeStateStatus>"
+#   unverified               TRANSIENT non-answer: gh is absent, unauthenticated,
+#                            bounded out, or the PR was unreadable. A later read
+#                            can clear it.
+#   unqueryable <provider>   STRUCTURAL non-answer: a valid PR/MR URL for a
+#                            provider this reader has no forge client for. No
+#                            later read clears it, so the detail names the
+#                            provider instead of letting a permanent condition
+#                            read as a passing network failure.
+#   unparseable              STRUCTURAL non-answer: not a recognizable PR or MR
+#                            URL at all.
 #
-# bin/fm-timeout-lib.sh owns the bound; the caller must source it.
+# This is the guard that stops the unsafe direction: a merged-or-closed claim is
+# only ever emitted from THIS answer, never inferred from run state. None of the
+# three non-answers is a failure to report - each is the honest word for a
+# different situation - and none may ever be rendered as a landing.
+#
+# Withholding the merged claim is the whole of what a non-answer costs. A
+# full-path terminal pass whose own `ci` step is recorded `completed` still reads
+# done on a project this reader cannot query, because that run carries its own CI
+# evidence; only the coarse runs-list path, which has none to fall back on, stays
+# parked there, and it now says why.
+#
+# bin/fm-pr-lib.sh owns PR/MR URL identity and bin/fm-timeout-lib.sh owns the
+# bound; the caller must source both. Parsing the URL here instead would be a
+# second answer to a question that already has an owner, and the two disagreed:
+# the owner refuses `http://`, refuses a host merely ending in `github.com`, and
+# knows GitLab, none of which a local regex did.
 fm_crew_forge_pr_state() {  # <pr-url> <timeout-secs>
-  local url=$1 timeout_secs=$2 ref slug number out state merge_state
-  ref=$(fm_crew_pr_ref "$url")
-  [ -n "$ref" ] || { printf 'unverified'; return; }
+  local url=$1 timeout_secs=$2 out state merge_state
+  fm_pr_url_parse "$url" || { printf 'unparseable'; return; }
+  # shellcheck disable=SC2154 # Set by fm_pr_url_parse in bin/fm-pr-lib.sh.
+  [ "$FM_PR_PROVIDER" = github ] ||
+    { printf 'unqueryable %s' "$FM_PR_PROVIDER"; return; }
   command -v gh >/dev/null 2>&1 || { printf 'unverified'; return; }
   case "$timeout_secs" in ''|*[!0-9]*|0) timeout_secs=10 ;; esac
-  slug=${ref%%|*}
-  number=${ref#*|}
+  # FM_PR_PATH is owner/repository for a github URL, which is what --repo takes.
   out=$(fm_run_timed "$timeout_secs" \
     env GH_PROMPT_DISABLED=1 GH_NO_UPDATE_NOTIFIER=1 \
-    gh pr view "$number" --repo "$slug" --json state,mergeStateStatus 2>/dev/null) \
+    gh pr view "$FM_PR_NUMBER" --repo "$FM_PR_PATH" \
+    --json state,mergeStateStatus 2>/dev/null) \
     || { printf 'unverified'; return; }
   state=$(printf '%s' "$out" | sed -n 's/.*"state":[[:space:]]*"\([^"]*\)".*/\1/p')
   merge_state=$(printf '%s' "$out" | sed -n 's/.*"mergeStateStatus":[[:space:]]*"\([^"]*\)".*/\1/p')
@@ -413,29 +438,43 @@ fm_crew_forge_pr_state() {  # <pr-url> <timeout-secs>
 # complete, "run completed" when the record carried no step detail to check (the
 # runs-list path), because that path cannot rule out a skipped ci step.
 fm_crew_done_detail() {  # <forge-answer> <ci-evidence: verified|unverified>
-  local answer=$1 word=${1%% *} qualifier="" lead=run\ completed
+  local answer=$1 word=${1%% *} rest="" qualifier="" lead=run\ completed
   [ "${2:-unverified}" = verified ] && lead=run\ passed
-  case "$answer" in *' '*) qualifier=" (${answer#* })" ;; esac
+  case "$answer" in *' '*) rest=${answer#* }; qualifier=" ($rest)" ;; esac
   case "$word" in
     merged) printf '%s: PR merged' "$lead" ;;
     closed) printf '%s: PR closed' "$lead" ;;
     open)   printf '%s: PR open, not merged%s' "$lead" "$qualifier" ;;
+    unqueryable)
+      printf '%s: merge state unreadable here, no forge client for %s' "$lead" "$rest" ;;
+    unparseable)
+      printf '%s: merge state unreadable, PR url not recognized' "$lead" ;;
     *)      printf '%s: merge state unverified' "$lead" ;;
   esac
 }
 
 # The forge's own answer as a detail suffix, e.g. ", PR still open (DIRTY)".
 # Reports what the forge said and nothing more, so a detail line that carries it
-# never turns an unverified or open PR into a landing.
+# never turns a non-answer or an open PR into a landing. The two structural
+# non-answers are spelled apart from the transient one, because a reader who
+# cannot tell them apart waits for a state that will never arrive.
 fm_crew_forge_suffix() {  # <forge-answer>
-  local answer=$1 word=${1%% *}
+  local answer=$1 word=${1%% *} rest=""
+  case "$answer" in *' '*) rest=${answer#* } ;; esac
   case "$word" in
     merged) printf ', PR merged' ;;
     closed) printf ', PR closed' ;;
     open)   printf ', PR still open' ;;
+    unqueryable)
+      printf ', PR state unreadable here, no forge client for %s' "$rest"
+      return 0 ;;
+    unparseable)
+      printf ', PR url not recognized as a PR or MR'
+      return 0 ;;
     *)      printf ', PR state unverified' ;;
   esac
-  case "$answer" in *' '*) printf ' (%s)' "${answer#* }" ;; esac
+  case "$rest" in ?*) printf ' (%s)' "$rest" ;; esac
+  return 0
 }
 
 # How this run's `ci` step failed to supply CI evidence, in the words the record
@@ -458,8 +497,10 @@ fm_crew_no_ci_evidence_detail() {  # <gap> <forge-answer>
   fm_crew_forge_suffix "$2"
 }
 
-# The verdict for a run that reached outcome passed/checks-passed, or status
-# completed, as "<state>|<detail>".
+# The verdict for a run that reached `outcome: passed`, or `status: completed`
+# with no outcome word at all, as "<state>|<detail>". NOT the path for
+# `outcome: checks-passed`, which carries its own statement about the checks and
+# is settled before this is reached.
 #
 # CI evidence is a WHITELIST, not a blacklist: only this run's own `ci` step
 # recorded as `completed` proves that CI ran for this work. A skipped step, an
@@ -486,7 +527,10 @@ fm_crew_terminal_pass_verdict() {  # <ci-step-status> <forge-answer>
 # at all, so it can never satisfy the CI-evidence whitelist above and its
 # `completed` says only that the pipeline stopped. The one terminal fact still
 # available here is the forge's own answer, so a merged or closed PR earns done
-# and everything else - open, or an unanswered forge - reports parked.
+# and everything else - open, or any of the three non-answers - reports parked.
+# A structural non-answer parks permanently, which is the honest verdict when
+# nothing at all proves the run landed; naming it apart from a transient failure
+# is what makes that diagnosable rather than silent.
 fm_crew_coarse_completed_verdict() {  # <forge-answer>
   case "${1%% *}" in
     merged|closed) printf 'done|%s' "$(fm_crew_done_detail "$1" unverified)" ;;

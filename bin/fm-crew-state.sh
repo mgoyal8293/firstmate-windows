@@ -8,9 +8,9 @@
 # or blocked and the crew resumes (responds to the gate, the pipeline fixes, it
 # re-validates), the log's last line stays stale. This helper never infers the
 # current state from a tail of the log: it reads the authoritative source (a
-# no-mistakes run-step attributed to this crew's branch and current code
-# identity, else the pane busy-signature) and reconciles the possibly-stale log
-# against it.
+# no-mistakes run-step attributed to this crew's branch, else the pane
+# busy-signature) and reconciles the possibly-stale log against it. Code identity
+# is a QUALIFIER on that run, not a precondition for reading it - see step 2.
 #
 # The determinism lives entirely here - only run-step / pane / log reads plus
 # fixed mapping logic, no heuristics and no LLM. Output is one stable, parseable,
@@ -28,10 +28,13 @@
 #      because its absence produced a real wrong verdict in one of the two
 #      unsafe directions. The run-step is AUTHORITATIVE once admitted:
 #      running/fixing -> working, ci -> working, awaiting_approval/fix_review ->
-#      parked (with gate findings), failed/cancelled -> failed, and passed/
-#      checks-passed -> done only when this run's own ci step is recorded
-#      `completed`; every other ci-step answer is the absence of CI evidence and
-#      reports parked, never done. EXCEPT: while
+#      parked (with gate findings), failed/cancelled -> failed, and
+#      checks-passed -> done, since that word is itself a statement about the
+#      checks. `passed` is not: it says the PIPELINE completed, so it reads done
+#      only when this run's own ci step is recorded `completed`, and every other
+#      ci-step answer is the absence of CI evidence and reports parked. The
+#      coarse runs-list path carries no steps table at all, so a `completed` row
+#      there reads done only on a forge-confirmed merge or close. EXCEPT: while
 #      the active step is ci, `axi status` alone cannot tell "still waiting on
 #      checks" from "checks green, waiting on merge" (see nm_ci_checks_state) -
 #      a ci-step log-tail check overrides working -> done once checks read
@@ -48,8 +51,13 @@
 #      attributed to this crew, a dead endpoint also reports unknown · none rather
 #      than trusting a stale status log.
 #
-# Read-only and side-effect free. Always exits 0 on a successful read regardless
-# of state; exit 2 only on a usage error (no id).
+# Read-only: nothing here writes fleet state, and every command it runs is a
+# query. Not process-free, though - a terminal pass makes one outbound `gh pr
+# view` to confirm a merged-or-closed claim, bounded by FM_CREW_STATE_FORGE_TIMEOUT
+# and skipped entirely when FM_CREW_STATE_NO_FORGE is truthy, which reports the
+# merge state as unverified and never as a landing. A working crew makes no forge
+# call at all. Always exits 0 on a successful read regardless of state; exit 2
+# only on a usage error (no id).
 set -u
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -71,6 +79,11 @@ STATE="${FM_STATE_OVERRIDE:-$FM_HOME/state}"
 . "$SCRIPT_DIR/fm-nm-run-lib.sh"
 # shellcheck source=bin/fm-timeout-lib.sh
 . "$SCRIPT_DIR/fm-timeout-lib.sh"
+# The ONE owner of PR/MR URL identity, for the forge confirmation below. Sourcing
+# it costs nothing here: it initialises variables and pulls bin/fm-proc-lib.sh,
+# which bin/fm-backend.sh above has already loaded.
+# shellcheck source=bin/fm-pr-lib.sh
+. "$SCRIPT_DIR/fm-pr-lib.sh"
 # shellcheck source=bin/fm-crew-run-verdict-lib.sh
 . "$SCRIPT_DIR/fm-crew-run-verdict-lib.sh"
 
@@ -434,7 +447,10 @@ fi
 # routine heartbeat over working crews makes no forge call at all.
 crew_forge_answer() {
   local url
-  [ "${FM_CREW_STATE_NO_FORGE:-0}" = 1 ] && { printf 'unverified'; return; }
+  case "$(printf '%s' "${FM_CREW_STATE_NO_FORGE:-}" | tr '[:upper:]' '[:lower:]')" in
+    ''|0|false|no|off) : ;;
+    *) printf 'unverified'; return ;;
+  esac
   url=""
   [ "$RUN_SOURCE" = full ] && url=$(strip_quotes "$(nm_field pr)")
   [ -n "$url" ] || url=$COARSE_PR
@@ -483,20 +499,24 @@ if [ "$HAVE_RUN" = 1 ]; then
     ci_step_recorded=$(fm_crew_step_status "$RUN_OUT" ci)
     if [ -n "$outcome" ]; then
       case "$outcome" in
-        passed|checks-passed)
+        checks-passed)
+          # A statement about the CHECKS, so it is CI evidence in its own right
+          # and needs no corroborating ci-step row. Where merge is left to the
+          # captain the ci step stays `running` for the whole monitor phase (see
+          # nm_ci_checks_state), so demanding one would withhold exactly the
+          # ready-for-review signal the captain is waiting on.
+          RUN_STATE="done"; RUN_DETAIL="checks green: PR ready for review"
+          ;;
+        passed)
           # `outcome: passed` means the PIPELINE completed, not that CI passed,
-          # so the pass is only ever taken at face value when this run's own ci
-          # step is recorded `completed`. Everything else - skipped, absent, any
-          # other word - is the absence of validation, and reporting done there
-          # is the destructive direction. fm_crew_terminal_pass_verdict owns
-          # that whitelist for both terminal-pass paths in this script.
-          if [ "$ci_step_recorded" = completed ] && [ "$outcome" = checks-passed ]; then
-            RUN_STATE="done"; RUN_DETAIL="checks green: PR ready for review"
-          else
-            pass_verdict=$(fm_crew_terminal_pass_verdict "$ci_step_recorded" "$(crew_forge_answer)")
-            RUN_STATE=${pass_verdict%%|*}
-            RUN_DETAIL=${pass_verdict#*|}
-          fi
+          # so it is only taken at face value when this run's own ci step is
+          # recorded `completed`. Everything else - skipped, absent, any other
+          # word - is the absence of validation, and reporting done there is the
+          # destructive direction. fm_crew_terminal_pass_verdict owns that
+          # whitelist for both `passed` and the no-outcome `completed` case.
+          pass_verdict=$(fm_crew_terminal_pass_verdict "$ci_step_recorded" "$(crew_forge_answer)")
+          RUN_STATE=${pass_verdict%%|*}
+          RUN_DETAIL=${pass_verdict#*|}
           ;;
         failed)        RUN_STATE=failed; RUN_DETAIL="run failed" ;;
         cancelled)     RUN_STATE=failed; RUN_DETAIL="run cancelled" ;;

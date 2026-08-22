@@ -14,7 +14,7 @@ Branch: `fm/fm-crew-state-stale-run-masks-live`.
 
 ```
 $ bash tests/fm-crew-state.test.sh | grep -c '^ok'
-67
+71
 ```
 
 The count is the evidence, not the exit status: a green step does not prove its assertions ran.
@@ -39,16 +39,22 @@ Every row must fail, and must fail on the named assertion.
 | Ownership requires the pipeline head to be this run's head | drop that equality | `test_branch_sync_for_another_head_does_not_prove_ownership` | fails: `unexpected: 'source: run-step'` |
 | Ownership requires `local.head` to be this checkout | drop that equality | `test_branch_sync_for_another_checkout_does_not_prove_ownership` | fails: `unexpected: 'source: run-step'` |
 | An absent `ci` row is the same absence of evidence a skipped one is | revert the whitelist to the old skipped-only blacklist (`[ "$1" != skipped ]`) | `test_terminal_pass_without_a_steps_table_is_not_done` | fails: `unexpected: 'state: done'` |
+| An `outcome: checks-passed` run is done without a corroborating `ci,completed` row | send checks-passed back through the ci-step whitelist | `test_checks_passed_outcome_is_done_without_a_completed_ci_row` | fails: `missing: 'state: done'` |
 | So is any other `ci` status word | the same mutation | `test_terminal_pass_with_a_pending_ci_step_is_not_done` | fails: `unexpected: 'state: done'` |
 | A coarse runs-list `completed` row is not a pass without a forge-confirmed landing | let every forge answer take the done arm | `test_coarse_completed_row_without_a_merge_is_not_done` | fails: `unexpected: 'state: done'` |
 | Nor when the forge did not answer at all | the same mutation | `test_coarse_completed_row_with_an_unanswered_forge_is_not_done` | fails: `unexpected: 'state: done'` |
 | Run-record scalar reads exclude the `branch_sync:` block | make `fm_crew_run_scalars` a passthrough | `test_branch_sync_head_does_not_satisfy_a_missing_run_head` | fails: `unexpected: 'source: run-step'` |
+| A provider with no forge client is named, not reported as a transient failure | collapse both structural non-answers back into `unverified` | `test_gitlab_merge_request_is_named_not_reported_as_a_forge_failure` | fails: `missing: 'no forge client for gitlab'` |
+| So is a URL that is not a recognizable PR or MR | the same mutation | `test_unrecognized_pr_url_is_named_not_reported_as_a_forge_failure` | fails: `missing: 'PR url not recognized'` |
+| `FM_CREW_STATE_NO_FORGE` honors any truthy value, as documented | narrow it back to the literal `1` | `test_no_forge_knob_honors_a_truthy_word` | fails: `missing: 'unverified'` |
 
-17 of 17.
+21 of 21.
 
 The first two rows share a case deliberately: both guards sit on the runs-list path, and the case needs both to hold - one stops the dead run being reached, the other makes the live run usable.
 Three later pairs share a mutation rather than a case, because one gate covers several distinct ways for the evidence to be absent and each way needs its own case to show it is covered.
 The `branch_sync:` scoping row is pointed at the case where it carries weight: the pre-existing `test_missing_run_head_falls_back_to_current_state` stays green under that mutation, because its fixture has no `branch_sync:` block for the unscoped read to pick up.
+The strictness of the PR-URL rules themselves is not listed as a guard of this file's: `bin/fm-pr-lib.sh` owns them, and `fm_crew_forge_pr_state` reuses `fm_pr_url_parse` read-only rather than restating them.
+The look-alike-host case above pins that reuse behaviourally, since a loosened parse would send `https://evil-github.com/o/r/pull/6` to the real forge.
 The 7-character floor in `fm_crew_sha_matches` is deliberately absent from the table: it is defensive against a degenerate abbreviation and has no observed trigger, so there is no honest case to pin it with.
 
 ## Reproducing the matrix
@@ -70,6 +76,11 @@ The run records in those cases are recorded output from real runs on this fork, 
 | `branch_sync_block` | `01M0N8J9ET64CBM89W4D663WBZ` | the `branch_sync:` field set and shape, read from that run's own task worktree |
 
 The remaining fixtures are synthetic minimal shapes rather than recordings, and they are named for what they omit: `run_passed` carries a `ci,completed` row, `run_passed_no_steps` carries no steps table at all, and the pending-ci case rewrites the former's `ci` row to `pending`.
+
+`run_checks_passed` is synthetic too, and one thing about it is deliberately NOT a claim.
+No `outcome: checks-passed` run has been recorded on this fork, so the ci-step status that actually accompanies one is unobserved here, and the fixture's `ci,running` row is a plausible shape rather than an observed one.
+That is exactly why the verdict does not read the ci-step word for this outcome: `checks-passed` is itself a statement about the checks, so the answer holds whatever the accompanying row turns out to say, and the guard above is falsified against that independence rather than against a guessed value.
+Record the real pairing here the first time a `checks-passed` run is observed, and treat any surprise in it as information about the fixture, not about the rule.
 
 `make_pipeline_ahead_topology` builds the geometry those cases need for real - a task worktree plus a separate clone standing in for the pipeline's own - so the run head under test is a genuine commit the checkout cannot resolve rather than a made-up sha.
 
