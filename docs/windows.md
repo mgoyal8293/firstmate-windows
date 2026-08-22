@@ -121,7 +121,7 @@ path rather than replacing it.**
 
 - The token is a value the harness exports that is stable for one session and
   different in every other, so a process holding it is provably inside that
-  session. `bin/fm-session-lock-lib.sh` holds the verified source per harness;
+  session. `bin/fm-session-token-lib.sh` holds the verified source per harness;
   Claude's is `CLAUDE_CODE_SESSION_ID`, measured identical across `SessionStart`,
   the Bash tool's `PreToolUse`, `Stop` and `SessionEnd`, and equal to the
   `session_id` each hook payload carries on stdin.
