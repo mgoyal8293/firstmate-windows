@@ -192,3 +192,86 @@ fm_session_ancestry_unavailable() {
   fm_harness_ancestry_pids >/dev/null 2>&1 && return 1
   return 0
 }
+
+# ---------------------------------------------------------------------------
+# Acquisition-path refusals and verdicts
+#
+# Each of these is the BODY of one step in bin/fm-lock.sh's sequence, moved out
+# whole. None of them decides where it is called from, and none may be reordered
+# against its neighbours by reading this file - that sequence is bin/fm-lock.sh's.
+# Every one that refuses prints to stderr and returns 1, leaving the exit to its
+# caller.
+# ---------------------------------------------------------------------------
+
+# True when this process cannot be placed by ancestry but does carry a token, so
+# the token path is the evidence to use.
+fm_session_token_acquire_eligible() {
+  fm_session_ancestry_unavailable && fm_session_token_self >/dev/null 2>&1
+}
+
+# Refuse an acquisition that can prove no ownership at all, naming whichever
+# evidence was actually missing.
+#
+# Windows, and no token. Naming the ancestry walk there would be true and
+# useless: on Windows it can NEVER answer for anyone, because MSYS's /proc holds
+# only MSYS processes and the harness is a native executable. The actionable fact
+# is the missing token, and today only Claude Code exports one
+# (FM_SESSION_TOKEN_VARS above). So say that, and say what the reader can do
+# about it.
+fm_session_token_acquire_refuse() {
+  if fm_session_ancestry_unavailable; then
+    echo "error: no firstmate session token in this environment, so this session cannot prove it owns this home - on Windows ownership is a per-session token, never process ancestry, because a native harness never appears in MSYS's /proc. Only Claude Code exports one today (CLAUDE_CODE_SESSION_ID); under any other harness a Windows firstmate stays read-only - run firstmate from Claude Code, or continue read-only (docs/windows.md 'How the session lock is owned')" >&2
+  else
+    echo "error: cannot locate harness process in ancestry" >&2
+  fi
+  return 1
+}
+
+# Refuse when a DIFFERENT session's token holds this home.
+#
+# On the token path the recorded pid is always dead, so it can never report a
+# live peer. A different, recently refreshed token is that evidence instead;
+# without this check two concurrent Windows sessions would both reclaim the lock
+# from each other's dead pid and silently co-own the fleet.
+fm_session_token_refuse_if_held_by_other() {  # <state-dir>
+  local state=$1
+  fm_session_token_held_by_other "$state" || return 0
+  echo "error: another firstmate session holds the lock for this home; operate read-only until it exits, or remove $state/.lock.session if that session is gone" >&2
+  return 1
+}
+
+# Publish this session's token, or refuse.
+# The caller publishes the ownership authority BEFORE the pid it accompanies and
+# proves the write, so a lock file can never name a session whose token was not
+# recorded.
+fm_session_token_publish_or_refuse() {  # <state-dir>
+  fm_session_token_publish "$1" && return 0
+  echo "error: cannot record this session's ownership token; operate read-only until resolved" >&2
+  return 1
+}
+
+# Print the `fm-lock.sh status` verdict for a token-held home, or return 1 when
+# no token is recorded so the caller falls back to its own pid verdict.
+#
+# A token-path lock always records a dead pid, so reporting it as stale would be
+# wrong: the token, not the pid, is what holds this home.
+fm_session_token_status_line() {  # <state-dir>
+  local state=$1
+  fm_session_token_recorded "$state" >/dev/null 2>&1 || return 1
+  if fm_session_token_owned_by_self "$state"; then
+    echo "lock: held by this session's token"
+  elif fm_session_token_held_by_other "$state"; then
+    echo "lock: held by another session's token"
+  else
+    echo "lock: stale (token last refreshed over ${FM_SESSION_TOKEN_STALE_AFTER}s ago)"
+  fi
+}
+
+# Print an acquisition's success line, naming the authority that holds the lock.
+fm_session_lock_acquired_line() {  # <token-path-flag> <pid>
+  if [ "$1" -eq 1 ]; then
+    echo "lock acquired: session token"
+  else
+    echo "lock acquired: harness pid $2"
+  fi
+}
