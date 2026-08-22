@@ -68,6 +68,32 @@ make_repo_on_branch() {  # <dir> <branch>
   export FM_FAKE_RUN_HEAD
 }
 
+# The REAL geometry that made a dead run mask a live one: a task worktree plus a
+# separate clone standing in for the pipeline's own, where the pipeline's commit
+# exists only in that clone. Its sha is therefore a real commit this checkout
+# genuinely cannot resolve - which is what happens on a live fleet, because the
+# pipeline pushes its fix commits to the remote and the task worktree has not
+# fetched them. A made-up sha would pin the symptom; this pins the cause.
+# Sets LOCAL_HEAD (the worktree tip) and PIPE_HEAD (the unfetchable run head).
+make_pipeline_ahead_topology() {  # <dir> <branch>
+  local dir=$1 branch=$2
+  git init -q --bare "$dir/origin.git"
+  git init -q "$dir/wt"
+  git -C "$dir/wt" remote add origin "$dir/origin.git"
+  git -C "$dir/wt" commit -q --allow-empty -m base
+  git -C "$dir/wt" checkout -q -b "$branch"
+  git -C "$dir/wt" commit -q --allow-empty -m 'crew implementation commit'
+  git -C "$dir/wt" push -q origin "$branch"
+  LOCAL_HEAD=$(git -C "$dir/wt" rev-parse HEAD)
+  git clone -q "$dir/origin.git" "$dir/pipeline" 2>/dev/null
+  git -C "$dir/pipeline" checkout -q "$branch"
+  git -C "$dir/pipeline" commit -q --allow-empty -m 'no-mistakes(review): pipeline fix commit'
+  PIPE_HEAD=$(git -C "$dir/pipeline" rev-parse HEAD)
+  git -C "$dir/wt" rev-parse --verify -q "${PIPE_HEAD}^{commit}" >/dev/null 2>&1 &&
+    fail "fixture broken: the pipeline head is resolvable in the task worktree"
+  export LOCAL_HEAD PIPE_HEAD
+}
+
 # A fakebin with a fake `no-mistakes` (serves the env-driven run output) and a
 # fake `tmux` (serves a busy or idle pane). The fake no-mistakes mirrors the real
 # command surface the helper uses: `axi status`, `axi status --run <id>` (the
@@ -96,6 +122,18 @@ case "${1:-}" in
   runs)
     printf '%s\n' "${FM_FAKE_RUNS_LIST:-}" ;;
 esac
+exit 0
+SH
+  # The forge read fm-crew-state makes before it will emit a merged-or-closed
+  # claim. Serves FM_FAKE_GH_PR verbatim; empty (the default) or
+  # FM_FAKE_GH_MISSING=1 both mean "the forge did not answer", which must never
+  # render as a landing.
+  cat > "$fb/gh" <<'SH'
+#!/usr/bin/env bash
+set -u
+[ "${FM_FAKE_GH_MISSING:-0}" = 1 ] && exit 1
+[ -n "${FM_FAKE_GH_PR:-}" ] || exit 1
+printf '%s\n' "$FM_FAKE_GH_PR"
 exit 0
 SH
   cat > "$fb/tmux" <<'SH'
@@ -141,7 +179,7 @@ case "${1:-}" in
 esac
 exit 0
 SH
-  chmod +x "$fb/no-mistakes" "$fb/tmux" "$fb/herdr"
+  chmod +x "$fb/no-mistakes" "$fb/tmux" "$fb/herdr" "$fb/gh"
   printf '%s\n' "$fb"
 }
 
@@ -206,8 +244,11 @@ reset_fakes() {
   FM_FAKE_HERDR_MISSING=0
   FM_FAKE_HERDR_AGENT_STATUS=""
   FM_FAKE_CI_LOGS=""
+  FM_FAKE_GH_PR=""
+  FM_FAKE_GH_MISSING=0
   export FM_FAKE_AXI_STATUS FM_FAKE_AXI_STATUS_RUN FM_FAKE_RUNS_LIST FM_FAKE_BUSY FM_FAKE_BUSY_TEXT FM_FAKE_TMUX_MISSING
   export FM_FAKE_HERDR_BUSY FM_FAKE_HERDR_MISSING FM_FAKE_HERDR_AGENT_STATUS FM_FAKE_CI_LOGS
+  export FM_FAKE_GH_PR FM_FAKE_GH_MISSING
 }
 
 # --- run-object fixtures (TOON, as `no-mistakes axi status` emits) -----------
@@ -375,6 +416,111 @@ run:
     review,completed,0,0
     push,completed,0,0
     ci,fixing,0,0
+EOF
+}
+
+# Recorded from run 01M0JMD3H94MKKF7SCM5C5QWR6 (2026-08-21), the false-done
+# incident: every step completed EXCEPT ci, which was skipped, so the run
+# reached `outcome: passed` while its PR stayed open, conflicted, and carried no
+# checks at all. `outcome: passed` means the pipeline completed, not that CI did.
+run_passed_ci_skipped() {  # <branch>
+  cat <<EOF
+run:
+  id: "01M0JMD3H94MKKF7SCM5C5QWR6"
+  branch: $1
+  status: completed
+  head: "${FM_FAKE_RUN_HEAD:-abc1234}"
+  pr: "https://github.com/o/r/pull/6"
+  findings: "2 awaiting, 3 info"
+  steps[9]{step,status,findings,duration_ms}:
+    intent,completed,0,25007
+    rebase,completed,0,1591
+    review,completed,2,671938
+    test,completed,0,951876
+    document,completed,2,623133
+    lint,completed,0,6280
+    push,completed,0,3735
+    pr,completed,0,75403
+    ci,skipped,1,4221
+outcome: passed
+EOF
+}
+
+# Recorded from run 01M0JASXQ1H4Q5YAZYJT03F1HN (2026-08-21): the same outcome
+# word, but its ci step actually ran to completion.
+run_passed_ci_completed() {  # <branch>
+  cat <<EOF
+run:
+  id: "01M0JASXQ1H4Q5YAZYJT03F1HN"
+  branch: $1
+  status: completed
+  head: "${FM_FAKE_RUN_HEAD:-abc1234}"
+  pr: "https://github.com/o/r/pull/9"
+  findings: "1 auto-fix, 1 info"
+  steps[9]{step,status,findings,duration_ms}:
+    intent,completed,0,15
+    rebase,completed,0,1798
+    review,completed,1,3655286
+    test,completed,1,2096186
+    document,completed,0,938812
+    lint,completed,0,2952
+    push,completed,0,4579
+    pr,completed,0,83478
+    ci,completed,0,886177
+outcome: passed
+EOF
+}
+
+# Recorded from run 01M0EFHKF1A3CJX4KK58HWJ7D2 (2026-08-20): the terminal-failed
+# run that sat at the task worktree's own head while a newer run was live. Its
+# daemon died mid-review, which is how the superseded/live pair arises.
+run_failed_at_local_head() {  # <branch> <head>
+  cat <<EOF
+run:
+  id: "01M0EFHKF1A3CJX4KK58HWJ7D2"
+  branch: $1
+  status: failed
+  head: "$2"
+  findings: "1 awaiting, 1 auto-fix, 1 info"
+  steps[9]{step,status,findings,duration_ms}:
+    intent,completed,0,12
+    rebase,completed,0,1686
+    review,failed,3,2391918
+    test,pending,0,0
+    document,pending,0,0
+    lint,pending,0,0
+    push,pending,0,0
+    pr,pending,0,0
+    ci,pending,0,0
+outcome: failed
+error: "step review failed: agent review: claude exited: exit status 1: "
+EOF
+}
+
+# Recorded from run 01M0N8J9ET64CBM89W4D663WBZ while it was live. The
+# active_steps table is the daemon's own statement of what is executing right
+# now; its last_activity column is quoted free text that contains commas of its
+# own, so this fixture also pins the quote-aware column read.
+run_live_active_step() {  # <branch> <head>
+  cat <<EOF
+run:
+  id: "01M0N8J9ET64CBM89W4D663WBZ"
+  branch: $1
+  status: running
+  head: "$2"
+  findings: 2 auto-fix
+  steps[9]{step,status,findings,duration_ms}:
+    intent,completed,0,7
+    rebase,completed,0,1517
+    review,completed,2,2728864
+    test,running,0,0
+    document,pending,0,0
+    lint,pending,0,0
+    push,pending,0,0
+    pr,pending,0,0
+    ci,pending,0,0
+  active_steps[1]{step,status,active_for,last_activity,agent_pid,round}:
+    test,running,3m38s,"3m11s ago: log: Now let me run the primary targeted suite, then lint.","2419262",starting
 EOF
 }
 
@@ -1346,6 +1492,188 @@ test_missing_run_head_falls_back_to_current_state() {
   pass "missing run head falls back instead of matching by branch"
 }
 
+# ---------------------------------------------------------------------------
+# Run selection: a superseded terminal run must never mask a live one.
+#
+# Reproduced twice on the real fleet (2026-08-19 and 2026-08-21) and filed with
+# exact heads: the pipeline advanced the branch to a commit the task worktree had
+# not fetched, so the LIVE run failed to bind to local code, selection stepped
+# past it, and an OLDER terminal-failed run still sitting at the local head was
+# reported instead. A demonstrably progressing task read `failed`, which
+# AGENTS.md section 7 treats as terminal - it licenses abandoning the work or
+# duplicating it, and it manufactured a captain-facing failure escalation.
+
+# The runs-list path: `axi status` answers with another crew's run, so this
+# branch's own newest row has to be found in the list.
+test_superseded_failed_row_does_not_mask_live_row() {
+  reset_fakes
+  local d out
+  d=$(new_case superseded-mask-coarse)
+  make_pipeline_ahead_topology "$d" fm/feat-mask
+  make_fakebin "$d" >/dev/null
+  fm_write_meta "$d/state/mask.meta" "window=fm:fm-mask" "worktree=$d/wt" "kind=ship" "harness=claude"
+  printf 'working: fix round under way\n' > "$d/state/mask.status"
+  FM_FAKE_AXI_STATUS="$(run_running fm/other-crew)"
+  FM_FAKE_RUNS_LIST="  running    fm/other-crew aaaaaaa  2026-08-21 15:30
+  running    fm/feat-mask $(printf %.8s "$PIPE_HEAD")  2026-08-21 15:25
+  failed     fm/feat-mask $(printf %.8s "$LOCAL_HEAD")  2026-08-20 02:21"
+  out=$(run_crew_state "$d" mask)
+  assert_contains "$out" "state: working" "the branch's newest run is live, so the task is working"
+  assert_not_contains "$out" "state: failed" "a superseded failed row must never be selected"
+  assert_contains "$out" "source: run-step" "the live row is attributed as the run"
+  pass "a superseded failed row does not mask this branch's newest live row"
+}
+
+# The `axi status` path: the repo-wide answer already IS this branch's live run,
+# at the head the task worktree cannot resolve. Reaching past it into the runs
+# list is what found the dead run, so that fallback is not taken from here.
+test_live_run_at_unfetched_head_is_not_replaced_by_older_failed_run() {
+  reset_fakes
+  local d out
+  d=$(new_case superseded-mask-full)
+  make_pipeline_ahead_topology "$d" fm/feat-ahead
+  make_fakebin "$d" >/dev/null
+  fm_write_meta "$d/state/ahead.meta" "window=fm:fm-ahead" "worktree=$d/wt" "kind=ship" "harness=claude"
+  printf 'working: fix round under way\n' > "$d/state/ahead.status"
+  FM_FAKE_AXI_STATUS="$(run_live_active_step fm/feat-ahead "$PIPE_HEAD")"
+  FM_FAKE_RUNS_LIST="  running    fm/feat-ahead $(printf %.8s "$PIPE_HEAD")  2026-08-21 15:25
+  failed     fm/feat-ahead $(printf %.8s "$LOCAL_HEAD")  2026-08-20 02:21"
+  out=$(run_crew_state "$d" ahead)
+  assert_contains "$out" "state: working" "a live run whose head is merely unfetched is still live"
+  assert_not_contains "$out" "state: failed" "the older failed run must not be reachable from here"
+  assert_contains "$out" "test running" "the live run's own active step is reported"
+  assert_contains "$out" "last activity 3m11s ago" "the activity age is reported for the supervisor"
+  pass "a live run at an unfetched head is not replaced by an older failed run"
+}
+
+# A run with an actively executing step is the daemon stating it is alive NOW,
+# and one branch cannot host two concurrent runs, so that liveness attributes the
+# run whatever the head geometry says. Without it, a pipeline that is
+# demonstrably working reads as no information at all - observed 2026-08-22,
+# `unknown - no current-state source available` for a run whose step was mid-fix
+# with a live agent pid.
+# The other half of the same binding rule. A TERMINAL verdict is what licenses
+# abandoning or escalating work, so it is emitted only from a run whose code
+# identity this checkout can actually verify. An unfetched head is
+# indistinguishable from a pruned or rewritten one, so a terminal run there
+# degrades to "I do not know" rather than to a captain-facing failure - a
+# handling turn is the cheap loss, a wrong terminal claim is not.
+test_terminal_run_at_unfetched_head_is_not_attributed() {
+  reset_fakes
+  local d out
+  d=$(new_case terminal-unfetched)
+  make_pipeline_ahead_topology "$d" fm/feat-term
+  make_fakebin "$d" >/dev/null
+  fm_write_meta "$d/state/term.meta" "window=fm:fm-term" "worktree=$d/wt" "kind=ship" "harness=claude"
+  printf 'resolved: firstmate answered the review question\n' > "$d/state/term.status"
+  FM_FAKE_AXI_STATUS="$(run_failed_at_local_head fm/feat-term "$PIPE_HEAD")"
+  FM_FAKE_BUSY=0
+  arm_idle_record "$d/state" term
+  out=$(run_crew_state "$d" term)
+  assert_not_contains "$out" "source: run-step" "an unverifiable head must not carry a terminal verdict"
+  assert_not_contains "$out" "state: failed" "no failure is claimed from a run this checkout cannot verify"
+  assert_contains "$out" "state: unknown" "the honest answer is that the evidence does not settle it"
+  pass "a terminal run at an unfetched head is not attributed"
+}
+
+test_live_active_step_attributes_run_despite_head_geometry() {
+  reset_fakes
+  local d run_head out
+  d=$(new_case live-overrides-geometry)
+  make_repo_on_branch "$d/wt" fm/feat-live
+  run_head=$(git -C "$d/wt" rev-parse HEAD)
+  # Local work advanced past the run head: geometry alone refuses this run.
+  git -C "$d/wt" commit -q --allow-empty -m 'local commit made while the run was executing'
+  make_fakebin "$d" >/dev/null
+  fm_write_meta "$d/state/live.meta" "window=fm:fm-live" "worktree=$d/wt" "kind=ship" "harness=claude"
+  # A decision-closing event is not a state, so with the run discarded there is
+  # no current-state source left and the answer collapses to unknown.
+  printf 'resolved: firstmate answered the review question\n' > "$d/state/live.status"
+  FM_FAKE_AXI_STATUS="$(run_live_active_step fm/feat-live "$run_head")"
+  FM_FAKE_BUSY=0
+  arm_idle_record "$d/state" live
+  out=$(run_crew_state "$d" live)
+  assert_contains "$out" "state: working" "an executing step means the task is working"
+  assert_contains "$out" "source: run-step" "liveness attributes the run itself"
+  assert_not_contains "$out" "state: unknown" "a live pipeline must never read as no information"
+  pass "an executing step attributes the run despite unbindable head geometry"
+}
+
+# ---------------------------------------------------------------------------
+# Terminal-pass evidence: the destructive direction.
+#
+# Observed 2026-08-21: `state: done - run passed: PR merged/closed` for PR #6,
+# which was OPEN, DIRTY and carried zero checks. The run had reached
+# `outcome: passed` because every step either passed or was recorded SKIPPED -
+# ci among them - and the "PR merged/closed" reason was never read from the forge
+# at all. A firstmate trusting that reports the work as landed and tears down an
+# unmerged branch.
+
+test_ci_skipped_pass_never_reads_as_done() {
+  reset_fakes
+  local d out
+  d=$(new_case ci-skipped-pass)
+  make_repo_on_branch "$d/wt" fm/feat-skip
+  make_fakebin "$d" >/dev/null
+  fm_write_meta "$d/state/skip.meta" "window=fm:fm-skip" "worktree=$d/wt" "kind=ship" "harness=claude"
+  printf 'paused: holding for the signal that main is final\n' > "$d/state/skip.status"
+  FM_FAKE_AXI_STATUS="$(run_passed_ci_skipped fm/feat-skip)"
+  FM_FAKE_GH_PR='{"mergeStateStatus":"DIRTY","state":"OPEN","url":"https://github.com/o/r/pull/6"}'
+  out=$(run_crew_state "$d" skip)
+  assert_not_contains "$out" "state: done" "a skipped ci step is the absence of validation, not validation"
+  assert_not_contains "$out" "merged" "an open PR must never be described as merged"
+  assert_contains "$out" "ci SKIPPED" "the missing CI evidence is named"
+  assert_contains "$out" "PR still open" "the forge's own answer is reported"
+  pass "a run that passed with ci skipped never reads as done"
+}
+
+test_merged_claim_requires_forge_confirmation() {
+  reset_fakes
+  local d out
+  d=$(new_case merged-confirmed)
+  make_repo_on_branch "$d/wt" fm/feat-merged
+  make_fakebin "$d" >/dev/null
+  fm_write_meta "$d/state/merged.meta" "window=fm:fm-merged" "worktree=$d/wt" "kind=ship"
+  FM_FAKE_AXI_STATUS="$(run_passed_ci_completed fm/feat-merged)"
+  FM_FAKE_GH_PR='{"mergeStateStatus":"UNKNOWN","state":"MERGED","url":"https://github.com/o/r/pull/9"}'
+  out=$(run_crew_state "$d" merged)
+  assert_contains "$out" "state: done" "a genuine pass with ci completed is done"
+  assert_contains "$out" "PR merged" "the forge confirmed the merge, so the claim is allowed"
+  pass "a merged claim is emitted once the forge confirms it"
+}
+
+test_open_pr_is_never_reported_as_merged() {
+  reset_fakes
+  local d out
+  d=$(new_case open-not-merged)
+  make_repo_on_branch "$d/wt" fm/feat-open
+  make_fakebin "$d" >/dev/null
+  fm_write_meta "$d/state/open.meta" "window=fm:fm-open" "worktree=$d/wt" "kind=ship"
+  FM_FAKE_AXI_STATUS="$(run_passed_ci_completed fm/feat-open)"
+  FM_FAKE_GH_PR='{"mergeStateStatus":"BLOCKED","state":"OPEN","url":"https://github.com/o/r/pull/9"}'
+  out=$(run_crew_state "$d" open)
+  assert_contains "$out" "not merged" "an open PR is reported as not merged"
+  assert_not_contains "$out" "PR merged" "the run's own pass claim cannot promote an open PR"
+  assert_not_contains "$out" "PR closed" "nor invent a close"
+  pass "an open PR is never reported as merged"
+}
+
+test_unanswered_forge_never_claims_a_landing() {
+  reset_fakes
+  local d out
+  d=$(new_case forge-silent)
+  make_repo_on_branch "$d/wt" fm/feat-silent
+  make_fakebin "$d" >/dev/null
+  fm_write_meta "$d/state/silent.meta" "window=fm:fm-silent" "worktree=$d/wt" "kind=ship"
+  FM_FAKE_AXI_STATUS="$(run_passed_ci_completed fm/feat-silent)"
+  FM_FAKE_GH_MISSING=1
+  out=$(run_crew_state "$d" silent)
+  assert_contains "$out" "unverified" "an unanswered forge is reported as unverified"
+  assert_not_contains "$out" "merged" "an unanswered forge must never render as a landing"
+  assert_not_contains "$out" "PR closed" "nor as a close"
+  pass "an unanswered forge never claims a landing"
+}
+
 test_active_run_is_authoritative
 test_stale_needs_decision_superseded
 test_stale_blocked_superseded
@@ -1395,5 +1723,13 @@ test_historical_same_branch_rewritten_head_not_current
 test_active_run_descendant_fix_head_remains_current
 test_local_advanced_past_run_head_invalidates
 test_missing_run_head_falls_back_to_current_state
+test_superseded_failed_row_does_not_mask_live_row
+test_live_run_at_unfetched_head_is_not_replaced_by_older_failed_run
+test_live_active_step_attributes_run_despite_head_geometry
+test_terminal_run_at_unfetched_head_is_not_attributed
+test_ci_skipped_pass_never_reads_as_done
+test_merged_claim_requires_forge_confirmation
+test_open_pr_is_never_reported_as_merged
+test_unanswered_forge_never_claims_a_landing
 
 echo "all fm-crew-state tests passed"
