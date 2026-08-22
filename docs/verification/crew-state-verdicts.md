@@ -64,6 +64,18 @@ The run records in those cases are recorded output from real runs on this fork, 
 
 `make_pipeline_ahead_topology` builds the geometry those cases need for real - a task worktree plus a separate clone standing in for the pipeline's own - so the run head under test is a genuine commit the checkout cannot resolve rather than a made-up sha.
 
+## Run listings
+
+Both were verified on 2026-08-22 against `no-mistakes` v1.48.0, because run selection depends on which one can find a branch's run:
+
+| Listing | Run ids | Reach |
+| --- | --- | --- |
+| bare `no-mistakes axi` home view, `runs[N]{id,branch,status,head,pr}` | yes | capped at the 10 most recent runs repo-wide (`count: 10 of 21 total`), no limit flag |
+| `no-mistakes runs --limit N` | no | arbitrary, newest-first plain text |
+
+Selection uses the second because finding the branch's run at all outranks richer detail about it.
+The first would allow a follow-up `axi status --run <id>` and so give that path the same full step, activity and `branch_sync` evidence the `axi status` path gets, which a coarse row cannot carry; that upgrade is named in `bin/fm-crew-state.sh` as follow-up work rather than done here.
+
 ## branch_sync availability
 
 `bin/fm-crew-run-verdict-lib.sh` widens the unresolvable-head case using the `branch_sync:` block that `no-mistakes axi status` already returns, so what that block does and does not appear for is load-bearing.

@@ -329,13 +329,24 @@ nm_ci_checks_state() {
 # validating crews on the same underlying repo). A crew whose branch genuinely
 # has no run yet therefore sees another branch's answer here.
 #
-# There is no runs-listing subcommand under `axi` at all (verified against the
-# real installed CLI: the `axi` surface exposes only abort/logs/respond/run/
-# status/sync), so the run listing has to come from the top-level `no-mistakes
-# runs`. That is plain, human-oriented text - no run id, no JSON/TOON,
-# newest-first, columns "<status> <branch> <short-sha> <date> <time>
-# [<pr-url>]" separated by runs of spaces, no quoting - but branch plus coarse
-# status plus that row's own sha and PR is exactly what this predicate needs.
+# Two run listings exist, and neither one dominates the other (both verified
+# against the real installed CLI, v1.48.0). The bare `no-mistakes axi` home view
+# emits `runs[N]{id,branch,status,head,pr}` - it HAS run ids, which would allow a
+# follow-up `axi status --run <id>` for full step, activity and branch_sync
+# detail - but it is capped at the 10 most recent runs repo-wide with no limit
+# flag, so on a busy multi-crew repo a branch's own run drops off it. The
+# top-level `no-mistakes runs --limit N` reaches arbitrarily far back but is
+# plain human-oriented text with no run id: newest-first, columns
+# "<status> <branch> <short-sha> <date> <time> [<pr-url>]" separated by runs of
+# spaces, no quoting.
+#
+# This path uses `runs` because finding the branch's run at all outranks getting
+# richer detail about it, and branch plus coarse status plus that row's own sha
+# and PR is what the predicate needs. Worth doing later: try the home view first
+# and re-query any id it yields, which would give this path the same full detail
+# the `axi status` path gets - including the ci-step and branch_sync evidence a
+# coarse row cannot carry - and fall back to `runs` when the branch is off the
+# home view's 10-row window.
 #
 # Echoes the branch's NEWEST row only, as "<status>|<short-sha>|<pr-url>".
 # fm-crew-run-verdict-lib.sh owns why nothing older is ever examined.
