@@ -1,0 +1,18 @@
+### fm-lock.sh status verdicts
+no lock file                                               | lock: free
+live harness pid                                           | lock: held by live harness pid <live-harness-pid>
+dead pid, no token                                         | lock: stale (pid 999999 dead or not a harness)
+unreadable lock                                            | lock: unreadable
+dead pid, this session's token                             | lock: held by this session's token
+dead pid, another session's token                          | lock: held by another session's token
+dead pid, token gone stale                                 | lock: stale (token last refreshed over 5s ago)
+
+### fm-lock.sh acquisition outcomes
+Windows + token: first acquire                             | lock acquired: session token (exit 0)
+  same session again (idempotent)                          | lock acquired: session token (exit 0)
+  recorded pid is plain numeric                            | <numeric-pid>
+  status now reads                                         | lock: held by this session's token
+concurrent peer session refused                            | error: another firstmate session holds the lock for this home; operate read-only until it exits, or remove <home>/state/.lock.session if that session is gone (exit 1)
+  peer did not overwrite token                             | aaaaaaaa-0000-1111-2222-333333333333
+Windows, no token at all                                   | error: no firstmate session token in this environment, so this session cannot prove it owns this home - on Windows ownership is a per-session token, never process ancestry, because a native harness never appears in MSYS's /proc. Only Claude Code exports one today (CLAUDE_CODE_SESSION_ID); under any other harness a Windows firstmate stays read-only - run firstmate from Claude Code, or continue read-only (docs/windows.md 'How the session lock is owned') (exit 1)
+Linux + token: token path inert                            | error: cannot locate harness process in ancestry (exit 1)

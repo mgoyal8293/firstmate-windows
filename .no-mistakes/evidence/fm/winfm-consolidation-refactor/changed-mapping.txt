@@ -1,0 +1,9 @@
+bin/fm-test-run.sh --changed refuses on this branch (a new bin/ file no test names)
+
+$ bin/fm-test-run.sh --list --changed --base d023c451   # at the target commit
+fm-test-run: no changed-test mapping for source path: bin/fm-symlink-preflight-lib.sh
+(exit 1 - no tests selected at all; bin/fm-upstream-sync.sh drives this mode)
+
+after adding colocated coverage for the two preflight detectors:
+$ bin/fm-test-run.sh --list --changed --base d023c451 | wc -l
+153

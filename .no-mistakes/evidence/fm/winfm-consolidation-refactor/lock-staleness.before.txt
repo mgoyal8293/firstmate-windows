@@ -1,0 +1,5 @@
+### git-lock staleness with no lsof on PATH
+Windows, abandoned lock, no live holder                        | PROVABLY STALE (caller removes it)
+Windows, a live process holds the lock open                    | not provable (caller leaves it in place)
+POSIX host, abandoned lock (lsof missing)                      | not provable (caller leaves it in place)
+POSIX host, a live process holds it open                       | not provable (caller leaves it in place)

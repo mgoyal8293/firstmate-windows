@@ -1,0 +1,3 @@
+Windows pane (cygpath present)                 : export GOTMPDIR='C:\Users\me\AppData\Local\Temp\fm-EVID-1\gotmp'
+Windows pane (no cygpath)                      : export GOTMPDIR=/tmp/fm-EVID-1/gotmp
+Linux pane                                     : export GOTMPDIR=/tmp/fm-EVID-1/gotmp

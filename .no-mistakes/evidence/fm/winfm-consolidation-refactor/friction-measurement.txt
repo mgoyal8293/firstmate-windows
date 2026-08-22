@@ -1,0 +1,45 @@
+Friction measurement, by the audit's own method
+  git diff --numstat <merge-base d023c451>..<rev>, added lines only, in paths that EXIST at the merge-base.
+  (A file this port created never conflicts on an upstream intake, so it is not friction.)
+
+method check - the audit report's own snapshot commit 1baa477 (report says 52 files / 1138 lines / 81 deleted):
+  1baa477	52 files	1138 added (friction)	81 deleted
+
+this change:
+  before       f129f8de	96 files	5516 added (friction)	671 deleted
+  after        4dc0b134	96 files	5123 added (friction)	670 deleted
+
+  modified upstream files: 96 -> 96  (UNCHANGED, which is the intended outcome)
+  friction lines:        5516 -> 5123  (-393)
+
+per commit in the series:
+  f129f8de   f129f8de	96 files	5516 added (friction)	671 deleted
+  41fb914    41fb914	96 files	5483 added (friction)	671 deleted
+  e49856e    e49856e	96 files	5405 added (friction)	671 deleted
+  ebe9e7b    ebe9e7b	96 files	5361 added (friction)	671 deleted
+  224f044    224f044	96 files	5320 added (friction)	670 deleted
+  c9ad2d0    c9ad2d0	96 files	5151 added (friction)	671 deleted
+  172ea9a    172ea9a	96 files	5118 added (friction)	671 deleted
+  1bd8c80    1bd8c80	96 files	5118 added (friction)	671 deleted
+  b505ace    b505ace	96 files	5120 added (friction)	671 deleted
+  4dc0b134   4dc0b134	96 files	5123 added (friction)	670 deleted
+
+  The brief's reported -396 reproduces exactly at b505ace, the last commit of the
+  original delivery; the five later review commits add 3 net friction lines back.
+
+the seven files that owned the six mechanisms:
+  bin/fm-session-lock-lib.sh       204 -> 30   
+  bin/fm-lock.sh                    92 -> 62   
+  bin/fm-pr-lib.sh                  91 -> 11   
+  bin/fm-lock-lib.sh                48 -> 11   
+  bin/fm-wake-lib.sh                66 -> 35   
+  bin/fm-spawn.sh                   74 -> 56   
+  bin/fm-bootstrap.sh              126 -> 82   
+  TOTAL                            701 -> 287   (-414 lines, 59%)
+
+the five new files, which are friction-free by construction:
+  bin/fm-lock-proc-lib.sh              absent at the merge-base: 0 friction
+  bin/fm-file-mode-lib.sh              absent at the merge-base: 0 friction
+  bin/fm-path-lib.sh                   absent at the merge-base: 0 friction
+  bin/fm-symlink-preflight-lib.sh      absent at the merge-base: 0 friction
+  bin/fm-session-token-lib.sh          absent at the merge-base: 0 friction

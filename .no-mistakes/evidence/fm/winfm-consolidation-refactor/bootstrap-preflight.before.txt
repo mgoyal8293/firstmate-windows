@@ -1,0 +1,8 @@
+healthy home + real skills symlink:
+  (no PLATFORM line - silent = all good)
+
+state/ cannot create a symlink:
+  PLATFORM: cannot create a symlink in <tmp>/nolinks/state, so no fleet lock can ever be acquired and every lock wait would spin - the filesystem holding <tmp>/nolinks/state cannot create symlinks; move this home to one that can
+
+.claude/skills checked out as a plain file:
+  PLATFORM: <tmp>/plainfile-root/.claude/skills was checked out as a plain file, not a symlink, so this home loads no project skills - re-clone or re-check-out with symlinks enabled: git -C <tmp>/plainfile-root config core.symlinks true, then git -C <tmp>/plainfile-root checkout -- .claude/skills

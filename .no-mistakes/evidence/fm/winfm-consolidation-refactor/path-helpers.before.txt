@@ -1,0 +1,6 @@
+### fm_lock_same_path
+MSYS mount alias: /tmp/fm-x vs /c/Users/me/.../Temp/fm-x   : SAME
+same spelling twice                                        : SAME
+two genuinely different paths                              : DIFFERENT
+no cygpath: the strict compare stays the only verdict      : DIFFERENT
+empty argument is never a match                            : DIFFERENT

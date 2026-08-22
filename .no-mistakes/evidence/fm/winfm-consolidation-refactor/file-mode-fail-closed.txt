@@ -1,0 +1,9 @@
+/home/johns/.no-mistakes/worktrees/72b1fa50e799/01M0NN4SA5JXBQ8S9HFZP98565/bin/fm-file-mode-lib.sh: line 98: fm_pr_file_mode: command not found
+sourced ALONE, guard present (shipped):        ENFORCED - a 0644 file is refused as 0600 (assertion holds)
+/tmp/tmp.NvAob8SPWF/bin/fm-file-mode-lib.sh: line 97: fm_pr_file_mode: command not found
+/tmp/tmp.NvAob8SPWF/bin/fm-file-mode-lib.sh: line 81: fm_pr_file_mode: command not found
+sourced ALONE, that ONE line removed (control): WAIVED  - a 0644 file passes as 0600 (mode assertion dropped)
+
+production path - bin/fm-pr-lib.sh, the only sourcer, defines fm_pr_file_mode:
+  0644 asked as 0600 -> ENFORCED (refused)
+  0600 asked as 0600 -> accepted

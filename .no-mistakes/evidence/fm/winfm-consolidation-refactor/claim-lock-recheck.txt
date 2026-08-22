@@ -1,0 +1,24 @@
+Claim-lock re-check on the session-token acquisition path
+Peer A publishes its token DURING session B's claim-lock wait; B must refuse.
+
+=== BEFORE the move (base f129f8d) ===
+session B exit: 1
+session B says: error: another firstmate session holds the lock for this home; operate read-only until it exits, or remove /tmp/fm-recheck-Q1e7CD/state/.lock.session if that session is gone
+state/.lock         = 999999   (peer A wrote 999999)
+state/.lock.session = aaaaaaaa-0000-1111-2222-333333333333
+VERDICT: REFUSED - peer A still owns the home, no co-ownership
+
+=== AFTER the move (target 4dc0b13) ===
+session B exit: 1
+session B says: error: another firstmate session holds the lock for this home; operate read-only until it exits, or remove /tmp/fm-recheck-TnY5pV/state/.lock.session if that session is gone
+state/.lock         = 999999   (peer A wrote 999999)
+state/.lock.session = aaaaaaaa-0000-1111-2222-333333333333
+VERDICT: REFUSED - peer A still owns the home, no co-ownership
+
+=== NEGATIVE CONTROL: target with the re-check deleted ===
+session B exit: 0
+session B says: lock acquired: session token
+state/.lock         = 2153337   (peer A wrote 999999)
+state/.lock.session = bbbbbbbb-0000-1111-2222-333333333333
+VERDICT: ACQUIRED - session B took a home peer A owns (both sessions co-own)
+
