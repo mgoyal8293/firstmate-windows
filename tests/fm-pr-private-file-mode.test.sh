@@ -139,7 +139,41 @@ test_private_file_binding_keeps_its_other_assertions_when_mode_is_waived() {
   pass "fm_pr_private_file_valid: device pin, symlink refusal and link-count 1 all survive the waived mode assertion"
 }
 
+# The fail-closed direction of the capability probe itself, exercised through the
+# public predicate rather than by reading bin/fm-file-mode-lib.sh's source.
+#
+# CONTRACT: fm_pr_file_mode_is must never WAIVE the exact-mode assertion because
+# it could not take a reading. Both predicates read the stored mode through
+# fm_pr_file_mode, which bin/fm-pr-lib.sh owns; splitting them into their own
+# file made "sourced without that owner" reachable, and there the probe would
+# compare an empty reading against 644, conclude the filesystem does not enforce
+# modes, and waive a security assertion. Uncertainty must be ENFORCEMENT.
+#
+# The lib is sourced in a fresh bash rather than a subshell on purpose: a
+# subshell inherits fm_pr_file_mode from this file's own source line, which is
+# exactly the condition being excluded.
+test_mode_assertion_is_enforced_when_the_mode_reader_is_absent() {
+  local root f rc
+  root=$(fm_test_tmproot fm-mode) || fail "mode-guard: could not create a fixture root"
+  f="$root/artifact"
+  : > "$f"
+  chmod 0644 "$f"
+  rc=0
+  bash -c '
+    set -u
+    . "$1/bin/fm-file-mode-lib.sh"
+    command -v fm_pr_file_mode >/dev/null 2>&1 \
+      && { printf "fixture: fm_pr_file_mode must NOT be defined here\n" >&2; exit 2; }
+    fm_pr_file_mode_is "$2" 600 2>/dev/null
+  ' _ "$ROOT" "$f" || rc=$?
+  [ "$rc" = 2 ] && fail "mode-guard: the fixture failed to isolate bin/fm-file-mode-lib.sh from its owner"
+  [ "$rc" = 0 ] \
+    && fail "mode-guard: SECURITY - a 0644 file must NOT satisfy \"must be 0600\" when the mode reader is absent; the assertion was WAIVED on a reading that was never taken"
+  pass "fm_pr_file_mode_is: enforces rather than waives when it cannot read a mode at all"
+}
+
 test_mode_assertion_stays_strict_where_chmod_works
+test_mode_assertion_is_enforced_when_the_mode_reader_is_absent
 test_mode_assertion_is_waived_only_where_chmod_cannot_round_trip
 test_mode_probe_is_not_fooled_by_a_no_op_chmod
 test_private_file_binding_keeps_its_other_assertions_when_mode_is_waived

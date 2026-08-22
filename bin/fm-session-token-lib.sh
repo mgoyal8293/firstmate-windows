@@ -21,8 +21,8 @@
 # ---------------------------------------------------------------------------
 # Session tokens: ownership WITHOUT asking "who is my parent"
 #
-# The ancestry walk above is the original and still the primary path, and every
-# platform that can answer it keeps using it unchanged. It cannot be answered at
+# The ancestry walk in bin/fm-session-lock-lib.sh is the original and still the
+# primary path, and every platform that can answer it keeps using it unchanged. It cannot be answered at
 # all on the Windows runtimes: MSYS's /proc contains only MSYS processes, so a
 # native harness (Claude Code ships claude.exe) never appears in it and the tool
 # or hook subprocess it spawns reports ppid 1. The walk ends on hop one, so the
@@ -192,6 +192,14 @@ fm_session_token_held_by_other() {  # <state-dir>
 # consequently unreachable off Windows: same code, byte-identical behaviour.
 fm_session_ancestry_unavailable() {
   fm_platform_is_windows || return 1
+  # A missing owner is uncertainty, and uncertainty refuses.
+  # The walk lives in bin/fm-session-lock-lib.sh, which sources this file, so a
+  # consumer that sources this file alone would otherwise get 127 from the call
+  # below, skip the `&& return 1`, and report "ancestry structurally cannot
+  # answer" on evidence that was never gathered - opening the token acquisition
+  # path and the fleet lock with it. Refusing here leaves the home read-only and
+  # falls back on upstream's own ancestry refusal.
+  command -v fm_harness_ancestry_pids >/dev/null 2>&1 || return 1
   fm_harness_ancestry_pids >/dev/null 2>&1 && return 1
   return 0
 }

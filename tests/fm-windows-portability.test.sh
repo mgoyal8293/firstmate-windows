@@ -657,6 +657,61 @@ test_gitattributes_pins_an_lf_working_tree_for_every_clone() {
   pass "root .gitattributes: a core.autocrlf=true clone still lands LF, and the one binary blob survives"
 }
 
+# --- 7. the GOTMPDIR export line -------------------------------------------
+
+# MSYS converts paths in argv but never in the environment, so the exported
+# GOTMPDIR must be the native Windows form or a native Go exe puts its build
+# temp somewhere fm-teardown.sh will never clean. The Windows form carries
+# backslashes, so it is QUOTED as well as translated - and the quoter,
+# shell_quote, belongs to the caller rather than to bin/fm-path-lib.sh.
+#
+# bin/fm-path-lib.sh is now reached through bin/fm-wake-lib.sh, which dozens of
+# scripts source and almost none of them define shell_quote in. An unprobed call
+# would expand to nothing there and emit a valid-looking `export GOTMPDIR=` line
+# pointing at the process's own idea of nowhere, so the absent quoter must
+# degrade to the untranslated POSIX literal - what every non-Windows host emits
+# today - rather than to an empty value.
+test_gotmpdir_export_line_degrades_to_the_posix_literal_without_a_quoter() {
+  local dir out
+  dir=$(fm_test_tmproot fm-gotmpdir-line) || fail "could not create a fixture dir"
+  mkdir -p "$dir/stub"
+  cat > "$dir/stub/cygpath" <<'STUB'
+#!/usr/bin/env bash
+# Stand-in for the MSYS translator: answer the native Windows spelling.
+printf 'C:\\fmtmp\\gotmp\n'
+STUB
+  chmod +x "$dir/stub/cygpath"
+
+  # The production path (bin/fm-spawn.sh defines shell_quote before it calls):
+  # translated AND quoted, byte-identical to what it has always emitted.
+  out=$(
+    FM_PROC_UNAME_S=MINGW64_NT-10.0-26200
+    # shellcheck disable=SC2329 # Called indirectly by fm_path_gotmpdir_export_line.
+    shell_quote() { printf "'"; printf '%s' "$1" | sed "s/'/'\\\\''/g"; printf "'"; }
+    with_path "$dir/stub:$PATH" fm_path_gotmpdir_export_line /tmp/fm-1/gotmp
+  )
+  [ "$out" = "export GOTMPDIR='C:\\fmtmp\\gotmp'" ] \
+    || fail "gotmpdir: with a quoter the Windows form must be translated and quoted, got [$out]"
+
+  # The same Windows host reached through a sourcer that has no shell_quote.
+  out=$(
+    FM_PROC_UNAME_S=MINGW64_NT-10.0-26200
+    with_path "$dir/stub:$PATH" fm_path_gotmpdir_export_line /tmp/fm-1/gotmp
+  )
+  [ "$out" = "export GOTMPDIR=/tmp/fm-1/gotmp" ] \
+    || fail "gotmpdir: without a quoter the line must be the untranslated POSIX literal, never an empty export; got [$out]"
+
+  # Off Windows nothing is translated at all, quoter or not.
+  out=$(
+    # shellcheck disable=SC2034 # Read by fm_platform_is_windows in bin/fm-proc-lib.sh.
+    FM_PROC_UNAME_S=Linux
+    with_path "$dir/stub:$PATH" fm_path_gotmpdir_export_line /tmp/fm-1/gotmp
+  )
+  [ "$out" = "export GOTMPDIR=/tmp/fm-1/gotmp" ] \
+    || fail "gotmpdir: off Windows the literal must stay exactly as it has always been, got [$out]"
+  pass "fm_path_gotmpdir_export_line: translates and quotes on Windows, and falls back to the POSIX literal rather than an empty export when the caller has no quoter"
+}
+
 test_proc_field_reads_msys_layout
 test_proc_field_falls_back_to_ps_where_proc_is_absent
 test_proc_field_rejects_bad_input
@@ -671,3 +726,4 @@ test_lock_same_path_resolves_a_mount_alias_only_through_cygpath
 test_lock_points_to_owner_still_accepts_an_exact_readlink_answer
 test_pid_identity_is_served_by_this_file_from_proc
 test_gitattributes_pins_an_lf_working_tree_for_every_clone
+test_gotmpdir_export_line_degrades_to_the_posix_literal_without_a_quoter
