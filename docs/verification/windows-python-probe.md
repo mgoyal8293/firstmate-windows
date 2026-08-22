@@ -73,7 +73,7 @@ Making that suite green, and making it fast enough to run, remain separate work.
 
 ## Falsifiability
 
-`tests/fm-python-lib.test.sh` fences twelve distinct protections.
+`tests/fm-python-lib.test.sh` fences thirteen distinct protections.
 Each was removed in turn and the run re-executed; each removal produced exactly one failure, and restoring it returned the file to green.
 The whole fixture is a shim that prints the Store advert and exits 49, so every case reproduces on Linux.
 No unexercised entry point is left on the library to fence: `fm_python3_run` was dropped, because every routed call site needs to tell "no interpreter" apart from the payload's own exit status and therefore wants the `fm_python3` plus `"${FM_PYTHON3_CMD[@]}"` pair directly.
@@ -89,7 +89,8 @@ No unexercised entry point is left on the library to fence: `fm_python3_run` was
 | `bin/fm-kimi-turnend-hook.sh` routed through the probe (back to `command -v python3`) | `not ok - the Kimi hook still dies with the Store stub's own exit 49` |
 | the library's re-source guard (`FM_PYTHON_LIB_SOURCED` removed, so a second source reinitializes the cache) | `not ok - re-sourcing the library lost the resolved interpreter: '_: line 5: -c: command not found'` |
 | `bin/fm-ensure-agents-md.sh`'s fall-through to `realpath` when the interpreter ran and answered nothing (`*) return 2 ;;` restored) | `not ok - a correct pointer was refused although realpath could answer it (rc=1)` |
-| `bin/fm-ensure-agents-md.sh`'s two distinct undeterminable causes (always emitting `fm_python3_refuse`) | `not ok - the refusal does not name the interpreter that ran and answered nothing` |
+| `bin/fm-ensure-agents-md.sh`'s distinct undeterminable causes (always emitting `fm_python3_refuse`) | `not ok - the refusal does not name the status the interpreter that ran died with` |
+| `bin/fm-ensure-agents-md.sh`'s exit-0-without-an-answer cause, kept apart from a failing status (both collapsed onto the status wording) | `not ok - the refusal invents a failing exit status for an interpreter that exited 0` |
 | the herdr workspace mover routed through the resolved interpreter (back to its own `#!/usr/bin/env python3` shebang) | `not ok - the workspace mover ran under the Store stub its own capability gate rejects` |
 | `bin/fm-ensure-agents-md.sh`'s stdout sentinel for the pointer comparison (payload reverted to answering through its exit status) | `not ok - a payload that crashed with status 1 was read as a wrong pointer (rc=1)` |
 
@@ -98,7 +99,7 @@ No unexercised entry point is left on the library to fence: `fm_python3_run` was
 ```console
 # Linux
 $ bash tests/fm-python-lib.test.sh | wc -l
-16
+17
 
 # Windows box, through the runner, twice
 $ bash bin/fm-test-run.sh tests/fm-python-lib.test.sh
@@ -106,7 +107,7 @@ FM_TEST_END ... tests/fm-python-lib.test.sh exit=0 duration_ms=11512 gate_skip=f
 FM_TEST_END ... tests/fm-python-lib.test.sh exit=0 duration_ms=11129 gate_skip=false
 ```
 
-Eleven of the sixteen cases run on Windows.
-The five CLAUDE.md pointer cases report a `note:` and stage nothing there, because a stock Windows checkout cannot create a real symlink and `ln -s` copies the target instead - which is also why the defect they fence is latent on Windows until `core.symlinks` is enabled.
+Eleven of the seventeen cases run on Windows.
+The six CLAUDE.md pointer cases report a `note:` and stage nothing there, because a stock Windows checkout cannot create a real symlink and `ln -s` copies the target instead - which is also why the defect they fence is latent on Windows until `core.symlinks` is enabled.
 That measured 11512 ms is the Windows lane weight hint recorded for this script in `bin/fm-test-run.sh`.
-The two Windows timings above were measured when this file held ten cases; the six cases added in review are green on Linux and have not been re-timed on the Windows box, so the recorded lane weight is a floor rather than a fresh measurement.
+The two Windows timings above were measured when this file held ten cases; the seven cases added in review are green on Linux and have not been re-timed on the Windows box, so the recorded lane weight is a floor rather than a fresh measurement.

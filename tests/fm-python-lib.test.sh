@@ -122,6 +122,25 @@ SH
   chmod +x "$dir/$name"
 }
 
+# chatty_payload_python <dir> <name>: an interpreter that clears the version
+# probe and then exits 0 on a real payload while printing something that is not
+# an answer - a wrapper's own banner, a truncated write, a blank line. Nothing
+# failed, so no status can describe it; only the absent sentinel can.
+chatty_payload_python() {
+  local dir=$1 name=$2
+  mkdir -p "$dir"
+  cat >"$dir/$name" <<'SH'
+#!/usr/bin/env bash
+case "$*" in
+  *"version_info[0] >= 3"*) exit 0 ;;
+esac
+cat >/dev/null
+echo "pyenv: activating virtualenv"
+exit 0
+SH
+  chmod +x "$dir/$name"
+}
+
 # probe_in <bindir>: run one fresh fm_python3 probe with <bindir> prepended,
 # echoing the resolved command or REFUSED.
 probe_in() {
@@ -410,11 +429,44 @@ SH
   esac
   assert_contains "$out" 'cannot determine' \
     "the refusal does not say the question could not be answered: $out"
-  assert_contains "$out" 'unexpected status' \
-    "the refusal does not name the interpreter that ran and answered nothing: $out"
+  assert_contains "$out" 'exited with status 70' \
+    "the refusal does not name the status the interpreter that ran died with: $out"
   assert_not_contains "$out" 'no working Python 3 found' \
     "the refusal blames a missing interpreter although one was found and ran: $out"
   pass "the refusal names the interpreter that ran instead of claiming none was found"
+}
+
+test_ensure_agents_md_does_not_invent_a_status_for_a_silent_payload() {
+  local bin dir out rc=0
+  bin="$TMP_ROOT/ensure-chatty-payload"
+  dir="$TMP_ROOT/ensure-chatty-payload-wt"
+  store_stub "$bin" python3
+  chatty_payload_python "$bin" python
+  store_stub "$bin" py
+  cat >"$bin/realpath" <<'SH'
+#!/usr/bin/env bash
+echo "realpath: unavailable in this fixture" >&2
+exit 127
+SH
+  chmod +x "$bin/realpath"
+  fixture_pointer_worktree "$dir" || {
+    no_symlinks_note "silent-payload refusal case"
+    return 0
+  }
+  out=$(PATH="$bin:$PATH" "$ENSURE" "$dir" 2>&1) || rc=$?
+  [ "$rc" -ne 0 ] || fail "an unanswerable pointer question was reported as success: $out"
+  case "$out" in
+    *conflict*) fail "an unanswerable pointer question was reported as a conflict: $out" ;;
+  esac
+  assert_contains "$out" 'exited 0' \
+    "the refusal does not say the interpreter exited cleanly: $out"
+  assert_contains "$out" 'EQ or NE' \
+    "the refusal does not say what answer was missing: $out"
+  assert_not_contains "$out" 'exited with status' \
+    "the refusal invents a failing exit status for an interpreter that exited 0: $out"
+  assert_not_contains "$out" 'no working Python 3 found' \
+    "the refusal blames a missing interpreter although one was found and ran: $out"
+  pass "a payload that exits 0 without an answer is not reported as a failing exit status"
 }
 
 test_ensure_agents_md_does_not_read_a_crashed_payload_as_a_wrong_pointer() {
@@ -499,6 +551,7 @@ test_ensure_agents_md_does_not_read_a_dead_interpreter_as_a_wrong_pointer
 test_ensure_agents_md_reports_undeterminable_rather_than_a_false_conflict
 test_ensure_agents_md_asks_realpath_when_the_interpreter_answers_nothing
 test_ensure_agents_md_names_the_interpreter_when_nothing_can_answer
+test_ensure_agents_md_does_not_invent_a_status_for_a_silent_payload
 test_ensure_agents_md_does_not_read_a_crashed_payload_as_a_wrong_pointer
 test_herdr_workspace_mover_runs_through_the_resolved_interpreter
 test_kimi_hook_refuses_cleanly_on_the_stub

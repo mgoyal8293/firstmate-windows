@@ -114,7 +114,8 @@ PORTABLE_SERIAL_DEFAULT_WEIGHT_MS=20000
 WINDOWS_SHARDS=4
 
 # Balance hint for a Windows-lane script with no measured Windows duration.
-# The measured per-script mean of the lane below (3,713,000 ms over 39 scripts),
+# The measured per-script mean of the 39-script campaign that first admitted
+# this lane's members (3,713,000 ms over 39 scripts, docs/fm-test-windows-lane.md),
 # so a newly listed test neither starves nor overloads the shard it lands in.
 WINDOWS_DEFAULT_WEIGHT_MS=95205
 
