@@ -156,6 +156,9 @@ test_symlink_probe_proves_rather_than_assumes() {
 # scary line, and a false negative is a home whose locks can never be acquired
 # or a harness that silently loads zero project skills.
 run_symlink_preflight() {  # <home> <root>
+  # shellcheck disable=SC2034 # STATE, FM_HOME and FM_ROOT are read as globals by
+  # detect_symlink_capability and detect_repo_symlink_checkout in
+  # bin/fm-symlink-preflight-lib.sh, which take no arguments.
   (
     STATE="$1/state"
     FM_HOME=$1
