@@ -2,11 +2,18 @@
 # Shared no-mistakes axi run attribution primitives.
 #
 # ONE owner for the branch+code-identity matching rule that decides whether a
-# no-mistakes run belongs to a given worktree, used by fm-crew-state.sh
-# (read-only current-state reporting) and fm-teardown.sh (pre-teardown run
-# abort, see its "Fix 1" header comment). Getting this wrong in either
-# direction is unsafe: a false negative hides a genuinely parked run, and a
-# false positive lets teardown act on a run it does not own.
+# no-mistakes run belongs to a given worktree, used by fm-teardown.sh
+# (pre-teardown run abort, see its "Fix 1" header comment). Getting this wrong
+# in either direction is unsafe: a false negative hides a genuinely parked run,
+# and a false positive lets teardown act on a run it does not own.
+#
+# fm-crew-state.sh no longer binds with fm_nm_head_matches_worktree: read-only
+# current-state reporting needs to tell an unfetched pipeline head apart from a
+# rewritten tip, which a yes/no match cannot express, so that reader binds with
+# the relation model in bin/fm-crew-run-verdict-lib.sh instead. It still uses the
+# bounded-call and text primitives below. Teaching this rule the same relation
+# model, so both readers agree on what an unfetched pipeline head means, is the
+# named follow-up.
 #
 # Bounded call to `no-mistakes "$@"` in dir $1, timeout $2 seconds. The bounded
 # form preserves stdout, stderr, and exit status; the checked form discards

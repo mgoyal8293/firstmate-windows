@@ -65,8 +65,15 @@
 #   * outcome failed or cancelled                 -> failed
 #   * outcome passed/checks-passed, ci COMPLETED  -> done, and the merged/closed
 #     claim is emitted ONLY when the forge confirms it (fm_crew_forge_pr_state)
-#   * outcome passed/checks-passed, ci SKIPPED    -> NOT done. Nothing validated
-#     this work, so it reports parked: it needs a ruling, not a landing.
+#   * outcome passed/checks-passed, ci NOT COMPLETED -> NOT done. CI evidence is
+#     a WHITELIST: only this run's own `ci` step recorded as `completed` proves
+#     that CI ran for this work. Skipped, absent, or any other status word is the
+#     ABSENCE of that evidence, and it reports parked: it needs a ruling, not a
+#     landing. See fm_crew_terminal_pass_verdict.
+#   * a coarse runs-list `completed` row carries no steps table at all, so it can
+#     never satisfy that whitelist: it reads done only when the forge confirms
+#     merged or closed, and parked otherwise. See
+#     fm_crew_coarse_completed_verdict.
 #
 # PROVING PIPELINE OWNERSHIP. An unresolvable head is refused a terminal verdict
 # on geometry alone because geometry cannot tell "the pipeline pushed commits we
@@ -106,6 +113,34 @@
 set -u
 
 # --- run record parsing -----------------------------------------------------
+
+# The run record with its `branch_sync:` block removed, for scalar key reads.
+#
+# `axi status` emits the run's own fields under `run:`, its terminal `outcome:`
+# and `error:` as top-level siblings, and `branch_sync:` as a separate top-level
+# block whose `local:` and `pipeline:` sub-blocks REPEAT key names the run object
+# uses - `branch`, `head`, `status`, `run`. A flat key match over the whole
+# document therefore cross-reads one section's value as the other's whenever the
+# run object omits the key: a record with no `head:` of its own resolves
+# `branch_sync.local.head`, which is this worktree's HEAD by construction, so the
+# head binding would report `equal` and admit a terminal verdict for a run whose
+# code identity was never checked. Every scalar read of the run record goes
+# through this first; fm_crew_branch_sync_field is the only reader allowed inside
+# the block, and it is indent-scoped in the opposite direction.
+fm_crew_run_scalars() {  # <run-output>
+  printf '%s\n' "$1" | awk '
+    /^[^[:space:]]/ { in_bs = ($0 ~ /^branch_sync:/) }
+    !in_bs
+  '
+}
+
+# Scalar value of a top-level-or-run-object TOON key, read with the branch_sync
+# block excluded. Empty when the key is absent from the run record.
+fm_crew_run_field() {  # <run-output> <key>
+  fm_crew_run_scalars "$1" \
+    | sed -n "s/^[[:space:]]*$2:[[:space:]]*\(.*\)/\1/p" \
+    | head -1
+}
 
 # Status word of one step in a run's `steps[N]{step,status,...}` table, e.g.
 # `ci`. Empty when the run record has no row for that step. The table is plain
@@ -231,7 +266,7 @@ fm_crew_pipeline_ownership_proven() {  # <run-output> <worktree> <run-head>
   local run_out=$1 wt=$2 run_head=$3 run_id bs_run bs_current bs_pushed bs_local local_head
   bs_run=$(fm_crew_branch_sync_field "$run_out" pipeline run)
   [ -n "$bs_run" ] || return 1
-  run_id=$(printf '%s\n' "$run_out" | sed -n 's/^[[:space:]]*id:[[:space:]]*\(.*\)/\1/p' | head -1 | tr -d '"')
+  run_id=$(fm_crew_run_field "$run_out" id | tr -d '"')
   [ -n "$run_id" ] && [ "$bs_run" = "$run_id" ] || return 1
   bs_current=$(fm_crew_branch_sync_field "$run_out" pipeline current_head)
   bs_pushed=$(fm_crew_branch_sync_field "$run_out" pipeline pushed_head)
@@ -279,9 +314,9 @@ fm_crew_binding_admits() {  # <relation> <terminality>
 # live. A run's terminality decides how much its code binding must prove.
 fm_crew_terminality() {  # <run-output>
   local outcome status
-  outcome=$(printf '%s\n' "$1" | sed -n 's/^[[:space:]]*outcome:[[:space:]]*\(.*\)/\1/p' | head -1 | tr -d '"' )
+  outcome=$(fm_crew_run_field "$1" outcome | tr -d '"')
   if [ -n "$outcome" ]; then printf 'terminal'; return; fi
-  status=$(printf '%s\n' "$1" | sed -n 's/^[[:space:]]*status:[[:space:]]*\(.*\)/\1/p' | head -1 | tr -d '"')
+  status=$(fm_crew_run_field "$1" status | tr -d '"')
   case "$status" in
     completed|failed|cancelled) printf 'terminal' ;;
     *) printf 'live' ;;
@@ -389,12 +424,11 @@ fm_crew_done_detail() {  # <forge-answer> <ci-evidence: verified|unverified>
   esac
 }
 
-# Verdict detail for a run that reached outcome passed/checks-passed with its ci
-# step SKIPPED. Never says done and never says merged: nothing validated this
-# work, and the run's own claim of passing is not evidence that it did.
-fm_crew_ci_skipped_detail() {  # <forge-answer>
+# The forge's own answer as a detail suffix, e.g. ", PR still open (DIRTY)".
+# Reports what the forge said and nothing more, so a detail line that carries it
+# never turns an unverified or open PR into a landing.
+fm_crew_forge_suffix() {  # <forge-answer>
   local answer=$1 word=${1%% *}
-  printf 'run completed with ci SKIPPED: no CI evidence'
   case "$word" in
     merged) printf ', PR merged' ;;
     closed) printf ', PR closed' ;;
@@ -402,4 +436,61 @@ fm_crew_ci_skipped_detail() {  # <forge-answer>
     *)      printf ', PR state unverified' ;;
   esac
   case "$answer" in *' '*) printf ' (%s)' "${answer#* }" ;; esac
+}
+
+# How this run's `ci` step failed to supply CI evidence, in the words the record
+# actually justifies. An absent row is not a skipped row and must not be reported
+# as one, and an unrecognized status word is named rather than glossed.
+fm_crew_ci_evidence_gap() {  # <ci-step-status>
+  case "$1" in
+    '')      printf 'no ci step recorded' ;;
+    skipped) printf 'ci SKIPPED' ;;
+    *)       printf 'ci %s' "$1" ;;
+  esac
+}
+
+# Verdict detail for a run that reached a terminal pass with NO CI evidence.
+# Never says done and never says merged on its own: nothing validated this work,
+# and the run's own claim of passing is not evidence that it did. <gap> names why
+# the evidence is missing.
+fm_crew_no_ci_evidence_detail() {  # <gap> <forge-answer>
+  printf 'run completed with %s: no CI evidence' "$1"
+  fm_crew_forge_suffix "$2"
+}
+
+# The verdict for a run that reached outcome passed/checks-passed, or status
+# completed, as "<state>|<detail>".
+#
+# CI evidence is a WHITELIST, not a blacklist: only this run's own `ci` step
+# recorded as `completed` proves that CI ran for this work. A skipped step, an
+# absent `ci` row, a record with no steps table at all, and any other status word
+# are all the ABSENCE of that evidence, and absence of evidence must never read
+# as a pass - reporting done there is the destructive direction, because it
+# invites reporting the work as landed and tearing down an unmerged branch.
+# Everything outside the whitelist therefore reports `parked`: the run needs a
+# ruling, not a landing, and parked is non-terminal so it cannot license teardown
+# or a captain-facing failure.
+fm_crew_terminal_pass_verdict() {  # <ci-step-status> <forge-answer>
+  if [ "$1" = completed ]; then
+    printf 'done|%s' "$(fm_crew_done_detail "$2" verified)"
+    return
+  fi
+  printf 'parked|%s' \
+    "$(fm_crew_no_ci_evidence_detail "$(fm_crew_ci_evidence_gap "$1")" "$2")"
+}
+
+# The verdict for a `completed` row on the coarse runs-list path, as
+# "<state>|<detail>".
+#
+# That row is a status word, a sha and a PR url - there is no steps table on it
+# at all, so it can never satisfy the CI-evidence whitelist above and its
+# `completed` says only that the pipeline stopped. The one terminal fact still
+# available here is the forge's own answer, so a merged or closed PR earns done
+# and everything else - open, or an unanswered forge - reports parked.
+fm_crew_coarse_completed_verdict() {  # <forge-answer>
+  case "${1%% *}" in
+    merged|closed) printf 'done|%s' "$(fm_crew_done_detail "$1" unverified)" ;;
+    *) printf 'parked|%s' \
+         "$(fm_crew_no_ci_evidence_detail 'no step detail on the runs-list path' "$1")" ;;
+  esac
 }

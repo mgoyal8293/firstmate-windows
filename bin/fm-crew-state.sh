@@ -29,7 +29,9 @@
 #      unsafe directions. The run-step is AUTHORITATIVE once admitted:
 #      running/fixing -> working, ci -> working, awaiting_approval/fix_review ->
 #      parked (with gate findings), failed/cancelled -> failed, and passed/
-#      checks-passed -> done only when the ci step actually ran. EXCEPT: while
+#      checks-passed -> done only when this run's own ci step is recorded
+#      `completed`; every other ci-step answer is the absence of CI evidence and
+#      reports parked, never done. EXCEPT: while
 #      the active step is ci, `axi status` alone cannot tell "still waiting on
 #      checks" from "checks green, waiting on merge" (see nm_ci_checks_state) -
 #      a ci-step log-tail check overrides working -> done once checks read
@@ -186,9 +188,12 @@ crew_busy_verdict() {  # <target>
 }
 
 # --- no-mistakes run lookup (authoritative when a run matches this branch) --
-# trim, strip_quotes, the bounded nm_run call, nm_field's TOON parse, and the
-# branch+head attribution rule below are thin wrappers over the ONE owner in
-# bin/fm-nm-run-lib.sh, shared with fm-teardown.sh's pre-teardown run abort.
+# trim, strip_quotes and the bounded nm_run call are thin wrappers over
+# bin/fm-nm-run-lib.sh, whose bounded-call and text primitives are shared with
+# fm-teardown.sh's pre-teardown run abort. The code-identity attribution rule is
+# NOT read from there: bin/fm-crew-run-verdict-lib.sh owns the relation model
+# this script binds with, and nm_field's scalar read is scoped by that same owner
+# so a `branch_sync:` block can never answer a run-object key.
 
 trim() { fm_nm_trim "$@"; }
 strip_quotes() { fm_nm_strip_quotes "$@"; }
@@ -196,10 +201,12 @@ nm_run() {  # <args...>
   fm_nm_run "$WT" "$NM_TIMEOUT" "$@"
 }
 
-# Scalar value of a TOON key in the captured run output ($RUN_OUT).
+# Scalar value of a TOON key in the captured run output ($RUN_OUT), read with
+# the `branch_sync:` block excluded - it repeats `branch`, `head` and `status`,
+# and fm-crew-run-verdict-lib.sh owns why a cross-read there is unsafe.
 RUN_OUT=""
 nm_field() {  # <key>
-  fm_nm_field "$RUN_OUT" "$1"
+  fm_crew_run_field "$RUN_OUT" "$1"
 }
 # Finding count from a findings[N]{...} table header; empty when none.
 nm_findings_count() {
@@ -451,7 +458,15 @@ if [ "$HAVE_RUN" = 1 ]; then
     # coarse-vs-full distinction, so a real gate is never silently missed.
     case "$COARSE_STATUS" in
       running)   RUN_STATE=working; RUN_DETAIL="validating (background run)" ;;
-      completed) RUN_STATE="done";  RUN_DETAIL=$(fm_crew_done_detail "$(crew_forge_answer)" unverified) ;;
+      completed)
+        # A coarse row carries no steps table, so this path can never see
+        # whether the ci step ran - the same absence of evidence a skipped ci
+        # step is. The forge's own answer is the only terminal fact available
+        # here; fm-crew-run-verdict-lib.sh owns the ruling.
+        coarse_verdict=$(fm_crew_coarse_completed_verdict "$(crew_forge_answer)")
+        RUN_STATE=${coarse_verdict%%|*}
+        RUN_DETAIL=${coarse_verdict#*|}
+        ;;
       failed)    RUN_STATE=failed;  RUN_DETAIL="run failed" ;;
       cancelled) RUN_STATE=failed;  RUN_DETAIL="run cancelled" ;;
       *)         RUN_STATE=unknown; RUN_DETAIL="runs list status: $COARSE_STATUS" ;;
@@ -469,18 +484,18 @@ if [ "$HAVE_RUN" = 1 ]; then
     if [ -n "$outcome" ]; then
       case "$outcome" in
         passed|checks-passed)
-          if [ "$ci_step_recorded" = skipped ]; then
-            # `outcome: passed` means the PIPELINE completed, not that CI
-            # passed: a skipped ci step is the ABSENCE of validation. Reporting
-            # done here is the destructive direction - it invites reporting the
-            # work as landed and tearing down an unmerged branch - so this
-            # reports a run that still needs a ruling instead.
-            RUN_STATE=parked
-            RUN_DETAIL=$(fm_crew_ci_skipped_detail "$(crew_forge_answer)")
-          elif [ "$outcome" = checks-passed ]; then
+          # `outcome: passed` means the PIPELINE completed, not that CI passed,
+          # so the pass is only ever taken at face value when this run's own ci
+          # step is recorded `completed`. Everything else - skipped, absent, any
+          # other word - is the absence of validation, and reporting done there
+          # is the destructive direction. fm_crew_terminal_pass_verdict owns
+          # that whitelist for both terminal-pass paths in this script.
+          if [ "$ci_step_recorded" = completed ] && [ "$outcome" = checks-passed ]; then
             RUN_STATE="done"; RUN_DETAIL="checks green: PR ready for review"
           else
-            RUN_STATE="done"; RUN_DETAIL=$(fm_crew_done_detail "$(crew_forge_answer)" verified)
+            pass_verdict=$(fm_crew_terminal_pass_verdict "$ci_step_recorded" "$(crew_forge_answer)")
+            RUN_STATE=${pass_verdict%%|*}
+            RUN_DETAIL=${pass_verdict#*|}
           fi
           ;;
         failed)        RUN_STATE=failed; RUN_DETAIL="run failed" ;;
@@ -507,13 +522,9 @@ if [ "$HAVE_RUN" = 1 ]; then
         ci)             RUN_STATE=working; RUN_DETAIL="ci running" ;;
         running|fixing) RUN_STATE=working; RUN_DETAIL="validating ($status)" ;;
         completed)
-          if [ "$ci_step_recorded" = skipped ]; then
-            RUN_STATE=parked
-            RUN_DETAIL=$(fm_crew_ci_skipped_detail "$(crew_forge_answer)")
-          else
-            RUN_STATE="done"
-            RUN_DETAIL=$(fm_crew_done_detail "$(crew_forge_answer)" verified)
-          fi
+          pass_verdict=$(fm_crew_terminal_pass_verdict "$ci_step_recorded" "$(crew_forge_answer)")
+          RUN_STATE=${pass_verdict%%|*}
+          RUN_DETAIL=${pass_verdict#*|}
           ;;
         failed)         RUN_STATE=failed;  RUN_DETAIL="run failed" ;;
         cancelled)      RUN_STATE=failed;  RUN_DETAIL="run cancelled" ;;
