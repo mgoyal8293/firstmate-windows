@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # tests/fm-pr-private-file-mode.test.sh - the exact-mode half of firstmate's
-# private-file trust binding (bin/fm-pr-lib.sh), and the platform-scoped waiver
-# that keeps Windows able to merge at all.
+# private-file trust binding (bin/fm-file-mode-lib.sh), and the platform-scoped
+# waiver that keeps Windows able to merge at all.
 #
 # This is a SECURITY boundary, not a portability detail. The binding stops a
 # watcher check script, a poll sidecar or a registration record being swapped
@@ -27,8 +27,8 @@ set -u
 . "$ROOT/bin/fm-pr-lib.sh"
 
 # Clear the capability memo so the next probe re-measures. The two globals are
-# owned by bin/fm-pr-lib.sh, so shellcheck cannot see their use from here.
-# shellcheck disable=SC2034 # Read and written by bin/fm-pr-lib.sh fm_pr_mode_enforced.
+# owned by bin/fm-file-mode-lib.sh, so shellcheck cannot see their use from here.
+# shellcheck disable=SC2034 # Read and written by bin/fm-file-mode-lib.sh fm_pr_mode_enforced.
 reset_mode_memo() {
   FM_PR_MODE_ENFORCED_DIR=
   FM_PR_MODE_ENFORCED=
@@ -37,7 +37,7 @@ reset_mode_memo() {
 # Pin the memo to "this directory does not enforce modes", which is exactly the
 # state the probe reaches on a Git-for-Windows noacl mount. Simulating it is what
 # lets the waiver's behaviour be asserted from a POSIX runner.
-# shellcheck disable=SC2034 # Read by bin/fm-pr-lib.sh fm_pr_mode_enforced.
+# shellcheck disable=SC2034 # Read by bin/fm-file-mode-lib.sh fm_pr_mode_enforced.
 pin_mode_not_enforced() {  # <dir>
   FM_PR_MODE_ENFORCED_DIR=$1
   FM_PR_MODE_ENFORCED=1
