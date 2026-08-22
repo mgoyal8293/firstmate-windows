@@ -56,8 +56,10 @@
 # view` to confirm a merged-or-closed claim, bounded by FM_CREW_STATE_FORGE_TIMEOUT
 # and skipped entirely when FM_CREW_STATE_NO_FORGE is truthy, which reports the
 # merge state as unverified and never as a landing. A working crew makes no forge
-# call at all. Always exits 0 on a successful read regardless of state; exit 2
-# only on a usage error (no id).
+# call at all, and a caller running this script inside a budget of its own
+# (bin/fm-inactive-reconcile.sh) narrows that bound to a share of what it has
+# left, or skips the read, through those same two knobs. Always exits 0 on a
+# successful read regardless of state; exit 2 only on a usage error (no id).
 set -u
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -104,8 +106,19 @@ case "$FM_CREW_STATE_RUNS_LIMIT" in ''|*[!0-9]*) FM_CREW_STATE_RUNS_LIMIT=200 ;;
 # confirmation for a run that reached a terminal pass (fm_crew_forge_pr_state).
 # FM_CREW_STATE_NO_FORGE=1 skips it, which reports the merge state as
 # unverified rather than asserting a landing - never as a landing.
-FM_CREW_STATE_FORGE_TIMEOUT=${FM_CREW_STATE_FORGE_TIMEOUT:-10}
-case "$FM_CREW_STATE_FORGE_TIMEOUT" in ''|*[!0-9]*|0) FM_CREW_STATE_FORGE_TIMEOUT=10 ;; esac
+#
+# 3s, because this reader's callers are budgeted. `gh pr view --json
+# state,mergeStateStatus` against a real GitHub PR measured 0.53s 0.59s 0.59s
+# 0.61s 0.53s over five consecutive runs on 2026-08-22, worst case 0.61s, so 3s
+# is roughly five times the worst observed call. That figure is from ONE host
+# with warm `gh` auth: it is a headroom choice, not a latency guarantee. What the
+# choice is really protecting is the caller - bin/fm-inactive-reconcile.sh runs
+# this script inside a 10s AGGREGATE budget for its whole scan, so a bound equal
+# to that budget lets one hung call starve every remaining child. At 3s a fully
+# hung call still leaves that scan most of its budget, and that caller narrows
+# the bound further from whatever it has left.
+FM_CREW_STATE_FORGE_TIMEOUT=${FM_CREW_STATE_FORGE_TIMEOUT:-3}
+case "$FM_CREW_STATE_FORGE_TIMEOUT" in ''|*[!0-9]*|0) FM_CREW_STATE_FORGE_TIMEOUT=3 ;; esac
 SEP=' · '
 
 # Emit the one canonical line and exit 0. Detail is optional.

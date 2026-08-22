@@ -32,6 +32,13 @@ make_tools() { # <world>
   mkdir -p "$fake"
   cat > "$fake/fm-crew-state.sh" <<'SH'
 #!/usr/bin/env bash
+# The real reader makes one bounded forge read before it will confirm a merged or
+# closed PR, and the scan is what decides how much of its own budget that read
+# may spend. Record the two knobs it was handed, so a case can assert the bound
+# the scan derived, then answer with the canned state.
+[ -z "${FM_FAKE_FORGE_ENV_LOG:-}" ] ||
+  printf '%s|%s\n' "${FM_CREW_STATE_FORGE_TIMEOUT:-}" "${FM_CREW_STATE_NO_FORGE:-}" \
+    >> "$FM_FAKE_FORGE_ENV_LOG"
 printf 'state: %s · source: fake\n' "${FM_FAKE_CREW_STATE:-unknown}"
 SH
   cat > "$fake/tmux" <<'SH'
@@ -432,13 +439,74 @@ test_notice_recovery_does_not_duplicate_wake() {
   pass "notice recovery remains idempotent across queue acknowledgement"
 }
 
-# Forge command shims fail loudly. A successful scan proves this path never uses
-# them while reconciling a local terminal outcome.
+# Forge command shims fail loudly. A successful scan proves the scan itself never
+# uses them while reconciling a local terminal outcome. The reader it delegates
+# to may make one bounded forge read of its own for a child whose run reached a
+# terminal pass; the case below is what bounds that.
 test_reconciliation_never_calls_forge() {
   make_world forge; write_child "$MAIN" child 'done: green'
   FM_FAKE_CREW_STATE='done' run_reconcile "$MAIN" --startup
   [ ! -s "$WORLD/forge.log" ] || fail "reconciliation invoked a forge command: $(cat "$WORLD/forge.log")"
   pass "reconciliation makes zero forge or PR API calls"
+}
+
+# fm-crew-state.sh makes one bounded forge read before it will confirm a merged or
+# closed PR, and this scan runs it inside an AGGREGATE budget covering every child
+# it visits. A per-child bound equal to that whole budget is a starvation bug: one
+# hung `gh` and the pass advances a single child. So the bound comes from what the
+# budget still has left, at most a third of it, and the read is skipped outright
+# when what remains cannot spare it - safe, because an unverified merge state is
+# reported as unverified and never as a landing.
+test_forge_bound_is_derived_from_the_remaining_budget() {
+  local recorded bound skipped
+  # Full default budget: the read is affordable, and the bound never exceeds the
+  # reader's own default of 3s.
+  make_world forge-bound; write_child "$MAIN" child 'done: green'
+  FM_FAKE_FORGE_ENV_LOG="$WORLD/forge-env.log"
+  export FM_FAKE_FORGE_ENV_LOG
+  : > "$FM_FAKE_FORGE_ENV_LOG"
+  FM_FAKE_CREW_STATE='done' run_reconcile "$MAIN" --startup
+  recorded=$(head -1 "$FM_FAKE_FORGE_ENV_LOG")
+  bound=${recorded%%|*}
+  skipped=${recorded#*|}
+  case "$bound" in
+    ''|*[!0-9]*) fail "no whole-second forge bound was passed for the child: '$recorded'" ;;
+  esac
+  [ "$bound" -ge 1 ] || fail "a full 10s budget can spare a forge read: '$recorded'"
+  [ "$bound" -le 3 ] || fail "forge bound exceeds the reader's own default: '$recorded'"
+  [ -z "$skipped" ] || fail "the forge read was skipped with budget to spare: '$recorded'"
+
+  # A budget small enough for the share to bind: at most a third of it, so a hung
+  # call still leaves the pass most of its sweep.
+  make_world forge-bound-share; write_child "$MAIN" child 'done: green'
+  FM_FAKE_FORGE_ENV_LOG="$WORLD/forge-env.log"
+  export FM_FAKE_FORGE_ENV_LOG
+  : > "$FM_FAKE_FORGE_ENV_LOG"
+  FM_INACTIVE_RECONCILE_BUDGET_SECS=6 FM_FAKE_CREW_STATE='done' run_reconcile "$MAIN" --startup
+  recorded=$(head -1 "$FM_FAKE_FORGE_ENV_LOG")
+  [ -n "$recorded" ] || fail "the child was never visited under a 6s budget"
+  bound=${recorded%%|*}
+  case "$bound" in
+    ''|*[!0-9]*) fail "no whole-second forge bound was passed under a 6s budget: '$recorded'" ;;
+  esac
+  [ "$bound" -le 2 ] || fail "forge bound exceeds a third of the 6s budget: '$recorded'"
+  [ "$bound" -ge 1 ] || fail "a 6s budget can still spare a second of forge read: '$recorded'"
+
+  # Too little left to spare: the read is skipped outright, which reports the
+  # merge state as unverified and never as a landing.
+  make_world forge-bound-tight; write_child "$MAIN" child 'done: green'
+  FM_FAKE_FORGE_ENV_LOG="$WORLD/forge-env.log"
+  export FM_FAKE_FORGE_ENV_LOG
+  : > "$FM_FAKE_FORGE_ENV_LOG"
+  FM_INACTIVE_RECONCILE_BUDGET_SECS=2 FM_FAKE_CREW_STATE='done' run_reconcile "$MAIN" --startup
+  recorded=$(head -1 "$FM_FAKE_FORGE_ENV_LOG")
+  [ -n "$recorded" ] || fail "the child was never visited under a tight budget"
+  bound=${recorded%%|*}
+  skipped=${recorded#*|}
+  [ -z "$bound" ] || fail "a 2s budget cannot spare a whole second of forge read: '$recorded'"
+  [ -n "$skipped" ] || fail "a budget too small to spare the read must skip it: '$recorded'"
+  unset FM_FAKE_FORGE_ENV_LOG
+  pass "the per-child forge bound comes from the remaining scan budget"
 }
 
 test_main_direct_terminal_presentation_receipt
@@ -457,5 +525,6 @@ test_stalled_state_read_is_bounded_and_scan_progresses
 test_full_scan_budget_includes_wake_lock_wait
 test_notice_recovery_does_not_duplicate_wake
 test_reconciliation_never_calls_forge
+test_forge_bound_is_derived_from_the_remaining_budget
 
 echo "all inactive reconciliation tests passed"

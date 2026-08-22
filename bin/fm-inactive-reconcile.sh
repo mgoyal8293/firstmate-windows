@@ -37,8 +37,17 @@
 # main-home acknowledgement. The atomic epoch/cursor marker's mtime gates scans,
 # and its cursor records the last child visited within the aggregate budget.
 #
-# The scan reads only durable local state and fm-crew-state.sh; it never invokes
-# gh, gh-axi, curl, fm-pr-check.sh, fm-pr-poll.sh, or a state *.check.sh.
+# The scan reads durable local state and fm-crew-state.sh, and nothing else: it
+# never invokes gh-axi, curl, fm-pr-check.sh, fm-pr-poll.sh, or a state
+# *.check.sh, and makes no forge call of its own.
+# It is NOT forge-free, though, because fm-crew-state.sh is not: a child whose
+# run reached a terminal pass costs one bounded `gh pr view`, which is the only
+# thing that may confirm a merged-or-closed claim rather than inferring one.
+# That read is bounded by a share of the aggregate budget this scan still has
+# left (crew_state_forge_bound, at most a third of it) and is skipped entirely
+# when what remains cannot spare it, because an unverified merge state is only
+# ever reported as unverified, never as a landing - so skipping it costs a
+# handling turn while a hung call would cost every remaining child its scan.
 set -u
 export LC_ALL=C
 
@@ -324,8 +333,22 @@ report_to_parent() { # <self-id> <task> <state> <outcome-key> <fingerprint> <pr>
   append_once "$destination" "$line"
 }
 
+# The bound this scan is willing to spend on fm-crew-state.sh's one forge read
+# for ONE child, given the <remaining> seconds of aggregate budget it has left.
+# At most a third of that, and never more than the bound fm-crew-state.sh would
+# use on its own, so a hung `gh` costs this pass a fraction of its sweep instead
+# of all of it. 0 means "cannot spare it": the caller skips the read, which
+# reports the merge state as unverified, and unverified is never a landing.
+crew_state_forge_bound() { # <remaining-secs>
+  local remaining=$1 share bound=${FM_CREW_STATE_FORGE_TIMEOUT:-3}
+  case "$bound" in ''|*[!0-9]*|0) bound=3 ;; esac
+  share=$((remaining / 3))
+  [ "$share" -lt "$bound" ] && bound=$share
+  printf '%s' "$bound"
+}
+
 reconcile_direct_child_locked() { # <id> <meta> <secondmate-id-or-empty> <timeout>
-  local id=$1 meta=$2 self=${3:-} timeout=$4 status turn last age state_line state pr incarnation fingerprint outcome_key payload kind state_rc=0
+  local id=$1 meta=$2 self=${3:-} timeout=$4 status turn last age state_line state pr incarnation fingerprint outcome_key payload kind state_rc=0 forge_bound forge_env
   [ -f "$meta" ] && [ ! -L "$meta" ] || return 0
   kind=$(meta_field "$meta" kind)
   [ "$kind" = secondmate ] && return 0
@@ -335,8 +358,14 @@ reconcile_direct_child_locked() { # <id> <meta> <secondmate-id-or-empty> <timeou
   status_line_verb "$last" | grep -Fx captain-held >/dev/null 2>&1 && return 0
   age=$(last_activity_age "$meta" "$status" "$turn")
   [ "$age" -ge "$FM_INACTIVE_RECONCILE_SECS" ] || return 0
+  forge_bound=$(crew_state_forge_bound "$timeout")
+  if [ "$forge_bound" -ge 1 ]; then
+    forge_env="FM_CREW_STATE_FORGE_TIMEOUT=$forge_bound"
+  else
+    forge_env=FM_CREW_STATE_NO_FORGE=1
+  fi
   state_line=$(fm_run_timed "$timeout" env FM_HOME="$FM_HOME" FM_STATE_OVERRIDE="$STATE" \
-    "$CREW_STATE_BIN" "$id" 2>/dev/null) || state_rc=$?
+    "$forge_env" "$CREW_STATE_BIN" "$id" 2>/dev/null) || state_rc=$?
   [ "$state_rc" -ne 124 ] || return 3
   case "$state_line" in
     'state: done '*) state='done' ;;

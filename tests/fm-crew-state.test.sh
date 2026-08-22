@@ -577,6 +577,30 @@ run:
 EOF
 }
 
+# The same live-run shape with its tables in the OTHER order, and with nothing
+# executing: an `active_steps` table carrying no rows, followed by the `steps`
+# table. Every TOON table header carries commas inside its braces, so a reader
+# that ends the active-steps table only at a blank or comma-free line runs on
+# into the next table and reads ITS rows as active steps, under active_steps'
+# column names - reporting `test,running,0,0` as the live activity. Every
+# recorded record emits `steps` first; this fixture varies that order
+# deliberately, because the verdict must not depend on it.
+run_active_steps_before_steps() {  # <branch> <head>
+  cat <<EOF
+run:
+  id: "01RUNORDER"
+  branch: $1
+  status: running
+  head: "$2"
+  findings: none
+  active_steps[0]{step,status,active_for,last_activity,agent_pid,round}:
+  steps[3]{step,status,findings,duration_ms}:
+    intent,completed,0,7
+    review,completed,0,120
+    test,running,0,0
+EOF
+}
+
 # The `branch_sync:` block `axi status` adds when the invoking worktree's branch
 # has a live pipeline push binding - which is how fm-crew-state always invokes it,
 # from the task worktree. Field set and shape recorded from run
@@ -2080,6 +2104,68 @@ $(branch_sync_block 01M0EFHKF1A3CJX4KK58HWJ7D2 "$PIPE_HEAD" 00000000000000000000
   pass "a branch_sync binding for another checkout does not prove ownership"
 }
 
+# The coarse row's PR url is load-bearing on that path - a `completed` row reads
+# done only when the forge confirms a landing - and its column index is not
+# evidence: the same listing has been described here with the date as one field
+# and as two, so a fixed index is one layout change away from handing a timestamp
+# to the URL owner and parking every completed row forever with "PR url not
+# recognized". Both rows below put the url where a sixth-field read would miss
+# it.
+test_coarse_pr_url_is_found_by_shape_not_by_column() {
+  reset_fakes
+  local d short out
+  d=$(new_case coarse-url-layout)
+  make_repo_on_branch "$d/wt" fm/feat-urllayout
+  short=$(git -C "$d/wt" rev-parse --short=7 HEAD)
+  make_fakebin "$d" >/dev/null
+  fm_write_meta "$d/state/urllayout.meta" "window=fm:fm-urllayout" "worktree=$d/wt" "kind=ship"
+  FM_FAKE_AXI_STATUS="$(run_running fm/other-crew)"
+  FM_FAKE_GH_PR='{"mergeStateStatus":"UNKNOWN","state":"MERGED","url":"https://github.com/o/r/pull/11"}'
+  # Date and time as ONE token: the url is the row's fifth field.
+  FM_FAKE_RUNS_LIST="$(cat <<EOF
+  running    fm/other-crew aaaaaaa  2026-08-22T15:30:00Z
+  completed  fm/feat-urllayout ${short}  2026-08-22T15:05:00Z  https://github.com/o/r/pull/11
+EOF
+)"
+  out=$(run_crew_state "$d" urllayout)
+  assert_contains "$out" "state: done" "the row's url is read wherever the layout puts it"
+  assert_contains "$out" "PR merged" "the forge-confirmed landing is still reported"
+  assert_not_contains "$out" "not recognized" "a timestamp is never offered to the url owner as a PR url"
+  # One extra column ahead of the url: the seventh field this time, so no single
+  # index fits both layouts.
+  FM_FAKE_RUNS_LIST="$(cat <<EOF
+  running    fm/other-crew aaaaaaa  2026-08-22 15:30  -
+  completed  fm/feat-urllayout ${short}  2026-08-22 15:05  4m12s  https://github.com/o/r/pull/11
+EOF
+)"
+  out=$(run_crew_state "$d" urllayout)
+  assert_contains "$out" "state: done" "an extra column ahead of the url does not hide it"
+  assert_contains "$out" "PR merged" "the forge answer still settles the row"
+  assert_not_contains "$out" "not recognized" "an unrelated column is never read as the PR url"
+  pass "the coarse row's PR url is found by shape, not by column"
+}
+
+# A table emitted after `active_steps` must not be read as more active steps.
+# The consequence is a detail line rather than a verdict, but the detail is what
+# a supervisor reads as proof of life, so an idle run must not borrow one from
+# the steps table.
+test_a_table_after_active_steps_is_not_read_as_an_active_step() {
+  reset_fakes
+  local d out
+  d=$(new_case active-steps-order)
+  make_repo_on_branch "$d/wt" fm/feat-steporder
+  make_fakebin "$d" >/dev/null
+  fm_write_meta "$d/state/steporder.meta" "window=fm:fm-steporder" "worktree=$d/wt" "kind=ship"
+  FM_FAKE_AXI_STATUS="$(run_active_steps_before_steps fm/feat-steporder "$FM_FAKE_RUN_HEAD")"
+  out=$(run_crew_state "$d" steporder)
+  assert_contains "$out" "source: run-step" "the run is this branch's own"
+  assert_contains "$out" "state: working" "a running run is still working"
+  assert_not_contains "$out" "test running" "a steps row is never reported as the live activity"
+  assert_not_contains "$out" "active 0" "a steps duration column is not an active_for field"
+  assert_contains "$out" "validating (running)" "with no active step the run's own status word is the detail"
+  pass "a table after active_steps is not read as an active step"
+}
+
 test_active_run_is_authoritative
 test_stale_needs_decision_superseded
 test_stale_blocked_superseded
@@ -2142,6 +2228,8 @@ test_checks_passed_outcome_is_done_without_a_completed_ci_row
 test_gitlab_merge_request_is_named_not_reported_as_a_forge_failure
 test_unrecognized_pr_url_is_named_not_reported_as_a_forge_failure
 test_no_forge_knob_honors_a_truthy_word
+test_coarse_pr_url_is_found_by_shape_not_by_column
+test_a_table_after_active_steps_is_not_read_as_an_active_step
 test_terminal_pass_without_a_steps_table_is_not_done
 test_terminal_pass_with_a_pending_ci_step_is_not_done
 test_coarse_completed_row_without_a_merge_is_not_done

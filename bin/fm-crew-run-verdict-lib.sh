@@ -5,7 +5,10 @@
 #
 # Sourced, never executed. bin/fm-crew-state.sh is the only caller; this file
 # owns the model so the rules below live in one place instead of being spread
-# through that script's control flow.
+# through that script's control flow. It composes with three libraries the caller
+# must source rather than restating any of them: bin/fm-nm-run-lib.sh owns the
+# TOON scalar read, bin/fm-pr-lib.sh owns PR/MR URL identity, and
+# bin/fm-timeout-lib.sh owns the bound on the one forge read.
 #
 # WHY THIS EXISTS. bin/fm-crew-state.sh used to answer four genuinely different
 # situations with the same two words, in both unsafe directions (reproduced with
@@ -144,10 +147,13 @@ fm_crew_run_scalars() {  # <run-output>
 
 # Scalar value of a top-level-or-run-object TOON key, read with the branch_sync
 # block excluded. Empty when the key is absent from the run record.
+#
+# bin/fm-nm-run-lib.sh owns the TOON scalar shape and the caller sources it, so
+# this only narrows WHAT is read to the run record's own scalars. Restating that
+# reader here would give the same records two owners, and a later change to the
+# shape would land in one of them.
 fm_crew_run_field() {  # <run-output> <key>
-  fm_crew_run_scalars "$1" \
-    | sed -n "s/^[[:space:]]*$2:[[:space:]]*\(.*\)/\1/p" \
-    | head -1
+  fm_nm_field "$(fm_crew_run_scalars "$1")" "$2"
 }
 
 # Status word of one step in a run's `steps[N]{step,status,...}` table, e.g.
@@ -168,6 +174,13 @@ fm_crew_step_status() {  # <run-output> <step-name>
 # the row is split quote-aware, because `last_activity` is a quoted free-text
 # field that routinely contains commas of its own:
 #   review,fixing,1h27m,"9m52s ago: log: I'll review the changes, then...","2010043",fix 3
+#
+# The table ends at a blank line, a line with no comma, or ANY following TOON
+# table header. That last one matters because a header carries commas inside its
+# braces (`steps[9]{step,status,findings,duration_ms}:`), so without it a table
+# emitted after active_steps is read as active_steps rows under active_steps'
+# column names - which would report a `steps` row as the live activity. The
+# recorded field order puts `steps` first, and this reader does not depend on it.
 fm_crew_active_step() {  # <run-output>
   printf '%s\n' "$1" | awk '
     /^[[:space:]]*active_steps\[[0-9]+\]\{/ {
@@ -182,6 +195,7 @@ fm_crew_active_step() {  # <run-output>
       row = $0
       sub(/^[[:space:]]+/, "", row)
       if (row == "" || row !~ /,/) { in_table = 0; next }
+      if (row ~ /^[A-Za-z_][A-Za-z0-9_]*\[[0-9]+\]\{/) { in_table = 0; next }
       # Quote-aware field split: a comma inside double quotes is data.
       nval = 0; cur = ""; inq = 0
       for (i = 1; i <= length(row); i++) {
@@ -365,10 +379,26 @@ fm_crew_run_admits() {  # <worktree> <run-output> <run-head>
 # row whose sha binds to the local checkout is defect 1: the newest run is the
 # only one that can be current, so a non-binding newest row means "cannot
 # attribute", never "try the run before it".
+#
+# The status and the sha are the row's first and third fields, but the PR url is
+# found by SHAPE, not by column index. It is load-bearing on this path - a coarse
+# `completed` row reads done only on a forge-confirmed merge or close - and the
+# date column has been described both as one field and as two, so any fixed index
+# is one layout change away from handing a timestamp to the URL owner and parking
+# every completed row forever with "PR url not recognized". A field starting
+# `http://` or `https://` cannot be confused with a status word, a branch, a sha
+# or a date; bin/fm-pr-lib.sh still rules on whether it is a PR or MR at all.
 fm_crew_runs_newest_row_for_branch() {  # <runs-output> <branch>
   printf '%s\n' "$1" | awk -v want="$2" '
     { sub(/^[[:space:]]+/, "") }
-    $2 == want { printf "%s|%s|%s\n", $1, $3, ($6 == "" ? "" : $6); exit }
+    $2 == want {
+      url = ""
+      for (i = 3; i <= NF; i++) {
+        if ($i ~ /^https?:\/\//) { url = $i; break }
+      }
+      printf "%s|%s|%s\n", $1, $3, url
+      exit
+    }
   '
 }
 
@@ -411,7 +441,9 @@ fm_crew_forge_pr_state() {  # <pr-url> <timeout-secs>
   [ "$FM_PR_PROVIDER" = github ] ||
     { printf 'unqueryable %s' "$FM_PR_PROVIDER"; return; }
   command -v gh >/dev/null 2>&1 || { printf 'unverified'; return; }
-  case "$timeout_secs" in ''|*[!0-9]*|0) timeout_secs=10 ;; esac
+  # Same floor as FM_CREW_STATE_FORGE_TIMEOUT's default, which owns the figure
+  # and the measurement behind it.
+  case "$timeout_secs" in ''|*[!0-9]*|0) timeout_secs=3 ;; esac
   # FM_PR_PATH is owner/repository for a github URL, which is what --repo takes.
   out=$(fm_run_timed "$timeout_secs" \
     env GH_PROMPT_DISABLED=1 GH_NO_UPDATE_NOTIFIER=1 \
