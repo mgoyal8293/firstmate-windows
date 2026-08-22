@@ -100,6 +100,7 @@ BEHIND=$(git -C "$ROOT" rev-list --count "$UPSTREAM_SHA..$BASE_SHA" 2>/dev/null 
 
 STATUS=
 CONFLICTS=
+MERGE_ERROR=
 TEST_RESULT=skipped
 SUMMARY=
 
@@ -174,7 +175,10 @@ git -C "$WORKTREE" checkout --quiet -b "$SCRATCH_BRANCH" \
 
 # --no-ff and --no-commit: the result is inspected, never kept. A merge that
 # fast-forwards would hide the fact that nothing was reconciled.
-if git -C "$WORKTREE" merge --no-ff --no-commit --quiet "$UPSTREAM_SHA" >/dev/null 2>&1; then
+MERGE_ERR=$(mktemp "${TMPDIR:-/tmp}/fm-upstream-sync-merge.XXXXXX") || \
+  die "cannot create a scratch file"
+if git -C "$WORKTREE" merge --no-ff --no-commit --quiet "$UPSTREAM_SHA" \
+  >/dev/null 2>"$MERGE_ERR"; then
   STATUS=clean
 else
   CONFLICTS=$(git -C "$WORKTREE" diff --name-only --diff-filter=U 2>/dev/null || true)
@@ -182,8 +186,13 @@ else
     STATUS=conflict
   else
     STATUS=merge_failed
+    # A merge that reports no conflicted paths failed for an environmental reason,
+    # not a textual one. git's own stderr names it; discarding it turns a one-line
+    # diagnosis into a reproduction.
+    MERGE_ERROR=$(cat "$MERGE_ERR" 2>/dev/null || true)
   fi
 fi
+rm -f "$MERGE_ERR"
 
 if [ "$STATUS" = conflict ]; then
   SUMMARY="CONFLICTS: $AHEAD upstream commit(s) do not merge cleanly. Resolve by hand in a real branch; conflicted paths:
@@ -194,6 +203,11 @@ fi
 
 if [ "$STATUS" = merge_failed ]; then
   SUMMARY="BLOCKED: the merge could not be attempted (no conflicted paths reported). Inspect with --keep."
+  if [ -n "$MERGE_ERROR" ]; then
+    SUMMARY="$SUMMARY
+git reported:
+$(printf '%s\n' "$MERGE_ERROR" | sed 's/^/  /')"
+  fi
   report
   exit 3
 fi

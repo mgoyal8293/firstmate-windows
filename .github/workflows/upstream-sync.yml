@@ -36,6 +36,15 @@ jobs:
         env:
           UPSTREAM_URL: https://github.com/kunchenguid/firstmate.git
         run: git remote add upstream "$UPSTREAM_URL"
+      # actions/checkout leaves no committer identity behind, and the dry run's
+      # `git merge --no-ff --no-commit` needs one to record the merge state. Without
+      # it every scheduled run reports BLOCKED, which reads as drift the port does
+      # not have. The identity is scratch: the merge is inspected, never kept.
+      - name: Give the scratch merge a committer identity
+        run: |
+          set -eu
+          git config user.name 'firstmate upstream freshness'
+          git config user.email 'firstmate-upstream-freshness@users.noreply.github.com'
       - name: Install pinned ShellCheck
         run: |
           set -eu

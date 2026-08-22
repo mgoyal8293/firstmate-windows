@@ -154,6 +154,33 @@ line-b
   pass "fm-upstream-sync.sh: writes a machine-readable report a scheduled run can act on"
 }
 
+# A merge that reports no conflicted paths failed for an environmental reason,
+# not a textual one - a CI runner with no committer identity is the case that
+# actually happened. The refusal is correct, but a BLOCKED report that does not
+# carry git's own reason turns a one-line diagnosis into a reproduction.
+test_blocked_merge_names_gits_reason() {
+  local root port out rc
+  root=$(fm_test_tmproot fm-upsync) || fail "upstream-sync: could not create a fixture root"
+  port=$(make_fixture "$root")
+  upstream_commit "$root" other.sh 'upstream-changed
+' 'upstream: touch a file the port does not carry'
+  git -C "$port" fetch --quiet upstream
+
+  # Strip every identity source the merge could draw on, the way a bare CI
+  # checkout does. This merges cleanly when an identity is present.
+  out=$(env -u HOME -u GIT_AUTHOR_NAME -u GIT_AUTHOR_EMAIL \
+    -u GIT_COMMITTER_NAME -u GIT_COMMITTER_EMAIL \
+    GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null \
+    FM_ROOT_OVERRIDE="$port" bash "$SYNC" --no-fetch --tests none 2>&1); rc=$?
+  [ "$rc" -eq 3 ] || fail "upstream-sync: an unattemptable merge must exit 3, got $rc: $out"
+  assert_contains "$out" 'BLOCKED' "upstream-sync: an unattemptable merge must be reported as blocked"
+  assert_contains "$out" 'git reported:' \
+    "upstream-sync: a blocked merge must carry git's own stderr, not discard it"
+  assert_contains "$out" 'identity' \
+    "upstream-sync: the blocked report must name the missing identity as the cause"
+  pass "fm-upstream-sync.sh: a blocked merge reports git's own reason"
+}
+
 test_refuses_a_missing_upstream_remote() {
   local root port out rc
   root=$(fm_test_tmproot fm-upsync) || fail "upstream-sync: could not create a fixture root"
@@ -168,4 +195,5 @@ test_reports_current_when_nothing_is_new
 test_reports_a_clean_merge_without_landing_it
 test_reports_conflicts_with_paths_and_a_nonzero_exit
 test_json_report_is_machine_readable
+test_blocked_merge_names_gits_reason
 test_refuses_a_missing_upstream_remote
