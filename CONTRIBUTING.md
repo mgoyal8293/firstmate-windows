@@ -19,7 +19,7 @@ This fork carries firstmate to Git for Windows.
 Write every platform difference as an added `case "$(uname -s)" in MINGW*|MSYS*)` arm, or a capability probe, **inside the existing function** - git merges added arms cleanly, and a rewritten file conflicts on every upstream touch until the port stops being maintainable.
 Prefer a capability probe wherever the real question is "does this work here?" (is `/proc` readable, does `chmod` round-trip, can a symlink be made); reserve the platform name for behavior that is genuinely platform-specific.
 Keep each substitution at one owner and leave its call sites alone.
-When that owner is a self-contained mechanism rather than a one-line arm, give it a new `bin/fm-*-lib.sh` and leave the upstream file a source line plus the call, because a new file never conflicts while a block inside a function upstream is still editing conflicts on every intake.
+When that owner is a self-contained mechanism rather than a one-line arm, give it a new `bin/fm-*-lib.sh` and leave the upstream file a source line plus the call, because a new file never conflicts, while a block added inside a function upstream is still editing is an edit that conflicts on every intake.
 Adding that source line silently breaks every test that builds a fake `bin/` from a hand-listed subset of siblings, so after it, check `tests/` for each fixture that stages the file you just gave a new dependency and add the new sibling there too.
 [`docs/windows.md`](docs/windows.md) is the map; run `bin/fm-upstream-sync.sh` before assuming this fork is current.
 

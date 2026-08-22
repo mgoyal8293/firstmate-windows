@@ -15,6 +15,9 @@
 # bin/fm-session-lock-lib.sh, which sources this file, so the walk is defined by
 # the time anything here runs.
 
+# shellcheck source=bin/fm-proc-lib.sh
+. "$(dirname -- "${BASH_SOURCE[0]}")/fm-proc-lib.sh"
+
 # ---------------------------------------------------------------------------
 # Session tokens: ownership WITHOUT asking "who is my parent"
 #
@@ -209,8 +212,10 @@ fm_session_token_acquire_eligible() {
   fm_session_ancestry_unavailable && fm_session_token_self >/dev/null 2>&1
 }
 
-# Refuse an acquisition that can prove no ownership at all, naming whichever
-# evidence was actually missing.
+# Refuse an acquisition on a host where the ancestry walk cannot answer and this
+# process carries no token, which is the one refusal this port owns. The refusal
+# for a walk that merely found no harness is upstream's, and stays in
+# bin/fm-lock.sh where upstream can reword it.
 #
 # Windows, and no token. Naming the ancestry walk there would be true and
 # useless: on Windows it can NEVER answer for anyone, because MSYS's /proc holds
@@ -219,11 +224,7 @@ fm_session_token_acquire_eligible() {
 # (FM_SESSION_TOKEN_VARS above). So say that, and say what the reader can do
 # about it.
 fm_session_token_acquire_refuse() {
-  if fm_session_ancestry_unavailable; then
-    echo "error: no firstmate session token in this environment, so this session cannot prove it owns this home - on Windows ownership is a per-session token, never process ancestry, because a native harness never appears in MSYS's /proc. Only Claude Code exports one today (CLAUDE_CODE_SESSION_ID); under any other harness a Windows firstmate stays read-only - run firstmate from Claude Code, or continue read-only (docs/windows.md 'How the session lock is owned')" >&2
-  else
-    echo "error: cannot locate harness process in ancestry" >&2
-  fi
+  echo "error: no firstmate session token in this environment, so this session cannot prove it owns this home - on Windows ownership is a per-session token, never process ancestry, because a native harness never appears in MSYS's /proc. Only Claude Code exports one today (CLAUDE_CODE_SESSION_ID); under any other harness a Windows firstmate stays read-only - run firstmate from Claude Code, or continue read-only (docs/windows.md 'How the session lock is owned')" >&2
   return 1
 }
 
@@ -264,14 +265,5 @@ fm_session_token_status_line() {  # <state-dir>
     echo "lock: held by another session's token"
   else
     echo "lock: stale (token last refreshed over ${FM_SESSION_TOKEN_STALE_AFTER}s ago)"
-  fi
-}
-
-# Print an acquisition's success line, naming the authority that holds the lock.
-fm_session_lock_acquired_line() {  # <token-path-flag> <pid>
-  if [ "$1" -eq 1 ]; then
-    echo "lock acquired: session token"
-  else
-    echo "lock acquired: harness pid $2"
   fi
 }

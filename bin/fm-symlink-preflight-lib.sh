@@ -10,6 +10,9 @@
 # both print a PLATFORM diagnostic line rather than returning a verdict, exactly
 # as they did inside bin/fm-bootstrap.sh's detect_local_config.
 
+# shellcheck source=bin/fm-proc-lib.sh
+. "$(dirname -- "${BASH_SOURCE[0]}")/fm-proc-lib.sh"
+
 # Symlink preflight. PROVES the lock layer can work here rather than assuming it.
 #
 # Every lock in the fleet - the session lock, the watcher lock, the wake queue,

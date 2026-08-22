@@ -54,8 +54,11 @@ elif fm_session_token_acquire_eligible; then
   # inventing a new staleness policy.
   SESSION_TOKEN_PATH=1
   me=$$
-else
+elif fm_session_ancestry_unavailable; then
   fm_session_token_acquire_refuse
+  exit 1
+else
+  echo "error: cannot locate harness process in ancestry" >&2
   exit 1
 fi
 probe=$(mktemp "$STATE/.lock-write.XXXXXX" 2>/dev/null) || {
@@ -159,4 +162,5 @@ if [ "$SESSION_TOKEN_PATH" -eq 1 ] && ! fm_session_token_owned_by_self "$STATE";
   exit 1
 fi
 release_claim_lock
-fm_session_lock_acquired_line "$SESSION_TOKEN_PATH" "$me"
+[ "$SESSION_TOKEN_PATH" -eq 1 ] && { echo "lock acquired: session token"; exit 0; }
+echo "lock acquired: harness pid $me"

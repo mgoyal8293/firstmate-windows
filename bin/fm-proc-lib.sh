@@ -290,7 +290,7 @@ fm_proc_scan_available() {
 # "no leak" and deletes the worktree out from under it - the exact failure the
 # uncertainty contract exists to prevent.
 #
-# `cygpath -m -l` is the resolver for the same reason bin/fm-wake-lib.sh gives at
+# `cygpath -m -l` is the resolver for the same reason bin/fm-path-lib.sh gives at
 # fm_lock_same_path - it owns the mount table, and `-l` additionally expands short
 # components - and converting the result back with `cygpath -u` yields the very
 # spelling /proc reports. Its presence is the capability probe, so a runtime
