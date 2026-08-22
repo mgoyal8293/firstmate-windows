@@ -12,6 +12,11 @@ set -u
 
 RUNNER="$ROOT/bin/fm-test-run.sh"
 
+# These fixtures validate the runner's JSON with an interpreter of their own.
+# tests/lib.sh resolved one by executing it, so the Windows Store alias cannot
+# be mistaken for it here either.
+fm_python3 || fail "these tests need a working python3 to validate the runner's JSON artifacts"
+
 assert_present "$RUNNER" "bin/fm-test-run.sh is missing"
 [ -x "$RUNNER" ] || fail "bin/fm-test-run.sh must be executable"
 
@@ -93,6 +98,8 @@ init_changed_fixture_repo() {
   mkdir -p "$repo/bin" "$repo/tests"
   cp "$RUNNER" "$repo/bin/fm-test-run.sh"
   chmod +x "$repo/bin/fm-test-run.sh"
+  # The runner sources the shared Python probe, so the fixture repo needs it too.
+  cp "$ROOT/bin/fm-python-lib.sh" "$repo/bin/fm-python-lib.sh"
   for script in \
     fm-brief.test.sh \
     fm-ask-user-authority.test.sh \
@@ -193,7 +200,7 @@ test_empty_selection_emits_summary() {
   [ "$out" = "FM_TEST_SUMMARY total=0 failed=0 skipped_gate=0 duration_ms=0" ] \
     || fail "empty selection summary is missing or non-deterministic: $out"
   json="$tmp/artifacts/timing.json"
-  python3 -c '
+  "${FM_PYTHON3_CMD[@]}" -c '
 import json, sys
 doc = json.load(open(sys.argv[1]))
 assert doc["summary"] == {"duration_ms": 0, "failed": 0, "skipped_gate": 0, "total": 0}
@@ -233,9 +240,9 @@ SH
   grep -q '^FM_TEST_SLOWEST rank=1 ' "$out" \
     || fail "expected FM_TEST_SLOWEST rank=1"
   [ -f "$json" ] || fail "JSON timing artifact was not written"
-  python3 -c 'import json,sys; json.load(open(sys.argv[1]))' "$json" \
+  "${FM_PYTHON3_CMD[@]}" -c 'import json,sys; json.load(open(sys.argv[1]))' "$json" \
     || fail "JSON timing artifact is not valid JSON"
-  python3 -c '
+  "${FM_PYTHON3_CMD[@]}" -c '
 import json, sys
 doc = json.load(open(sys.argv[1]))
 assert "scripts" in doc and len(doc["scripts"]) == 1, doc
@@ -301,7 +308,7 @@ SH
     || fail "END must mark gate_skip=true: $(grep '^FM_TEST_END' "$out")"
   grep -q 'FM_TEST_SUMMARY total=1 failed=0 skipped_gate=1' "$out" \
     || fail "summary must count skipped_gate=1: $(grep FM_TEST_SUMMARY "$out")"
-  python3 -c '
+  "${FM_PYTHON3_CMD[@]}" -c '
 import json, sys
 doc = json.load(open(sys.argv[1]))
 assert doc["scripts"][0]["gate_skip"] is True
@@ -599,6 +606,8 @@ coverage_guard_sandbox() {  # <slug> -> echoes sandbox root
   mkdir -p "$sandbox/bin" "$sandbox/tests" || return 1
   cp "$RUNNER" "$sandbox/bin/fm-test-run.sh" || return 1
   cp "$ROOT/bin/fm-test-isolation-proof.sh" "$sandbox/bin/fm-test-isolation-proof.sh" || return 1
+  # Both mirrored scripts source the shared Python probe.
+  cp "$ROOT/bin/fm-python-lib.sh" "$sandbox/bin/fm-python-lib.sh" || return 1
   for f in "$ROOT"/tests/*.test.sh; do
     : > "$sandbox/tests/$(basename "$f")" || return 1
   done
@@ -792,6 +801,7 @@ test_jobs_parallel_scheduler_and_failure_propagation() {
   d=tests/fm-supervision-instructions.test.sh
   mkdir -p "$repo/bin" "$repo/tests" "$evidence" "$fake_bin"
   cp "$RUNNER" "$runner"
+  cp "$ROOT/bin/fm-python-lib.sh" "$repo/bin/fm-python-lib.sh"
   cat >"$fake_bin/stat" <<'SH'
 #!/usr/bin/env bash
 if [ "$1" = "-c" ] && [ "$2" = "%a" ]; then
@@ -851,7 +861,7 @@ SH
   [ "$end_n" -eq 3 ] || fail "expected 3 END markers, got $end_n"
   grep -q 'FM_TEST_SUMMARY total=3 failed=0' "$tmp/out" \
     || fail "summary missing for jobs run: $(grep FM_TEST_SUMMARY "$tmp/out")"
-  python3 -c '
+  "${FM_PYTHON3_CMD[@]}" -c '
 import json,sys
 doc=json.load(open(sys.argv[1]))
 assert doc["summary"]["total"]==3
@@ -933,9 +943,9 @@ puts JSON.generate(
 )
 ' "$ROOT/.github/workflows/ci.yml") \
     || fail "could not parse tests-herdr timeouts from ci.yml"
-  job_timeout=$(python3 -c 'import json,sys; print(json.load(sys.stdin)["job_timeout"])' <<<"$json") \
+  job_timeout=$("${FM_PYTHON3_CMD[@]}" -c 'import json,sys; print(json.load(sys.stdin)["job_timeout"])' <<<"$json") \
     || fail "could not read job timeout from parsed workflow"
-  step_timeout=$(python3 -c 'import json,sys; print(json.load(sys.stdin)["step_timeout"])' <<<"$json") \
+  step_timeout=$("${FM_PYTHON3_CMD[@]}" -c 'import json,sys; print(json.load(sys.stdin)["step_timeout"])' <<<"$json") \
     || fail "could not read step timeout from parsed workflow"
   [ "$job_timeout" = 75 ] \
     || fail "tests-herdr job backstop must stay 75 minutes, got $job_timeout"
@@ -1323,7 +1333,7 @@ JSON
 JSON
   out=$("$RUNNER" --aggregate-json "$tmp/out.json" "$tmp/a.json" "$tmp/b.json")
   assert_contains "$out" "FM_TEST_AGGREGATE lanes=2 total=3 failed=1" "aggregate summary line"
-  python3 -c '
+  "${FM_PYTHON3_CMD[@]}" -c '
 import json,sys
 doc=json.load(open(sys.argv[1]))
 assert doc["kind"]=="aggregate"
@@ -1340,7 +1350,8 @@ assert len(doc["scripts"])==3
 # The Microsoft Store ships a `python3` alias that RESOLVES on PATH, prints an
 # install advert, and exits 49. `command -v python3` therefore reported success
 # and every subsequent call failed, which took out whole Windows runs rather than
-# degrading - so fm_test_python3 probes by EXECUTING and asking for the major
+# degrading - so the shared probe in bin/fm-python-lib.sh executes each
+# candidate and asks for the major
 # version. Both halves matter: `-c 'pass'` also succeeds under Python 2, and the
 # timing payloads are Python-3-only.
 #

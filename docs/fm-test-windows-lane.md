@@ -452,8 +452,11 @@ Windows ships Microsoft Store "app execution aliases" for `python` and `python3`
 They **resolve on PATH**, so `command -v python3` succeeds, but every invocation prints that install prompt and exits 49.
 The probe reported a working interpreter and then every call failed, so the run died rather than degrading - and `now_ms` would have injected the prompt text into the run's own output.
 
-`fm_test_python3` probes by actually executing the interpreter, caches the answer, and also accepts `python`, often the only real interpreter on a Windows machine - but only a Python 3 one, since the runner's own JSON payloads need `pathlib` and `open(..., encoding=)`, and a bare `-c 'pass'` would let a Python 2 through.
+`fm_python3` in [`../bin/fm-python-lib.sh`](../bin/fm-python-lib.sh) probes by actually executing the interpreter, caches the answer, and also accepts `python`, often the only real interpreter on a Windows machine - but only a Python 3 one, since the runner's own JSON payloads need `pathlib` and `open(..., encoding=)`, and a bare `-c 'pass'` would let a Python 2 through.
+It also accepts the multi-word `py -3`, which is why the resolved answer is the argv array `FM_PYTHON3_CMD` rather than a single word.
 Executing the interpreter is the only probe that answers the question being asked, so this too is one fix rather than a platform arm.
+The runner first carried a private copy of that probe; the copy is gone, and every caller in this repo now reads the one owner.
+[`verification/windows-python-probe.md`](verification/windows-python-probe.md) records the measurements and the falsifiability demonstration.
 
 The general lesson for the rest of this port: on Windows, `command -v` is not evidence a tool works.
 

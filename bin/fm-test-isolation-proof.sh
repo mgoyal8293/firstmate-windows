@@ -47,6 +47,8 @@ set -eu
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT" || exit 1
+# shellcheck source=bin/fm-python-lib.sh
+. "$ROOT/bin/fm-python-lib.sh"
 
 JOBS=4
 JSON_PATH=
@@ -75,8 +77,11 @@ now_iso() {
 }
 
 now_ms() {
-  if command -v python3 >/dev/null 2>&1; then
-    python3 -c 'import time; print(int(time.time() * 1000))'
+  # fm_python3, not `command -v python3`: the Windows Store alias resolves and
+  # then exits 49, which under `set -e` took the whole proof out instead of
+  # falling back to second precision.
+  if fm_python3; then
+    "${FM_PYTHON3_CMD[@]}" -c 'import time; print(int(time.time() * 1000))'
   else
     echo $(($(date +%s) * 1000))
   fi
@@ -220,7 +225,8 @@ global_git_snapshot() {
 
 write_json_artifact() {
   local out=$1 started=$2 finished=$3 run_id=$4 total=$5 failed=$6 concurrency=$7 duration=$8 records=$9
-  python3 - "$out" "$started" "$finished" "$run_id" "$total" "$failed" "$concurrency" "$duration" "$records" <<'PY'
+  fm_python3 || { fm_python3_refuse fm-test-isolation-proof; return 1; }
+  "${FM_PYTHON3_CMD[@]}" - "$out" "$started" "$finished" "$run_id" "$total" "$failed" "$concurrency" "$duration" "$records" <<'PY'
 import json, sys
 out, started, finished, run_id, total, failed, concurrency, duration, records_path = sys.argv[1:10]
 scripts = []

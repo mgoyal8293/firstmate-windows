@@ -10,7 +10,11 @@ TEARDOWN="$ROOT/bin/fm-teardown.sh"
 KIMI_HOOK="$ROOT/bin/fm-kimi-turnend-hook.sh"
 TMP_ROOT=$(fm_test_tmproot fm-kimi-harness)
 KIMI_RUNTIME_TASK_TMP=
-PYTHON_BIN=$(command -v python3) || fail "test needs python3"
+# Capability, not presence: `command -v python3` also finds the Windows
+# Microsoft Store alias, which resolves and then exits 49 without running, so
+# the interpreter this test puts on the fake PATH must be one that ran.
+fm_python3 || fail "test needs a working python3: $(fm_python3_refuse fm-kimi-harness 2>&1 | head -1)"
+PYTHON_BIN=$(command -v "${FM_PYTHON3_CMD[0]}")
 PYTHON_BIN_DIR=$(dirname "$PYTHON_BIN")
 JQ_BIN=$(command -v jq) || fail "test needs jq"
 BASE_PATH=${FM_TEST_BASE_PATH:-$PYTHON_BIN_DIR:/usr/bin:/bin:/usr/sbin:/sbin}
@@ -380,7 +384,7 @@ test_kimi_hook_install_refuses_without_jq() {
   printf '# Captain config\nmodel = "test"\n' > "$config"
   cp "$config" "$before"
   ln -s "$(command -v bash)" "$fakebin/bash"
-  ln -s "$(command -v python3)" "$fakebin/python3"
+  fm_test_install_python3_shim "$fakebin" || fail "could not stage python3 on the fake PATH"
 
   rc=0
   out=$(HOME="$home" PATH="$fakebin" "$KIMI_HOOK" install 2>&1) || rc=$?

@@ -5,6 +5,8 @@
 set -u
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+# shellcheck source=bin/fm-python-lib.sh
+. "$ROOT/bin/fm-python-lib.sh"
 TASK="fm-test-cmux-claude-composer-$$"
 LAB=
 SPAWNED=0
@@ -35,7 +37,7 @@ command -v claude >/dev/null 2>&1 || fail "FM_CMUX_CLAUDE_COMPOSER_LIVE=1 but Cl
 command -v cmux >/dev/null 2>&1 || fail "FM_CMUX_CLAUDE_COMPOSER_LIVE=1 but cmux is not installed"
 command -v jq >/dev/null 2>&1 || fail "FM_CMUX_CLAUDE_COMPOSER_LIVE=1 but jq is not installed"
 command -v treehouse >/dev/null 2>&1 || fail "FM_CMUX_CLAUDE_COMPOSER_LIVE=1 but treehouse is not installed"
-command -v python3 >/dev/null 2>&1 || fail "FM_CMUX_CLAUDE_COMPOSER_LIVE=1 but python3 is not installed"
+fm_python3 || fail "FM_CMUX_CLAUDE_COMPOSER_LIVE=1 but no working python3 was found"
 cmux ping >/dev/null 2>&1 || fail "FM_CMUX_CLAUDE_COMPOSER_LIVE=1 but the cmux socket is unavailable"
 
 LAB=$(mktemp -d "${TMPDIR:-/tmp}/fm-cmux-claude-composer.XXXXXX") || fail "could not create an isolated cmux Claude lab"
@@ -52,7 +54,7 @@ git -C "$LAB/projects/comms" commit -qm 'fixture: initialize cmux Claude compose
 
 STATUS="$LAB/state/$TASK.status"
 FM_HOME="$LAB" "$ROOT/bin/fm-brief.sh" "$TASK" comms --scout || fail "could not scaffold the Claude probe brief"
-python3 - "$LAB/data/$TASK/brief.md" "$STATUS" <<'PY'
+"${FM_PYTHON3_CMD[@]}" - "$LAB/data/$TASK/brief.md" "$STATUS" <<'PY'
 from pathlib import Path
 import sys
 

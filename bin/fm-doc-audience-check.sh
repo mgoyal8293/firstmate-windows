@@ -11,7 +11,12 @@ set -eu
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
-exec python3 - "$@" <<'PY'
+# `python3` on Windows is usually the Microsoft Store alias: it resolves on PATH
+# and then exits 49 without running, which killed this gate outright.
+# shellcheck source=bin/fm-python-lib.sh
+. "$ROOT/bin/fm-python-lib.sh"
+fm_python3 || { fm_python3_refuse fm-doc-audience-check; exit 1; }
+exec "${FM_PYTHON3_CMD[@]}" - "$@" <<'PY'
 from __future__ import annotations
 
 import argparse
