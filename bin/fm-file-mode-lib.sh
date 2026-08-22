@@ -59,6 +59,13 @@ FM_PR_MODE_ENFORCED=
 fm_pr_mode_enforced() {  # <dir>
   local dir=$1 probe observed
   [ -n "$dir" ] || return 0
+  # A missing owner is uncertainty, and uncertainty is enforcement. Both
+  # predicates here read the stored mode through fm_pr_file_mode, which
+  # bin/fm-pr-lib.sh owns; splitting them into this file made "sourced without
+  # that owner" reachable for the first time, and without this the probe below
+  # would compare an empty reading against 644, conclude the filesystem does not
+  # enforce modes, and WAIVE the assertion. Keep the strict check instead.
+  command -v fm_pr_file_mode >/dev/null 2>&1 || return 0
   if [ "$dir" = "$FM_PR_MODE_ENFORCED_DIR" ]; then
     return "$FM_PR_MODE_ENFORCED"
   fi
