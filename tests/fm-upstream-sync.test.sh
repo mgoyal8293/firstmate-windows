@@ -159,7 +159,7 @@ line-b
 # actually happened. The refusal is correct, but a BLOCKED report that does not
 # carry git's own reason turns a one-line diagnosis into a reproduction.
 test_blocked_merge_names_gits_reason() {
-  local root port out rc
+  local root port out rc noident
   root=$(fm_test_tmproot fm-upsync) || fail "upstream-sync: could not create a fixture root"
   port=$(make_fixture "$root")
   upstream_commit "$root" other.sh 'upstream-changed
@@ -168,9 +168,20 @@ test_blocked_merge_names_gits_reason() {
 
   # Strip every identity source the merge could draw on, the way a bare CI
   # checkout does. This merges cleanly when an identity is present.
+  #
+  # Unsetting HOME and the GIT_* variables is not enough on its own: git still
+  # falls back to the passwd entry plus the hostname, so whether the merge is
+  # refused would depend on the host having an empty GECOS field.
+  # user.useConfigOnly makes git refuse to auto-detect at all, which is the same
+  # refusal on every host. The script runs git itself, so this has to arrive as
+  # config rather than as `git -c`, and in a real file because
+  # GIT_CONFIG_GLOBAL takes a path.
+  noident="$root/no-identity.gitconfig"
+  printf '[user]\n\tuseConfigOnly = true\n' > "$noident"
+
   out=$(env -u HOME -u GIT_AUTHOR_NAME -u GIT_AUTHOR_EMAIL \
     -u GIT_COMMITTER_NAME -u GIT_COMMITTER_EMAIL \
-    GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null \
+    GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL="$noident" \
     FM_ROOT_OVERRIDE="$port" bash "$SYNC" --no-fetch --tests none 2>&1); rc=$?
   [ "$rc" -eq 3 ] || fail "upstream-sync: an unattemptable merge must exit 3, got $rc: $out"
   assert_contains "$out" 'BLOCKED' "upstream-sync: an unattemptable merge must be reported as blocked"
