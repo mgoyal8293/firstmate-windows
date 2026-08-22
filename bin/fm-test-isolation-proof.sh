@@ -341,6 +341,9 @@ RECORDS="$PROOF_ROOT/records.tsv"
 trap 'rm -rf "$PROOF_ROOT"' EXIT
 
 GIT_BEFORE=$(global_git_snapshot)
+# Resolve Python once here, in the shell that owns the cache, so the timing
+# calls below and every forked worker inherit one probe rather than repeating it.
+fm_python3 || true
 RUN_STARTED_ISO=$(now_iso)
 RUN_STARTED_MS=$(now_ms)
 RUN_ID="fm-isolation-${RUN_STARTED_MS}-$$"

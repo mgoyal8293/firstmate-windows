@@ -108,6 +108,7 @@ fm_python3() {
   done < <(fm_python3_candidates)
   # shellcheck disable=SC2034 # Read by sourcing callers, not by this file.
   FM_PYTHON3=
+  # shellcheck disable=SC2034 # Read by sourcing callers, not by this file.
   FM_PYTHON3_CMD=()
   FM_PYTHON3_PROBED=no
   return 1
@@ -130,13 +131,4 @@ fm_python3_refuse() {
   printf '%s: on Windows, PATH usually carries the Microsoft Store app-execution alias for python3, which exits 49 without running. Install Python 3 from python.org, or turn the alias off under Settings > Apps > Advanced app settings > App execution aliases.\n' \
     "$prefix" >&2
   return 1
-}
-
-# fm_python3_run <args...>: run the resolved interpreter, or refuse.
-# Returns 127 when no interpreter resolved, which callers that must tell that
-# case apart from the payload's own status should pre-empt by calling
-# fm_python3 themselves.
-fm_python3_run() {
-  fm_python3 || return 127
-  "${FM_PYTHON3_CMD[@]}" "$@"
 }

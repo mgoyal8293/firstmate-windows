@@ -101,6 +101,27 @@ SH
   chmod +x "$dir/$name"
 }
 
+# crashing_payload_python <dir> <name>: an interpreter that clears the version
+# probe - which needs only the builtin `sys` - and then dies with a traceback
+# inside a real payload, so it exits 1 exactly like a payload that ran and
+# answered "no". A status cannot tell those two apart; only the payload's own
+# sentinel can.
+crashing_payload_python() {
+  local dir=$1 name=$2
+  mkdir -p "$dir"
+  cat >"$dir/$name" <<'SH'
+#!/usr/bin/env bash
+case "$*" in
+  *"version_info[0] >= 3"*) exit 0 ;;
+esac
+cat >/dev/null
+echo "Traceback (most recent call last):" >&2
+echo "ModuleNotFoundError: No module named 'os'" >&2
+exit 1
+SH
+  chmod +x "$dir/$name"
+}
+
 # probe_in <bindir>: run one fresh fm_python3 probe with <bindir> prepended,
 # echoing the resolved command or REFUSED.
 probe_in() {
@@ -396,6 +417,26 @@ SH
   pass "the refusal names the interpreter that ran instead of claiming none was found"
 }
 
+test_ensure_agents_md_does_not_read_a_crashed_payload_as_a_wrong_pointer() {
+  local bin dir out rc=0
+  bin="$TMP_ROOT/ensure-crashing-payload"
+  dir="$TMP_ROOT/ensure-crashing-payload-wt"
+  store_stub "$bin" python3
+  crashing_payload_python "$bin" python
+  store_stub "$bin" py
+  fixture_pointer_worktree "$dir" || {
+    no_symlinks_note "crashed-payload case"
+    return 0
+  }
+  out=$(PATH="$bin:$PATH" "$ENSURE" "$dir" 2>&1) || rc=$?
+  [ "$rc" -eq 0 ] \
+    || fail "a payload that crashed with status 1 was read as a wrong pointer (rc=$rc): $out"
+  case "$out" in
+    *conflict*) fail "a crashed comparison payload was reported as a conflict: $out" ;;
+  esac
+  pass "an exit status of 1 from a crashed payload is not read as evidence about the pointer"
+}
+
 test_herdr_workspace_mover_runs_through_the_resolved_interpreter() {
   local bin out rc=0
   bin="$TMP_ROOT/herdr-mover"
@@ -458,5 +499,6 @@ test_ensure_agents_md_does_not_read_a_dead_interpreter_as_a_wrong_pointer
 test_ensure_agents_md_reports_undeterminable_rather_than_a_false_conflict
 test_ensure_agents_md_asks_realpath_when_the_interpreter_answers_nothing
 test_ensure_agents_md_names_the_interpreter_when_nothing_can_answer
+test_ensure_agents_md_does_not_read_a_crashed_payload_as_a_wrong_pointer
 test_herdr_workspace_mover_runs_through_the_resolved_interpreter
 test_kimi_hook_refuses_cleanly_on_the_stub

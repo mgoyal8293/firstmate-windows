@@ -189,6 +189,27 @@ test_changed_dependency_selection_and_unmapped_failure() {
   pass "changed selection covers dependents and fails closed for unmapped source"
 }
 
+test_changed_shared_python_library_selects_test_library_dependents() {
+  local tmp repo listed rc=0
+  tmp=$(mktemp -d "${TMPDIR:-/tmp}/fm-test-run-pylib.XXXXXX")
+  repo="$tmp/repo"
+  init_changed_fixture_repo "$repo"
+
+  # tests/lib.sh sources bin/fm-python-lib.sh, so a suite that never names the
+  # library still breaks when the probe does. None of the fixture suites names
+  # it; a basename-only scan would find no consumer at all and fail closed.
+  printf '\n' >>"$repo/bin/fm-python-lib.sh"
+  listed=$(cd "$repo" && bin/fm-test-run.sh --list --changed --base HEAD 2>"$tmp/err") || rc=$?
+  [ "$rc" -eq 0 ] \
+    || fail "the shared Python library has no changed-test mapping (rc=$rc): $(cat "$tmp/err")"
+  assert_contains "$listed" "tests/fm-pr-merge.test.sh" \
+    "the shared Python library does not select its transitive test-library dependents"
+  assert_contains "$listed" "tests/fm-bearings-snapshot.test.sh" \
+    "the shared Python library does not select snapshot coverage"
+  rm -rf "$tmp"
+  pass "a change to the shared Python library selects every test-library dependent"
+}
+
 test_empty_selection_emits_summary() {
   local tmp repo out json
   tmp=$(mktemp -d "${TMPDIR:-/tmp}/fm-test-run-empty.XXXXXX")
@@ -1473,6 +1494,7 @@ test_family_selection
 test_single_script_selection
 test_changed_file_selection_is_conservative
 test_changed_dependency_selection_and_unmapped_failure
+test_changed_shared_python_library_selects_test_library_dependents
 test_empty_selection_emits_summary
 test_timing_markers_and_json
 test_python3_probe_rejects_a_resolvable_but_broken_interpreter

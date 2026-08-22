@@ -157,19 +157,21 @@ is_correct_claude_symlink() {
   UNDETERMINABLE_CAUSE=interpreter
   if fm_python3; then
     UNDETERMINABLE_CAUSE=payload
-    "${FM_PYTHON3_CMD[@]}" - "$CLAUDE" "$AGENTS" <<'PY'
+    # The payload answers on stdout, not through its exit status, because a
+    # status cannot say "I did not run": CPython exits 1 on an uncaught
+    # traceback, which is indistinguishable from a real "the paths differ", and
+    # a signal or a half-installed stdlib produces some other number. Only the
+    # EQ or NE sentinel is an answer; anything else - no output, a wrapper's
+    # extra chatter, a partial write - falls through to the resolver below.
+    answer=$("${FM_PYTHON3_CMD[@]}" - "$CLAUDE" "$AGENTS" <<'PY' || true
 import os
 import sys
-sys.exit(0 if os.path.realpath(sys.argv[1]) == os.path.realpath(sys.argv[2]) else 1)
+print("EQ" if os.path.realpath(sys.argv[1]) == os.path.realpath(sys.argv[2]) else "NE")
 PY
-    # Only 0 and 1 are answers. Any other status - a signal, or a broken stdlib
-    # on a half-installed Python - means the interpreter ran and reported
-    # nothing, so fall through to the resolver below instead of giving up: an
-    # interpreter that misbehaved is exactly the case the tri-state exists to
-    # keep from refusing a healthy worktree.
-    case $? in
-      0) return 0 ;;
-      1) return 1 ;;
+    )
+    case "$answer" in
+      EQ) return 0 ;;
+      NE) return 1 ;;
     esac
   fi
   # No usable answer from Python, either because nothing ran or because what ran

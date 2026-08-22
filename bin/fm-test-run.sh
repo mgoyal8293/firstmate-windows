@@ -1351,6 +1351,16 @@ families_for_changed_path() {
     docs/configuration.md|docs/supervision-protocols/*)
       printf '%s\n' pure-contract-unit
       ;;
+    bin/fm-python-lib.sh)
+      # tests/lib.sh sources this library, so every suite that sources the test
+      # library depends on it too, and its own basename appears in only the
+      # handful of suites that name it directly. Resolve consumers through the
+      # same reference scan the shared-helper arm below uses, keyed on the door
+      # they all come in through; every string naming this file contains that
+      # needle, so the scan is a superset of the direct namers.
+      families_for_test_reference lib.sh \
+        || printf '%s\n' "__unmapped__:$path"
+      ;;
     tests/lib.sh|tests/*-helpers.sh)
       families_for_test_reference "$(basename "$path")" \
         || printf '%s\n' "__unmapped__:$path"
