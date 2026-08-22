@@ -645,6 +645,19 @@ main_inventory_json() {  # <backlog-json> <tasks-json>
 # validated parent read needs.
 # This mode never reads parent events or terminal text and never aggregates
 # nested secondmates.
+#
+# ACCEPTED RESIDUAL, not an oversight: a child whose run genuinely cannot be
+# assessed reads `unknown` from bin/fm-crew-state.sh, which lands in
+# $unknown_children, clears $valid and makes the home's single `state` word
+# "unknown" ahead of captain_decision, active_child_work and externally_held.
+# That is a label only. decisions_open, active_children, holds, queued and landed
+# all still pass through - child_current_unavailable is deliberately whitelisted
+# downstream so the summary is not discarded - so a consumer reading the arrays
+# loses nothing, and the honest word for a home containing an unassessable child
+# is not a confident one. Fixing the label would mean new precedence machinery in
+# a second place; the verdict ranking in bin/fm-crew-run-verdict-lib.sh is where
+# an unassessable child gets narrowed, and a forge-confirmed landing already reads
+# `done` there rather than reaching this list.
 secondmate_home_summary_json() {  # <backlog-json> <tasks-json>
   jq -n \
     --arg generated "$SNAPSHOT_NOW" \

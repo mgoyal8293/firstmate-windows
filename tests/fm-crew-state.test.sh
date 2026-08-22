@@ -1959,9 +1959,9 @@ test_checks_passed_outcome_is_done_without_a_completed_ci_row() {
 # A PR URL this reader has no forge client for is a PERMANENT condition, and it
 # used to be reported with the same word as a timed-out or unauthenticated gh.
 # On the coarse path that conflation is load-bearing, because a completed row
-# parks unless the forge confirms a landing: without the distinction, every
-# finished run on a non-GitHub project parks with no way to tell it from a
-# transient failure that will clear on the next heartbeat.
+# reads unknown unless the forge confirms a landing: without the distinction,
+# every finished run on a non-GitHub project reads unknown with no way to tell it
+# from a transient failure that will clear on the next heartbeat.
 test_gitlab_merge_request_is_named_not_reported_as_a_forge_failure() {
   reset_fakes
   local d short out
@@ -2116,9 +2116,9 @@ $(branch_sync_block 01M0EFHKF1A3CJX4KK58HWJ7D2 "$PIPE_HEAD" 00000000000000000000
 # done only when the forge confirms a landing - and its column index is not
 # evidence: the same listing has been described here with the date as one field
 # and as two, so a fixed index is one layout change away from handing a timestamp
-# to the URL owner and parking every completed row forever with "PR url not
-# recognized". Both rows below put the url where a sixth-field read would miss
-# it.
+# to the URL owner and leaving every completed row unknown forever with "PR url
+# not recognized". Both rows below put the url where a sixth-field read would
+# miss it.
 test_coarse_pr_url_is_found_by_shape_not_by_column() {
   reset_fakes
   local d short out
@@ -2260,6 +2260,91 @@ test_padded_step_columns_do_not_change_the_verdict() {
   pass "padded step columns do not change the verdict"
 }
 
+# ONE ranking, both paths. A forge-confirmed merge is stronger evidence than ci
+# completion for the question actually asked - the merge proves the work LANDED,
+# ci completion only proves that checks ran - so it settles done whatever the ci
+# step says. This is the recorded ci-SKIPPED incident run with one thing changed:
+# its PR is merged instead of open and DIRTY.
+test_forge_confirmed_merge_settles_a_ci_skipped_run() {
+  reset_fakes
+  local d out
+  d=$(new_case merge-settles-skipped)
+  make_repo_on_branch "$d/wt" fm/feat-mergeskip
+  make_fakebin "$d" >/dev/null
+  fm_write_meta "$d/state/mergeskip.meta" "window=fm:fm-mergeskip" "worktree=$d/wt" "kind=ship" "harness=claude"
+  FM_FAKE_AXI_STATUS="$(run_passed_ci_skipped fm/feat-mergeskip)"
+  FM_FAKE_GH_PR='{"mergeStateStatus":"UNKNOWN","state":"MERGED","url":"https://github.com/o/r/pull/6"}'
+  out=$(run_crew_state "$d" mergeskip)
+  assert_contains "$out" "state: done" "a confirmed landing settles the run whatever ci says"
+  assert_contains "$out" "PR merged" "the confirmed landing is what settled it"
+  assert_not_contains "$out" "cannot tell" "no line may claim a merge and doubt the pass at once"
+  assert_not_contains "$out" "no CI evidence" "the landing, not the ci gap, is the verdict here"
+  pass "a forge-confirmed merge settles a ci-skipped run"
+}
+
+# The property that actually failed: the full `axi status` path and the coarse
+# runs-list path ranked this evidence separately, so ONE world state read `done`
+# or `unknown` depending only on whether an unrelated crew happened to have a run
+# in flight - which is what decides who `axi status` answers for. Same run, same
+# PR, same forge answer, asserted for BYTE equality across both paths rather than
+# each path in isolation.
+test_both_paths_agree_on_one_world_state() {
+  reset_fakes
+  local d short full coarse
+  d=$(new_case path-agreement)
+  make_repo_on_branch "$d/wt" fm/feat-agree
+  short=$(git -C "$d/wt" rev-parse --short=7 HEAD)
+  make_fakebin "$d" >/dev/null
+  fm_write_meta "$d/state/agree.meta" "window=fm:fm-agree" "worktree=$d/wt" "kind=ship" "harness=claude"
+  FM_FAKE_GH_PR='{"mergeStateStatus":"UNKNOWN","state":"MERGED","url":"https://github.com/o/r/pull/6"}'
+  # Full path: this branch's own run answers, ci skipped, PR merged.
+  FM_FAKE_AXI_STATUS="$(run_passed_ci_skipped fm/feat-agree)"
+  full=$(run_crew_state "$d" agree)
+  # Coarse path: an unrelated crew's run answers instead, so the same run is seen
+  # only as its runs-list row - same sha, same PR, same forge answer.
+  FM_FAKE_AXI_STATUS="$(run_running fm/other-crew)"
+  FM_FAKE_RUNS_LIST="$(cat <<EOF
+  running    fm/other-crew aaaaaaa  2026-08-22 15:30
+  completed  fm/feat-agree ${short}  2026-08-22 15:05  https://github.com/o/r/pull/6
+EOF
+)"
+  coarse=$(run_crew_state "$d" agree)
+  [ "$full" = "$coarse" ] ||
+    fail "the two paths disagree on one world state:"$'\n'"full:   $full"$'\n'"coarse: $coarse"
+  assert_contains "$full" "state: done" "the full path settles the merged run"
+  assert_contains "$coarse" "state: done" "so does the coarse path"
+  pass "both paths agree on one world state"
+}
+
+# The same agreement where nothing settles the run: an open PR and no ci evidence
+# is unknown on either path, and neither may claim a landing. The gap phrase
+# differs by construction, because the paths genuinely know different things about
+# the ci step, so this asserts the verdict rather than the whole line.
+test_both_paths_agree_when_nothing_settles_the_run() {
+  reset_fakes
+  local d short full coarse
+  d=$(new_case path-agreement-open)
+  make_repo_on_branch "$d/wt" fm/feat-agreeopen
+  short=$(git -C "$d/wt" rev-parse --short=7 HEAD)
+  make_fakebin "$d" >/dev/null
+  fm_write_meta "$d/state/agreeopen.meta" "window=fm:fm-agreeopen" "worktree=$d/wt" "kind=ship" "harness=claude"
+  FM_FAKE_GH_PR='{"mergeStateStatus":"DIRTY","state":"OPEN","url":"https://github.com/o/r/pull/6"}'
+  FM_FAKE_AXI_STATUS="$(run_passed_ci_skipped fm/feat-agreeopen)"
+  full=$(run_crew_state "$d" agreeopen)
+  FM_FAKE_AXI_STATUS="$(run_running fm/other-crew)"
+  FM_FAKE_RUNS_LIST="$(cat <<EOF
+  running    fm/other-crew aaaaaaa  2026-08-22 15:30
+  completed  fm/feat-agreeopen ${short}  2026-08-22 15:05  https://github.com/o/r/pull/6
+EOF
+)"
+  coarse=$(run_crew_state "$d" agreeopen)
+  assert_contains "$full" "state: unknown" "an open PR and no ci evidence settles nothing"
+  assert_contains "$coarse" "state: unknown" "and the coarse path says the same"
+  assert_not_contains "$full" "PR merged" "an open PR is never a landing on either path"
+  assert_not_contains "$coarse" "PR merged" "including from the runs-list row"
+  pass "both paths agree when nothing settles the run"
+}
+
 test_active_run_is_authoritative
 test_stale_needs_decision_superseded
 test_stale_blocked_superseded
@@ -2327,6 +2412,9 @@ test_a_table_after_active_steps_is_not_read_as_an_active_step
 test_branch_sync_gate_status_does_not_park_a_running_run
 test_terminal_pass_without_ci_evidence_supersedes_a_stale_gate_log
 test_padded_step_columns_do_not_change_the_verdict
+test_forge_confirmed_merge_settles_a_ci_skipped_run
+test_both_paths_agree_on_one_world_state
+test_both_paths_agree_when_nothing_settles_the_run
 test_terminal_pass_without_a_steps_table_is_not_done
 test_terminal_pass_with_a_pending_ci_step_is_not_done
 test_coarse_completed_row_without_a_merge_is_not_done

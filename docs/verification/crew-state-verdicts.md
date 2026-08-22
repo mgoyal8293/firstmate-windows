@@ -14,7 +14,7 @@ Branch: `fm/fm-crew-state-stale-run-masks-live`.
 
 ```
 $ bash tests/fm-crew-state.test.sh | grep -c '^ok'
-76
+79
 $ bash tests/fm-inactive-reconcile.test.sh 2>/dev/null | grep -c '^ok'
 17
 ```
@@ -33,7 +33,7 @@ Every row must fail, and must fail on the named assertion.
 | An unfetched pipeline head still admits a live verdict | `unresolvable` admits nothing | `test_superseded_failed_row_does_not_mask_live_row` | fails: `missing: 'state: working'` |
 | An unfetched pipeline head never admits a terminal verdict | `unresolvable` admits everything | `test_terminal_run_at_unfetched_head_is_not_attributed` | fails: `unexpected: 'source: run-step'` |
 | An executing step attributes its run regardless of head geometry | drop the liveness override | `test_live_active_step_attributes_run_despite_head_geometry` | fails: `missing: 'state: working'` |
-| A skipped `ci` step is never validation | let the evidence whitelist accept every ci status word (`if true`) | `test_ci_skipped_pass_never_reads_as_done` | fails: `unexpected: 'state: done'` |
+| A skipped `ci` step is never validation by itself | let the ranking's ci arm accept every ci status word | `test_ci_skipped_pass_never_reads_as_done` | fails: `unexpected: 'state: done'` |
 | A merged or closed claim comes only from the forge | restore the `run passed: PR merged/closed` detail | `test_open_pr_is_never_reported_as_merged` | fails: `missing: 'not merged'` |
 | An unanswered forge is never rendered as a landing | restore the same detail | `test_unanswered_forge_never_claims_a_landing` | fails: `missing: 'unverified'` |
 | `active_steps` columns are split quote-aware | stop treating `"` as a quote | `test_live_run_at_unfetched_head_is_not_replaced_by_older_failed_run` | fails: `missing: 'last activity 3m11s ago'` |
@@ -41,8 +41,8 @@ Every row must fail, and must fail on the named assertion.
 | Ownership requires `pipeline.run` to be this run | drop that equality | `test_branch_sync_for_another_run_does_not_prove_ownership` | fails: `unexpected: 'source: run-step'` |
 | Ownership requires the pipeline head to be this run's head | drop that equality | `test_branch_sync_for_another_head_does_not_prove_ownership` | fails: `unexpected: 'source: run-step'` |
 | Ownership requires `local.head` to be this checkout | drop that equality | `test_branch_sync_for_another_checkout_does_not_prove_ownership` | fails: `unexpected: 'source: run-step'` |
-| An absent `ci` row is the same absence of evidence a skipped one is | revert the whitelist to the old skipped-only blacklist (`[ "$1" != skipped ]`) | `test_terminal_pass_without_a_steps_table_is_not_done` | fails: `unexpected: 'state: done'` |
-| An `outcome: checks-passed` run is done without a corroborating `ci,completed` row | send checks-passed back through the ci-step whitelist | `test_checks_passed_outcome_is_done_without_a_completed_ci_row` | fails: `missing: 'state: done'` |
+| An absent `ci` row is the same absence of evidence a skipped one is | revert that arm to the old skipped-only blacklist (`[ "$ci" != skipped ]`) | `test_terminal_pass_without_a_steps_table_is_not_done` | fails: `unexpected: 'state: done'` |
+| An `outcome: checks-passed` run is done without a corroborating `ci,completed` row | send checks-passed back through the terminal ranking | `test_checks_passed_outcome_is_done_without_a_completed_ci_row` | fails: `missing: 'state: done'` |
 | So is any other `ci` status word | the same mutation | `test_terminal_pass_with_a_pending_ci_step_is_not_done` | fails: `unexpected: 'state: done'` |
 | A coarse runs-list `completed` row is not a pass without a forge-confirmed landing | let every forge answer take the done arm | `test_coarse_completed_row_without_a_merge_is_not_done` | fails: `unexpected: 'state: done'` |
 | Nor when the forge did not answer at all | the same mutation | `test_coarse_completed_row_with_an_unanswered_forge_is_not_done` | fails: `unexpected: 'state: done'` |
@@ -56,10 +56,13 @@ Every row must fail, and must fail on the named assertion.
 | A terminal pass with no CI evidence reads unknown, never parked | return `parked` for that verdict again | `test_terminal_pass_without_ci_evidence_supersedes_a_stale_gate_log` | fails: `missing: 'status-log superseded'` |
 | The ci status column is read tolerant of padding and quoting | drop the trim, restoring the bare `[^,]*` capture | `test_padded_step_columns_do_not_change_the_verdict` | fails: `missing: 'state: done'` |
 | So is every `active_steps` column | drop the per-value trim in the row split | the same case | fails: `missing: 'test running'` |
+| A forge-confirmed landing settles a terminated run whatever the ci step says | drop the landing arm from the ranking | `test_forge_confirmed_merge_settles_a_ci_skipped_run` | fails: `missing: 'state: done'` |
+| Both terminal paths use that ONE ranking | restore the asymmetry, letting only the no-steps path use the landing | `test_both_paths_agree_on_one_world_state` | fails: `the two paths disagree on one world state` |
+| And they agree when nothing settles the run | give the no-steps path its own done arm whatever the forge said | `test_both_paths_agree_when_nothing_settles_the_run` | fails: `missing: 'state: unknown'` |
 | The per-child forge bound is at most a third of the scan's remaining budget | pass the whole remaining budget as the bound | `test_forge_bound_is_derived_from_the_remaining_budget` (`tests/fm-inactive-reconcile.test.sh`) | fails: `forge bound exceeds a third of the 6s budget: '3\|'` |
 | A budget too small to spare the read skips it instead of shrinking it | take the bound arm unconditionally (`if true`) | the same case | fails: `a 2s budget cannot spare a whole second of forge read: '0\|'` |
 
-29 of 29.
+32 of 32.
 
 The first two rows share a case deliberately: both guards sit on the runs-list path, and the case needs both to hold - one stops the dead run being reached, the other makes the live run usable.
 Three later pairs share a mutation rather than a case, because one gate covers several distinct ways for the evidence to be absent and each way needs its own case to show it is covered.
@@ -75,6 +78,25 @@ The last two rows live in `tests/fm-inactive-reconcile.test.sh` because the budg
 The mutations are ordinary one-line edits to a copy of `bin/`; nothing in the tree needs to change to re-derive them.
 For each row, copy the tree to a scratch directory, apply the mutation named above, run the one case, and confirm it fails on the named assertion.
 The case names are the functions in `tests/fm-crew-state.test.sh`, except the budget row, whose case lives in `tests/fm-inactive-reconcile.test.sh`; running either file's whole runner list also works and is slower.
+
+## Amended acceptance criterion: done by itself
+
+The criterion this branch started from read "a skipped ci step never reads as done".
+It was AMENDED, by the same authority that set it, to "a skipped ci step never reads as done BY ITSELF".
+Recorded here because a future reader will otherwise find the code contradicting the older wording and try to restore it.
+
+The reasoning: a forge-confirmed merge is stronger evidence than ci completion for the question actually being asked.
+The merge proves the work LANDED, while ci completion only proves that checks ran.
+The defect this whole change exists to kill was ever claiming merged when nothing merged, and a confirmed merge cannot be that defect.
+
+The case that settled it is the real justification.
+On a repo with no CI checks configured every run records `ci,skipped`, so a merged crew read `unknown` permanently on the full `axi status` path, and `bin/fm-inactive-reconcile.sh` accepts only `done` or `failed`, so its terminal outcome was never reconciled and the captain never got the presentation receipt.
+Then an unrelated crew started a run in the same repo; `axi status` is repo-scoped, so it began answering for that other branch, the first crew fell to the coarse runs-list path, and the identical world state read `done - run completed: PR merged`.
+One world state resolving to opposite verdicts depending on whether an unrelated task happens to be running is the same nondeterminism this change exists to remove, and shipping it would have been worse than the bug it was guarding against.
+
+The structural answer is that `fm_crew_terminal_verdict` is now the ONE ranking both paths call, in one order: a forge-confirmed landing, then this run's own `ci,completed`, then unknown.
+A path that cannot see a steps table says so by passing `FM_CREW_CI_NO_STEP_DETAIL`, which is missing evidence inside that single ranking rather than a second ranking.
+The two agreement cases in the matrix above assert the agreement directly - one compares the two paths' emitted lines for byte equality on a merged run - because per-path cases in isolation are exactly what let the two rankings drift apart.
 
 ## Forge-read bound
 
@@ -122,7 +144,8 @@ Both were verified on 2026-08-22 against `no-mistakes` v1.48.0, because run sele
 
 Selection uses the second because finding the branch's run at all outranks richer detail about it.
 The first would allow a follow-up `axi status --run <id>` and so give that path the same full step, activity and `branch_sync` evidence the `axi status` path gets, which a coarse row cannot carry; that upgrade is named in `bin/fm-crew-state.sh` as follow-up work rather than done here.
-Until it lands, a coarse `completed` row can never satisfy the CI-evidence whitelist, so the forge's own answer is the only terminal fact that path has: merged or closed reads done, and open or unanswered reads unknown.
+Until it lands, a coarse `completed` row can offer no ci-step evidence at all, so the forge's own answer is the only terminal fact that path has: merged or closed reads done, and open or unanswered reads unknown.
+That is the same ranking the full path uses, reached with one input missing rather than by a second rule.
 
 ## branch_sync availability
 

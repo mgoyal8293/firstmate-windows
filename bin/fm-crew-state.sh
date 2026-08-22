@@ -30,13 +30,14 @@
 #      running/fixing -> working, ci -> working, awaiting_approval/fix_review ->
 #      parked (with gate findings), failed/cancelled -> failed, and
 #      checks-passed -> done, since that word is itself a statement about the
-#      checks. `passed` is not: it says the PIPELINE completed, so it reads done
-#      only when this run's own ci step is recorded `completed`, and every other
-#      ci-step answer is the absence of CI evidence and reports unknown, because
-#      a terminated run whose validation cannot be established is exactly "I
-#      cannot tell", not a gate anyone can respond to. The coarse runs-list path
-#      carries no steps table at all, so a `completed` row there reads done only
-#      on a forge-confirmed merge or close, and unknown otherwise. EXCEPT: while
+#      checks. `passed` is not: it says only that the PIPELINE completed, so every
+#      terminated run goes through one ranking (fm_crew_terminal_verdict) - a
+#      forge-confirmed merge or close reads done whatever the ci step says, else
+#      this run's own `ci,completed` reads done, else unknown, because a
+#      terminated run whose validation cannot be established is exactly "I cannot
+#      tell", not a gate anyone can respond to. The coarse runs-list path carries
+#      no steps table at all, and passes that into the same ranking as missing
+#      evidence rather than ranking the evidence a second way. EXCEPT: while
 #      the active step is ci, `axi status` alone cannot tell "still waiting on
 #      checks" from "checks green, waiting on merge" (see nm_ci_checks_state) -
 #      a ci-step log-tail check overrides working -> done once checks read
@@ -510,11 +511,12 @@ if [ "$HAVE_RUN" = 1 ]; then
     case "$COARSE_STATUS" in
       running)   RUN_STATE=working; RUN_DETAIL="validating (background run)" ;;
       completed)
-        # A coarse row carries no steps table, so this path can never see
-        # whether the ci step ran - the same absence of evidence a skipped ci
-        # step is. The forge's own answer is the only terminal fact available
-        # here; fm-crew-run-verdict-lib.sh owns the ruling.
-        coarse_verdict=$(fm_crew_coarse_completed_verdict "$(crew_forge_answer)")
+        # A coarse row carries no steps table, so this path cannot answer the ci
+        # question either way - and it says exactly that, by passing the
+        # no-step-detail sentinel into the SAME ranking the full path uses. Two
+        # rankings for one question is how the two paths came to read `done` and
+        # `unknown` for one world state; fm-crew-run-verdict-lib.sh owns the rule.
+        coarse_verdict=$(fm_crew_terminal_verdict "$FM_CREW_CI_NO_STEP_DETAIL" "$(crew_forge_answer)")
         RUN_STATE=${coarse_verdict%%|*}
         RUN_DETAIL=${coarse_verdict#*|}
         ;;
@@ -543,13 +545,12 @@ if [ "$HAVE_RUN" = 1 ]; then
           RUN_STATE="done"; RUN_DETAIL="checks green: PR ready for review"
           ;;
         passed)
-          # `outcome: passed` means the PIPELINE completed, not that CI passed,
-          # so it is only taken at face value when this run's own ci step is
-          # recorded `completed`. Everything else - skipped, absent, any other
-          # word - is the absence of validation, and reporting done there is the
-          # destructive direction. fm_crew_terminal_pass_verdict owns that
-          # whitelist for both `passed` and the no-outcome `completed` case.
-          pass_verdict=$(fm_crew_terminal_pass_verdict "$ci_step_recorded" "$(crew_forge_answer)")
+          # `outcome: passed` means the PIPELINE completed, not that CI passed, so
+          # it never settles this on its own. fm_crew_terminal_verdict owns the ONE
+          # ranking every terminated run goes through - forge-confirmed landing,
+          # then this run's own `ci,completed`, then unknown - and the coarse path
+          # below calls the same function so the two cannot disagree.
+          pass_verdict=$(fm_crew_terminal_verdict "$ci_step_recorded" "$(crew_forge_answer)")
           RUN_STATE=${pass_verdict%%|*}
           RUN_DETAIL=${pass_verdict#*|}
           ;;
@@ -577,7 +578,7 @@ if [ "$HAVE_RUN" = 1 ]; then
         ci)             RUN_STATE=working; RUN_DETAIL="ci running" ;;
         running|fixing) RUN_STATE=working; RUN_DETAIL="validating ($status)" ;;
         completed)
-          pass_verdict=$(fm_crew_terminal_pass_verdict "$ci_step_recorded" "$(crew_forge_answer)")
+          pass_verdict=$(fm_crew_terminal_verdict "$ci_step_recorded" "$(crew_forge_answer)")
           RUN_STATE=${pass_verdict%%|*}
           RUN_DETAIL=${pass_verdict#*|}
           ;;

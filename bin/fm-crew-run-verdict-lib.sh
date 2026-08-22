@@ -71,22 +71,19 @@
 #     in its own right and needs no corroborating ci-step row. Where merge is
 #     left to the captain the ci step stays `running` for the whole monitor
 #     phase, so requiring one would withhold the very signal a captain waits for.
-#   * outcome passed, ci COMPLETED                -> done, and the merged/closed
-#     claim is emitted ONLY when the forge confirms it (fm_crew_forge_pr_state)
-#   * outcome passed, ci NOT COMPLETED            -> NOT done. `passed` says only
-#     that the PIPELINE completed, so it can hide a skipped ci step - the
-#     destructive direction. CI evidence is a WHITELIST here: only this run's own
-#     `ci` step recorded as `completed` proves that CI ran. Skipped, absent, or
-#     any other status word is the ABSENCE of that evidence, and it reports
-#     UNKNOWN, with the detail naming the terminated run, the ci word that
-#     settled it and the forge's own answer. Same rule for a run whose status is
-#     `completed` with no outcome word at all.
-#     See fm_crew_terminal_pass_verdict for why unknown is the honest word here
-#     and why `parked` was the wrong one.
-#   * a coarse runs-list `completed` row carries no steps table at all, so it can
-#     never satisfy that whitelist: it reads done only when the forge confirms
-#     merged or closed, and unknown otherwise. See
-#     fm_crew_coarse_completed_verdict.
+#   * a run that TERMINATED - outcome passed, status completed with no outcome
+#     word, or a coarse runs-list `completed` row - goes through ONE ranking,
+#     fm_crew_terminal_verdict, which both paths call so they cannot rank the same
+#     evidence differently: a forge-confirmed merge or close settles done whatever
+#     the ci step says, and the merged/closed words are emitted ONLY from that
+#     live answer (fm_crew_forge_pr_state); else this run's own `ci` step recorded
+#     `completed` settles done with no landing claimed; else unknown, with the
+#     detail naming the terminated run, the ci word (or its absence) that settled
+#     it and the forge's own answer. A path with no steps table to read says so by
+#     passing FM_CREW_CI_NO_STEP_DETAIL, which is missing evidence inside that one
+#     ranking rather than a second ranking. See fm_crew_terminal_verdict for the
+#     amended acceptance criterion behind the merge rule, and for why unknown
+#     rather than `parked` is the honest word when nothing settles it.
 #
 # PROVING PIPELINE OWNERSHIP. An unresolvable head is refused a terminal verdict
 # on geometry alone because geometry cannot tell "the pipeline pushed commits we
@@ -436,10 +433,10 @@ fm_crew_runs_newest_row_for_branch() {  # <runs-output> <branch>
 # different situation - and none may ever be rendered as a landing.
 #
 # Withholding the merged claim is the whole of what a non-answer costs. A
-# full-path terminal pass whose own `ci` step is recorded `completed` still reads
-# done on a project this reader cannot query, because that run carries its own CI
-# evidence; only the coarse runs-list path, which has none to fall back on, stays
-# unknown there, and it now says why.
+# terminal run whose own `ci` step is recorded `completed` still reads done on a
+# project this reader cannot query, because that run carries its own CI evidence;
+# a run with neither that evidence nor an answer stays unknown, and it now says
+# which of the two is missing.
 #
 # bin/fm-pr-lib.sh owns PR/MR URL identity and bin/fm-timeout-lib.sh owns the
 # bound; the caller must source both. Parsing the URL here instead would be a
@@ -526,6 +523,7 @@ fm_crew_forge_suffix() {  # <forge-answer>
 # as one, and an unrecognized status word is named rather than glossed.
 fm_crew_ci_evidence_gap() {  # <ci-step-status>
   case "$1" in
+    "$FM_CREW_CI_NO_STEP_DETAIL") printf 'no step detail on the runs-list path' ;;
     '')      printf 'no ci step recorded' ;;
     skipped) printf 'ci SKIPPED' ;;
     *)       printf 'ci %s' "$1" ;;
@@ -545,23 +543,51 @@ fm_crew_no_ci_evidence_detail() {  # <gap> <forge-answer>
   fm_crew_forge_suffix "$2"
 }
 
-# The verdict for a run that reached `outcome: passed`, or `status: completed`
-# with no outcome word at all, as "<state>|<detail>". NOT the path for
-# `outcome: checks-passed`, which carries its own statement about the checks and
-# is settled before this is reached.
+# Sentinel <ci-step-status> for a path that carries NO steps table at all, so it
+# cannot answer the ci question either way. The coarse runs-list path passes this;
+# no TOON status word can collide with it.
+FM_CREW_CI_NO_STEP_DETAIL='(no steps table)'
+
+# THE ranking for a run that has TERMINATED - `outcome: passed`, `status:
+# completed` with no outcome word, or a coarse runs-list `completed` row - as
+# "<state>|<detail>". NOT the path for `outcome: checks-passed`, which carries its
+# own statement about the checks and is settled before this is reached.
 #
-# CI evidence is a WHITELIST, not a blacklist: only this run's own `ci` step
-# recorded as `completed` proves that CI ran for this work. A skipped step, an
-# absent `ci` row, a record with no steps table at all, and any other status word
-# are all the ABSENCE of that evidence, and absence of evidence must never read
-# as a pass - reporting done there is the destructive direction, because it
-# invites reporting the work as landed and tearing down an unmerged branch.
-# Everything outside the whitelist therefore reports `unknown`, and the state word
-# matters as much as the verdict does:
-#   * unknown is the HONEST word. A terminated run with no CI evidence means
-#     exactly "I cannot tell whether this passed", which is the principle the
-#     whole model rests on - prefer unknown to a confident wrong answer wherever
-#     the evidence does not settle it.
+# ONE owner, called by BOTH the full `axi status` path and the coarse runs-list
+# path. They must not rank this evidence separately: they did once, in opposite
+# orders, and the result was that the SAME world state read `done` or `unknown`
+# depending only on whether an unrelated crew happened to have started a run,
+# which decides which listing answers for this branch. A path that knows less
+# says so by passing FM_CREW_CI_NO_STEP_DETAIL as its ci-step status - missing
+# evidence fed into this ranking, never a second ranking.
+#
+# The order, strongest evidence first:
+#   1. A forge-confirmed landing - merged or closed - settles DONE, whatever the
+#      ci step says. For the question actually being asked, a merge is STRONGER
+#      evidence than ci completion: the merge proves the work LANDED, while ci
+#      completion only proves that checks ran. The defect this whole model exists
+#      to kill was claiming merged when nothing merged, and a confirmed merge
+#      cannot be that defect.
+#   2. Otherwise this run's own `ci` step recorded `completed` settles DONE, with
+#      the merge state reported as open or unverified and no landing claimed.
+#   3. Otherwise UNKNOWN, naming what is missing. `passed` says only that the
+#      PIPELINE completed, so it can hide a skipped ci step - the destructive
+#      direction - and a skipped step, an absent `ci` row, a record with no steps
+#      table, and any other status word are all the ABSENCE of validation.
+#
+# The acceptance criterion behind rule 1 was AMENDED by the same authority that
+# set it, from "a skipped ci step never reads as done" to "a skipped ci step never
+# reads as done BY ITSELF". Rule 1 is the amendment; without it, a merged crew on
+# a repo with no CI configured (every run records `ci,skipped`) read unknown
+# forever, its terminal outcome never reconciled, until an unrelated crew started
+# a run and pushed the same world state onto the coarse path, where it read done.
+# See docs/verification/crew-state-verdicts.md for that case in full.
+#
+# `unknown` at rule 3, rather than `parked`, is deliberate too:
+#   * unknown is the HONEST word. A terminated run with no CI evidence and no
+#     confirmed landing means exactly "I cannot tell whether this passed", which
+#     is the principle the whole model rests on - prefer unknown to a confident
+#     wrong answer wherever the evidence does not settle it.
 #   * `parked` was tried here first and was wrong, because that word already
 #     meant "parked at a gate the worker can respond to", and a terminated run is
 #     not a gate anyone can respond to. Two meanings in one word is what let them
@@ -571,34 +597,20 @@ fm_crew_no_ci_evidence_detail() {  # <gap> <forge-answer>
 #     so an already-resolved decision could resurface and drive the fleet posture
 #     to a captain decision citing a resolved key - a false demand for the
 #     captain's attention.
-# No precision is lost, because fm_crew_no_ci_evidence_detail carries it. And
-# unknown is still non-terminal, so it cannot license teardown or a captain-facing
-# failure either.
-fm_crew_terminal_pass_verdict() {  # <ci-step-status> <forge-answer>
-  if [ "$1" = completed ]; then
-    printf 'done|%s' "$(fm_crew_done_detail "$2" verified)"
+# No precision is lost, because the detail helpers carry it. And unknown is still
+# non-terminal, so it cannot license teardown or a captain-facing failure either.
+fm_crew_terminal_verdict() {  # <ci-step-status> <forge-answer>
+  local ci=$1 answer=$2 evidence=unverified
+  [ "$ci" = completed ] && evidence=verified
+  case "${answer%% *}" in
+    merged|closed)
+      printf 'done|%s' "$(fm_crew_done_detail "$answer" "$evidence")"
+      return ;;
+  esac
+  if [ "$evidence" = verified ]; then
+    printf 'done|%s' "$(fm_crew_done_detail "$answer" "$evidence")"
     return
   fi
   printf 'unknown|%s' \
-    "$(fm_crew_no_ci_evidence_detail "$(fm_crew_ci_evidence_gap "$1")" "$2")"
-}
-
-# The verdict for a `completed` row on the coarse runs-list path, as
-# "<state>|<detail>".
-#
-# That row is a status word, a sha and a PR url - there is no steps table on it
-# at all, so it can never satisfy the CI-evidence whitelist above and its
-# `completed` says only that the pipeline stopped. The one terminal fact still
-# available here is the forge's own answer, so a merged or closed PR earns done
-# and everything else - open, or any of the three non-answers - reports unknown,
-# for the reasons fm_crew_terminal_pass_verdict records. A structural non-answer
-# stays unknown permanently, which is the honest verdict when nothing at all
-# proves the run landed; naming it apart from a transient failure is what makes
-# that diagnosable rather than silent.
-fm_crew_coarse_completed_verdict() {  # <forge-answer>
-  case "${1%% *}" in
-    merged|closed) printf 'done|%s' "$(fm_crew_done_detail "$1" unverified)" ;;
-    *) printf 'unknown|%s' \
-         "$(fm_crew_no_ci_evidence_detail 'no step detail on the runs-list path' "$1")" ;;
-  esac
+    "$(fm_crew_no_ci_evidence_detail "$(fm_crew_ci_evidence_gap "$ci")" "$answer")"
 }
