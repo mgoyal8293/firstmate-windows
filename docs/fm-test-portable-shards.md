@@ -93,13 +93,15 @@ Nothing currently detects a stale value on a script that already has a hint; `fm
 
 | Lane | Script count | Estimated duration |
 |---|---:|---:|
-| `portable-serial-1of4` | 30 | 634929 ms (~10.58 min) |
-| `portable-serial-2of4` | 30 | 634931 ms (~10.58 min) |
-| `portable-serial-3of4` | 30 | 634917 ms (~10.58 min) |
-| `portable-serial-4of4` | 26 | 634917 ms (~10.58 min) |
-| imbalance | | 14 ms |
+| `portable-serial-1of4` | 28 | 639931 ms (~10.67 min) |
+| `portable-serial-2of4` | 31 | 639933 ms (~10.67 min) |
+| `portable-serial-3of4` | 30 | 639915 ms (~10.67 min) |
+| `portable-serial-4of4` | 28 | 639915 ms (~10.67 min) |
+| imbalance | | 18 ms |
 
 Those four numbers are the packer's own arithmetic over the table above, not a measurement.
+The lane is now 117 scripts, because `tests/fm-python-lib.test.sh` landed in the derived remainder after those hints were refreshed; it has no measured Linux duration yet, so it is packed at the flat default and `--check-coverage` reports `unmeasured_serial=1` and names it.
+Admitting one member re-packs all four shards, which is why every count above moved and not only the shard it landed in.
 
 Measured on green run [32259417831](https://github.com/mgoyal8293/firstmate-windows/actions/runs/32259417831), the `DIAG shards` diagnostic workflow that runs the four real shard commands on `ubuntu-latest` and the first measurement of the refreshed hints: all four shards passed, the worst shard fell to 11.67 min from the 13.43 min it took on run [32159215212](https://github.com/mgoyal8293/firstmate-windows/actions/runs/32159215212) - the run whose artifacts supplied these weights - and the spread roughly halved.
 The overflow was removed rather than relocated - no other shard took up the time the worst one gave back.

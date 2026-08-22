@@ -54,9 +54,11 @@ rc=49
 
 # after, same box, same command
 $ bash bin/fm-doc-audience-check.sh
-fm-doc-audience-check: ok surfaces=72 local_links=278
+fm-doc-audience-check: ok surfaces=73 local_links=286
 rc=0
 ```
+
+Those two counts are whole-tree totals taken at this branch's head, so any later documentation change moves them; the evidence here is `rc=0` and a real report where there was an exit 49.
 
 ## The suite already ran before this change
 

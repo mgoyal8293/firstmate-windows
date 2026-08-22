@@ -6,7 +6,7 @@ This file records the measurements those two are built on.
 
 Every number here was measured under Git for Windows MINGW64 bash (`MINGW64_NT-10.0-26200`, bash 5.2.37, git 2.50.1.windows.1, ShellCheck 0.11.0), from a frozen checkout, with `MSYS=winsymlinks:nativestrict`.
 
-The repository has grown since: `portable-serial` is now 116 scripts and the canonical lint set 306 shell files.
+The repository has grown since: `portable-serial` is now 117 scripts and the canonical lint set 308 shell files.
 Every figure below is deliberately left as measured rather than restated to the live count; a one-script difference changes neither the lane arithmetic nor any conclusion drawn from it.
 
 ## Why this lane is not the Linux lane with more shards
@@ -15,8 +15,8 @@ Git Bash pays 14-18x more per process than Linux, because every `fork` is an MSY
 That multiplier does not fall evenly: it is worst on short scripts, where fixed process-startup cost dominates.
 
 The consequence is arithmetic, not opinion.
-`portable-serial` is a derived remainder of 116 scripts.
-Every one of them now carries a measured hint - `--check-coverage` reports `unmeasured_serial=0` - totalling 2539694 ms, so the lane is 42.33 minutes of Linux work.
+`portable-serial` is a derived remainder of 117 scripts.
+The 116 of them that carry a measured hint total 2539694 ms, so the lane is 42.33 minutes of Linux work.
 Those weights are measured on green run [32159215212](https://github.com/mgoyal8293/firstmate-windows/actions/runs/32159215212) at head `580d64fb`, refreshed by the change that landed as df66e63; `docs/fm-test-portable-shards.md` owns them.
 At 14-18x that is about **9.9 to 12.7 hours**, or 11.3 hours at 16x.
 

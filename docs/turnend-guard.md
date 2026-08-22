@@ -143,7 +143,8 @@ That warning uses `bin/fm-supervision-instructions.sh --repair-line`, so it alwa
 - Kimi has no project-level hook configuration and remains outside the primary guard integrations above.
 - Captain-approved Kimi crew wake support uses `bin/fm-kimi-turnend-hook.sh` to edit only one marker-delimited Firstmate region in that global config and install a silent always-zero hook.
 - The hook remains inert unless the payload `cwd` contains a per-task token pointer that resolves through Firstmate's private registry to one `state/<id>.turn-ended` marker.
-- Installation refuses before writing unless `python3` with `tomllib` and `jq` are available.
+- Installation refuses before writing unless `jq` and a Python 3 that actually runs with `tomllib` are available.
+- That interpreter is resolved by `bin/fm-python-lib.sh`, so `python` or `py -3` satisfies the requirement and a `python3` that resolves on PATH without running - the Windows Store alias - does not.
 - If `jq` is removed after installation, the hook remains silent and exits 0, turn-end wakes stop, and Kimi crews fall back to idle detection.
 - Unreadable hook input remains fail-open.
 - No harness adapter uses a shell ampersand to manufacture supervision.
