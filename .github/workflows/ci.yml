@@ -210,11 +210,13 @@ jobs:
         run: |
           set -eu
           command -v jq >/dev/null || { echo "::error::jq is required"; exit 1; }
-          command -v python3 >/dev/null || { echo "::error::python3 is required"; exit 1; }
           command -v curl >/dev/null || { echo "::error::curl is required"; exit 1; }
           command -v tar >/dev/null || { echo "::error::tar is required"; exit 1; }
+          # shellcheck source=bin/fm-python-lib.sh
+          . bin/fm-python-lib.sh
+          fm_python3 || { fm_python3_refuse ci || true; echo "::error::a working python3 is required"; exit 1; }
           jq --version
-          python3 --version
+          "${FM_PYTHON3_CMD[@]}" --version
       - name: Install pinned Herdr
         run: |
           set -eu

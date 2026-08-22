@@ -25,7 +25,8 @@ if [ "${FM_AFK_PI_HERDR_E2E:-0}" != 1 ]; then
   exit 0
 fi
 
-for tool in herdr jq pi python3; do
+fm_python3 || { echo 'skip: no working python3'; exit 0; }
+for tool in herdr jq pi; do
   command -v "$tool" >/dev/null 2>&1 || { echo "skip: $tool not found"; exit 0; }
 done
 

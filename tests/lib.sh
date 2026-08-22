@@ -39,6 +39,37 @@ export FM_GATE_REFUSE_BYPASS=1
 # shellcheck disable=SC2034
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
+# Shared executing Python 3 probe, so a test that needs an interpreter asks the
+# same question production does. `command -v python3` answers a different one:
+# on Windows the Microsoft Store alias resolves on PATH and then exits 49
+# without running, so a presence-gated test neither skips nor runs - it fails.
+# shellcheck source=bin/fm-python-lib.sh
+. "$ROOT/bin/fm-python-lib.sh"
+
+# fm_test_install_python3_shim <dir>: put a `python3` on a fake PATH that runs
+# the interpreter fm_python3 actually resolved. A symlink cannot express the
+# answer when that is `py -3`, and linking the bare launcher would hand the test
+# a different interpreter than production picked.
+fm_test_install_python3_shim() {
+  local dir=$1 bash_bin
+  local -a argv
+  fm_python3 || return 1
+  # Absolute interpreter path in the shebang: a fake PATH usually has no `env`.
+  bash_bin=$(command -v bash) || return 1
+  argv=("${FM_PYTHON3_CMD[@]}")
+  # Absolute interpreter path in the body too. The shim is being installed AS
+  # `python3` on the PATH it will run under, so re-invoking by name would exec
+  # itself forever.
+  argv[0]=$(command -v "${argv[0]}") || return 1
+  {
+    printf '#!%s\n' "$bash_bin"
+    printf 'exec'
+    printf ' %q' "${argv[@]}"
+    printf ' "$@"\n'
+  } >"$dir/python3"
+  chmod +x "$dir/python3"
+}
+
 # --- reporters --------------------------------------------------------------
 
 fail() {

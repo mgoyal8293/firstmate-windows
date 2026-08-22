@@ -24,7 +24,8 @@ run_expect_failure() {
 
 mutate_inventory() {
   local source=$1 destination=$2 mode=$3
-  python3 - "$source" "$destination" "$mode" <<'PY'
+  fm_python3 || fail "test needs a working python3"
+  "${FM_PYTHON3_CMD[@]}" - "$source" "$destination" "$mode" <<'PY'
 import json
 import sys
 from pathlib import Path

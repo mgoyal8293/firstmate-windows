@@ -17,6 +17,14 @@
 #   fm-kimi-turnend-hook.sh remove
 set -u
 
+# Parameter expansion, not `dirname`/`cd`/`pwd`: this command is exercised with a
+# deliberately bare PATH that carries no coreutils, so resolving its own
+# directory must not need any.
+SCRIPT_DIR=${BASH_SOURCE[0]%/*}
+[ "$SCRIPT_DIR" != "${BASH_SOURCE[0]}" ] || SCRIPT_DIR=.
+# shellcheck source=bin/fm-python-lib.sh
+. "$SCRIPT_DIR/fm-python-lib.sh"
+
 case "${1:-}" in
   install|remove) ACTION=$1 ;;
   -h|--help)
@@ -33,8 +41,12 @@ if [ -z "${HOME:-}" ]; then
   printf 'fm-kimi-turnend-hook: refused: HOME is unset.\n' >&2
   exit 1
 fi
-if ! command -v python3 >/dev/null 2>&1; then
+# Capability, not presence: on Windows `python3` resolves to the Microsoft Store
+# alias and then exits 49 without running, so a `command -v` gate here passed and
+# the TOML validation below died instead of refusing.
+if ! fm_python3; then
   printf 'fm-kimi-turnend-hook: refused: python3 with tomllib is required to validate config.toml.\n' >&2
+  fm_python3_refuse fm-kimi-turnend-hook || true
   exit 1
 fi
 if [ "$ACTION" = install ] && ! command -v jq >/dev/null 2>&1; then
@@ -42,7 +54,7 @@ if [ "$ACTION" = install ] && ! command -v jq >/dev/null 2>&1; then
   exit 1
 fi
 
-python3 - "$ACTION" "$HOME/.kimi-code" <<'PY'
+"${FM_PYTHON3_CMD[@]}" - "$ACTION" "$HOME/.kimi-code" <<'PY'
 import os
 import re
 import shutil

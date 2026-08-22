@@ -112,7 +112,7 @@ jobs:
   windows-behavior:
     name: Behavior Windows ${{ matrix.shard }}
     runs-on: windows-latest
-    # Measured: the whole lane is 61.9 min of serial Git Bash work over 39
+    # Measured: the whole lane is 62.1 min of serial Git Bash work over 40
     # scripts, and the longest single script
     # (tests/fm-decision-hold-lifecycle.test.sh, 860s) is the floor no shard
     # count can lower - which is why 4 shards is the useful maximum here rather

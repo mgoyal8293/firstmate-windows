@@ -35,6 +35,10 @@ case "${1:-}" in
 esac
 [ "$#" -le 1 ] || { usage; exit 1; }
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=bin/fm-python-lib.sh
+. "$SCRIPT_DIR/fm-python-lib.sh"
+
 DIR=${1:-.}
 [ -d "$DIR" ] || { echo "error: not a directory: $DIR" >&2; exit 1; }
 DIR=$(cd "$DIR" && pwd -P)
@@ -134,6 +138,17 @@ install_claude_pointer() {
   claude_pointer_content > "$CLAUDE"
 }
 
+# 0 = the link resolves to AGENTS.md, 1 = it demonstrably does not,
+# 2 = UNDETERMINABLE. The third code exists because the old code had only two:
+# it ran `python3` behind `command -v python3` and returned that exit status
+# directly, so on Windows - where `python3` resolves to the Microsoft Store
+# alias and exits 49 without running - a correct pointer was judged wrong and
+# the caller refused a healthy worktree with a false conflict. A failed
+# interpreter is not evidence about the symlink, and no caller may read it as any.
+# Sets UNDETERMINABLE_CAUSE, and UNDETERMINABLE_STATUS with it, so a verdict of 2
+# can name which of the three causes it hit rather than asserting one.
+UNDETERMINABLE_CAUSE=interpreter
+UNDETERMINABLE_STATUS=0
 is_correct_claude_symlink() {
   [ -L "$CLAUDE" ] || return 1
   target=$(readlink "$CLAUDE")
@@ -141,15 +156,68 @@ is_correct_claude_symlink() {
     "$AGENTS"|"./$AGENTS") return 0 ;;
   esac
   [ -e "$AGENTS" ] || return 1
-  if command -v python3 >/dev/null 2>&1; then
-    python3 - "$CLAUDE" "$AGENTS" <<'PY'
+  UNDETERMINABLE_CAUSE=interpreter
+  if fm_python3; then
+    # The payload answers on stdout, not through its exit status, because a
+    # status cannot say "I did not run": CPython exits 1 on an uncaught
+    # traceback, which is indistinguishable from a real "the paths differ", and
+    # a signal or a half-installed stdlib produces some other number. Only the
+    # EQ or NE sentinel is an answer; anything else - no output, a wrapper's
+    # extra chatter, a partial write - falls through to the resolver below.
+    UNDETERMINABLE_STATUS=0
+    answer=$("${FM_PYTHON3_CMD[@]}" - "$CLAUDE" "$AGENTS" <<'PY'
 import os
 import sys
-sys.exit(0 if os.path.realpath(sys.argv[1]) == os.path.realpath(sys.argv[2]) else 1)
+print("EQ" if os.path.realpath(sys.argv[1]) == os.path.realpath(sys.argv[2]) else "NE")
 PY
-    return $?
+    ) || UNDETERMINABLE_STATUS=$?
+    case "$answer" in
+      EQ) return 0 ;;
+      NE) return 1 ;;
+    esac
+    # Two different failures reach here, and a reader chasing the wrong one is
+    # the cost of blurring them: a nonzero status means the interpreter died,
+    # while status 0 with no sentinel means it ran and said nothing usable.
+    if [ "$UNDETERMINABLE_STATUS" -eq 0 ]; then
+      UNDETERMINABLE_CAUSE=payload-silent
+    else
+      UNDETERMINABLE_CAUSE=payload-status
+    fi
   fi
-  return 1
+  # No usable answer from Python, either because nothing ran or because what ran
+  # did not answer: ask the shell's own resolver before giving up, so a box
+  # without a working interpreter still gets a real answer rather than a false
+  # conflict.
+  if command -v realpath >/dev/null 2>&1; then
+    resolved_claude=$(realpath "$CLAUDE" 2>/dev/null) || return 2
+    resolved_agents=$(realpath "$AGENTS" 2>/dev/null) || return 2
+    [ -n "$resolved_agents" ] || return 2
+    [ "$resolved_claude" = "$resolved_agents" ] || return 1
+    return 0
+  fi
+  return 2
+}
+
+# Report the undeterminable verdict and stop. Kept in one place so both call
+# sites refuse identically and neither can slide back into "conflict" wording
+# for a question that was never answered.
+refuse_undeterminable_symlink() {
+  echo "error: cannot determine whether the CLAUDE.md symlink in $DIR resolves to AGENTS.md" >&2
+  # Name the cause that actually applies. Claiming a status that never happened,
+  # or a missing interpreter that was found and ran, sends the reader after the
+  # wrong problem - which is the whole distinction this predicate exists to draw.
+  case "${UNDETERMINABLE_CAUSE:-interpreter}" in
+    payload-status)
+      echo "error: fm-ensure-agents-md: $FM_PYTHON3 ran and then exited with status $UNDETERMINABLE_STATUS without reporting an answer, and realpath could not answer either" >&2
+      ;;
+    payload-silent)
+      echo "error: fm-ensure-agents-md: $FM_PYTHON3 ran and exited 0 but reported no usable EQ or NE answer for the path comparison, and realpath could not answer either" >&2
+      ;;
+    *)
+      fm_python3_refuse fm-ensure-agents-md || true
+      ;;
+  esac
+  exit 1
 }
 
 # Refuse a case-variant real memory file (issue #389). On a case-insensitive
@@ -184,7 +252,10 @@ fi
 
 if [ -e "$AGENTS" ]; then
   if [ -L "$CLAUDE" ]; then
-    if is_correct_claude_symlink; then
+    SYMLINK_VERDICT=0
+    is_correct_claude_symlink || SYMLINK_VERDICT=$?
+    [ "$SYMLINK_VERDICT" -ne 2 ] || refuse_undeterminable_symlink
+    if [ "$SYMLINK_VERDICT" -eq 0 ]; then
       ensure_maintenance_section
       install_claude_pointer
       if [ "$MAINT_INJECTED" -eq 1 ]; then
@@ -225,7 +296,10 @@ if [ -e "$AGENTS" ]; then
 fi
 
 if [ -L "$CLAUDE" ]; then
-  if is_correct_claude_symlink; then
+  SYMLINK_VERDICT=0
+  is_correct_claude_symlink || SYMLINK_VERDICT=$?
+  [ "$SYMLINK_VERDICT" -ne 2 ] || refuse_undeterminable_symlink
+  if [ "$SYMLINK_VERDICT" -eq 0 ]; then
     write_skeleton
     install_claude_pointer
     echo "created: AGENTS.md and wrote CLAUDE.md @AGENTS.md pointer in $DIR"

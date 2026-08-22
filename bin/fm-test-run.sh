@@ -74,6 +74,14 @@ set -eu
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT" || exit 1
+# The single owner of "which Python 3 actually runs here" (bin/fm-python-lib.sh).
+# This runner had its own private copy of that probe; the copy is gone rather
+# than kept, because the one thing a second implementation of a capability probe
+# reliably does is disagree with the first. One source per process is also all
+# the hot path needs: the runner probes once at startup and every forked worker
+# inherits the answer, so sourcing costs one file read per run.
+# shellcheck source=bin/fm-python-lib.sh
+. "$ROOT/bin/fm-python-lib.sh"
 
 MODE=
 LIST_ONLY=0
@@ -106,7 +114,8 @@ PORTABLE_SERIAL_DEFAULT_WEIGHT_MS=20000
 WINDOWS_SHARDS=4
 
 # Balance hint for a Windows-lane script with no measured Windows duration.
-# The measured per-script mean of the lane below (3,713,000 ms over 39 scripts),
+# The measured per-script mean of the 39-script campaign that first admitted
+# this lane's members (3,713,000 ms over 39 scripts, docs/fm-test-windows-lane.md),
 # so a newly listed test neither starves nor overloads the shard it lands in.
 WINDOWS_DEFAULT_WEIGHT_MS=95205
 
@@ -131,48 +140,9 @@ now_iso() {
   date -u +%Y-%m-%dT%H:%M:%SZ
 }
 
-# Resolve a Python 3 that actually runs, recording it in FM_TEST_PYTHON3_CACHE
-# and returning status only - callers read the variable, never `$(...)`.
-#
-# `command -v python3` is not evidence a Python exists. Windows ships Microsoft
-# Store "app execution aliases" for python and python3: they resolve on PATH,
-# but every invocation prints "Python was not found; run without arguments to
-# install from the Microsoft Store" and exits 49. A probe that only resolves the
-# name therefore reports success and then every call fails - which took out the
-# whole run rather than degrading. Probe by executing.
-#
-# Also accepts `python`, because that is frequently the only real interpreter on
-# a Windows machine - but only when it is a Python 3. The payloads below are
-# Python-3-only (`pathlib`, `open(..., encoding=)`), and `-c 'pass'` succeeds
-# under Python 2 as well, so the probe asks for the major version rather than
-# merely for an interpreter that starts. One execution answers both questions.
-# The answer lands in FM_TEST_PYTHON3_CACHE rather than on stdout: callers run
-# in the shell that needs the cache, so a `$(fm_test_python3)` would probe again
-# on every call and double the interpreter startups the probe exists to bound.
-# Empty means unprobed, "-" means no working interpreter.
-FM_TEST_PYTHON3_CACHE=
-fm_test_python3() {
-  local candidate
-  case "$FM_TEST_PYTHON3_CACHE" in
-    '') ;;
-    '-') return 1 ;;
-    *) return 0 ;;
-  esac
-  for candidate in python3 python; do
-    if command -v "$candidate" >/dev/null 2>&1 \
-      && "$candidate" -c 'import sys; sys.exit(0 if sys.version_info[0] >= 3 else 1)' \
-        >/dev/null 2>&1; then
-      FM_TEST_PYTHON3_CACHE=$candidate
-      return 0
-    fi
-  done
-  FM_TEST_PYTHON3_CACHE=-
-  return 1
-}
-
 now_ms() {
-  if fm_test_python3; then
-    "$FM_TEST_PYTHON3_CACHE" -c 'import time; print(int(time.time() * 1000))'
+  if fm_python3; then
+    "${FM_PYTHON3_CMD[@]}" -c 'import time; print(int(time.time() * 1000))'
   else
     # Second precision only when no working Python is available.
     echo $(($(date +%s) * 1000))
@@ -193,6 +163,7 @@ family_for_basename() {
     fm-kimi-harness.test.sh|fm-muse-harness.test.sh|fm-herdr-lab.test.sh|fm-lint.test.sh|\
     fm-lint-workflows.test.sh|\
     fm-operational-input.test.sh|fm-pi-primary-types.test.sh|\
+    fm-python-lib.test.sh|\
     fm-send-popup-settle.test.sh|fm-send-settle.test.sh|\
     fm-subagent-pretool-check.test.sh|\
     fm-supervision-instructions.test.sh|fm-task-delivery.test.sh|\
@@ -708,6 +679,7 @@ tests/fm-herdr-session-cleanup.test.sh
 tests/fm-pr-merge.test.sh
 tests/fm-pr-private-file-mode.test.sh
 tests/fm-project-origin.test.sh
+tests/fm-python-lib.test.sh
 tests/fm-remote-entrypoint.test.sh
 tests/fm-review-diff.test.sh
 tests/fm-send-popup-settle.test.sh
@@ -756,6 +728,7 @@ tests/fm-herdr-session-cleanup.test.sh 154000
 tests/fm-pr-merge.test.sh 165000
 tests/fm-pr-private-file-mode.test.sh 5000
 tests/fm-project-origin.test.sh 2000
+tests/fm-python-lib.test.sh 11512
 tests/fm-remote-entrypoint.test.sh 2000
 tests/fm-review-diff.test.sh 83000
 tests/fm-send-popup-settle.test.sh 102000
@@ -1087,10 +1060,11 @@ aggregate_timing_json() {
   local out=$1
   shift
   [ "$#" -gt 0 ] || die "--aggregate-json requires at least one input timing JSON"
-  local py
-  fm_test_python3 || die "--aggregate-json requires a working python3"
-  py=$FM_TEST_PYTHON3_CACHE
-  "$py" - "$out" "$@" <<'PY'
+  fm_python3 || {
+    fm_python3_refuse fm-test-run || true
+    die "--aggregate-json requires a working python3"
+  }
+  "${FM_PYTHON3_CMD[@]}" - "$out" "$@" <<'PY'
 import json, sys
 from pathlib import Path
 
@@ -1378,6 +1352,16 @@ families_for_changed_path() {
     docs/configuration.md|docs/supervision-protocols/*)
       printf '%s\n' pure-contract-unit
       ;;
+    bin/fm-python-lib.sh)
+      # tests/lib.sh sources this library, so every suite that sources the test
+      # library depends on it too, and its own basename appears in only the
+      # handful of suites that name it directly. Resolve consumers through the
+      # same reference scan the shared-helper arm below uses, keyed on the door
+      # they all come in through; every string naming this file contains that
+      # needle, so the scan is a superset of the direct namers.
+      families_for_test_reference lib.sh \
+        || printf '%s\n' "__unmapped__:$path"
+      ;;
     tests/lib.sh|tests/*-helpers.sh)
       families_for_test_reference "$(basename "$path")" \
         || printf '%s\n' "__unmapped__:$path"
@@ -1524,13 +1508,12 @@ write_json_artifact() {
   local records_file=${10}
   local families_file=${11}
 
-  local py
-  if ! fm_test_python3; then
+  if ! fm_python3; then
+    fm_python3_refuse fm-test-run || true
     die "--json requires a working python3 to emit a valid timing artifact"
   fi
-  py=$FM_TEST_PYTHON3_CACHE
 
-  "$py" - "$out" "$started" "$finished" "$run_id" "$total" "$failed" "$skipped" "$duration" "$selection" "$records_file" "$families_file" <<'PY'
+  "${FM_PYTHON3_CMD[@]}" - "$out" "$started" "$finished" "$run_id" "$total" "$failed" "$skipped" "$duration" "$selection" "$records_file" "$families_file" <<'PY'
 import json, sys
 
 out, started, finished, run_id, total, failed, skipped, duration, selection, records_file, families_file = sys.argv[1:]
@@ -1848,7 +1831,7 @@ trap 'rm -rf "$RUN_TMP"' EXIT
 
 # Resolve Python once here, in the shell that owns the cache, so the timing
 # calls below and every forked worker inherit one probe rather than repeating it.
-fm_test_python3 || true
+fm_python3 || true
 RUN_STARTED_ISO=$(now_iso)
 RUN_STARTED_MS=$(now_ms)
 RUN_ID="fm-test-run-${RUN_STARTED_MS}-$$"

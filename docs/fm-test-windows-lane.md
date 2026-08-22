@@ -6,7 +6,7 @@ This file records the measurements those two are built on.
 
 Every number here was measured under Git for Windows MINGW64 bash (`MINGW64_NT-10.0-26200`, bash 5.2.37, git 2.50.1.windows.1, ShellCheck 0.11.0), from a frozen checkout, with `MSYS=winsymlinks:nativestrict`.
 
-The repository has grown since: `portable-serial` is now 116 scripts and the canonical lint set 306 shell files.
+The repository has grown since: `portable-serial` is now 117 scripts and the canonical lint set 308 shell files.
 Every figure below is deliberately left as measured rather than restated to the live count; a one-script difference changes neither the lane arithmetic nor any conclusion drawn from it.
 
 ## Why this lane is not the Linux lane with more shards
@@ -15,8 +15,8 @@ Git Bash pays 14-18x more per process than Linux, because every `fork` is an MSY
 That multiplier does not fall evenly: it is worst on short scripts, where fixed process-startup cost dominates.
 
 The consequence is arithmetic, not opinion.
-`portable-serial` is a derived remainder of 116 scripts.
-Every one of them now carries a measured hint - `--check-coverage` reports `unmeasured_serial=0` - totalling 2539694 ms, so the lane is 42.33 minutes of Linux work.
+`portable-serial` is a derived remainder of 117 scripts.
+The 116 of them that carry a measured hint total 2539694 ms, so the lane is 42.33 minutes of Linux work.
 Those weights are measured on green run [32159215212](https://github.com/mgoyal8293/firstmate-windows/actions/runs/32159215212) at head `580d64fb`, refreshed by the change that landed as df66e63; `docs/fm-test-portable-shards.md` owns them.
 At 14-18x that is about **9.9 to 12.7 hours**, or 11.3 hours at 16x.
 
@@ -180,12 +180,16 @@ Measured by running all 98 candidate scripts serially from a frozen checkout wit
 | candidates measured | 98 |
 | measured green (exit 0, no failed assertion) | 45 |
 | of those, green only because they gate-skip on the runner - dropped | 6 |
-| **in the lane** | **39** |
+| **admitted to the lane by this campaign** | **39** |
 | failing on Windows, excluded | 41 |
 | still unresolved (hit the 180s bound, no failure seen) | 12 |
 
 45 + 41 + 12 = 98.
 One of the 41, `tests/fm-teardown.test.sh`, has its cause isolated below; the other 40 are recorded but not chased.
+
+The lane now enumerates **40** members, because `tests/fm-python-lib.test.sh` was admitted after this campaign closed and was never one of its 98 candidates.
+It was measured on its own terms, green twice through the runner on the captain's Git Bash box at 11512 ms and 11129 ms, and the lower of those is its hint.
+That is a floor measured on one developer machine rather than a figure from a CI runner, and GitHub's Windows runners are slower, so treat it the way the shard predictions below are treated: good enough to pack a shard with, not a promise about wall time.
 
 ### The six green-by-skip scripts are not lane members
 
@@ -204,27 +208,29 @@ What it buys is honesty about what the lane runs: a dropped member is visible in
 That is the same principle behind the Linux serial lane's "Require tmux for e2e tests" step (`.github/workflows/ci.yml`), which hard-fails so those scripts cannot quietly skip on a required gate.
 The Windows lane reaches it from the other direction: no tool, no member.
 
-Total lane cost: **61.9 min** of serial Git Bash work (3,713,000 ms of hints).
+Total lane cost: **62.1 min** of serial Git Bash work (3,724,512 ms of hints).
 The longest single script is `tests/fm-decision-hold-lifecycle.test.sh` at 860s, which is the floor no shard count can lower - so 4 shards is the useful maximum here, not 8 or 16.
 Beyond 4 the floor binds and extra runners buy nothing.
 
 | shard | scripts | predicted |
 |---|---:|---:|
-| `windows-1of4` | 6 | 929s (15.5 min) |
-| `windows-2of4` | 7 | 928s (15.5 min) |
-| `windows-3of4` | 13 | 928s (15.5 min) |
-| `windows-4of4` | 13 | 928s (15.5 min) |
-| imbalance | | 1s |
+| `windows-1of4` | 6 | 931s (15.5 min) |
+| `windows-2of4` | 7 | 931s (15.5 min) |
+| `windows-3of4` | 14 | 931.5s (15.5 min) |
+| `windows-4of4` | 13 | 931s (15.5 min) |
+| imbalance | | 512 ms |
 
 **`windows-4of4` was run end to end on Git Bash to check that sum against reality: rc=0, 14/14 scripts, 0 failures, 2 gate skips, wall 932s (15.5 min)** against 927s predicted - 0.5% out, which is what makes the other three shards' predicted figures trustworthy.
-That run was taken before the six green-by-skip scripts were dropped, so it covered 14 scripts including the 2 that skipped; the same shard is now 13 scripts and 928s, and the drop moves no measured work.
+That run was taken before the six green-by-skip scripts were dropped, so it covered 14 scripts including the 2 that skipped; the same shard is now 13 scripts and 931s, and the drop moves no measured work.
+Note that the packer is greedy over the hint list, so admitting a member re-assigns scripts across all four shards rather than only the one it lands in: `windows-4of4` no longer holds exactly the scripts that were run end to end.
+What that run evidences is that a shard's hint sum predicts its wall time to within 0.5%, which is the claim the other three rows rest on, and that does not depend on which scripts made up the sum.
 
 `timeout-minutes: 40` is a hang tripwire with roughly 2.6x margin over a healthy 15.5-minute shard, not the expected end of the lane.
 GitHub's Windows runners are slower than the machine these numbers came from.
 
 ### The hints those shards are packed from
 
-`windows_weight_hints` in `bin/fm-test-run.sh` holds the measured Git Bash duration for each of the 39 members - 3,713,000 ms in total - and a member with no entry there is packed at the flat `WINDOWS_DEFAULT_WEIGHT_MS`, 95205 ms.
+`windows_weight_hints` in `bin/fm-test-run.sh` holds the measured Git Bash duration for each of the 40 members - 3,724,512 ms in total - and a member with no entry there is packed at the flat `WINDOWS_DEFAULT_WEIGHT_MS`, 95205 ms, the per-script mean of the 39 members the campaign above admitted.
 
 `--check-coverage` reports `unmeasured_windows=<n>` and names the members behind it, for the same reason it reports `unmeasured_serial` for the Linux serial lane: a member packed at the default is what unbalances a shard, and a Windows shard that overruns `timeout-minutes: 40` is cancelled with no verdict rather than merely slow.
 On the shipped lane it is **0**, and it should stay there: this lane's admission rule already requires a member to be measured green on Windows, so an unhinted member is one admitted without the measurement its own rule demands.
@@ -452,8 +458,11 @@ Windows ships Microsoft Store "app execution aliases" for `python` and `python3`
 They **resolve on PATH**, so `command -v python3` succeeds, but every invocation prints that install prompt and exits 49.
 The probe reported a working interpreter and then every call failed, so the run died rather than degrading - and `now_ms` would have injected the prompt text into the run's own output.
 
-`fm_test_python3` probes by actually executing the interpreter, caches the answer, and also accepts `python`, often the only real interpreter on a Windows machine - but only a Python 3 one, since the runner's own JSON payloads need `pathlib` and `open(..., encoding=)`, and a bare `-c 'pass'` would let a Python 2 through.
+`fm_python3` in [`../bin/fm-python-lib.sh`](../bin/fm-python-lib.sh) probes by actually executing the interpreter, caches the answer, and also accepts `python`, often the only real interpreter on a Windows machine - but only a Python 3 one, since the runner's own JSON payloads need `pathlib` and `open(..., encoding=)`, and a bare `-c 'pass'` would let a Python 2 through.
+It also accepts the multi-word `py -3`, which is why the resolved answer is the argv array `FM_PYTHON3_CMD` rather than a single word.
 Executing the interpreter is the only probe that answers the question being asked, so this too is one fix rather than a platform arm.
+The runner first carried a private copy of that probe; the copy is gone, and every caller in this repo now reads the one owner.
+[`verification/windows-python-probe.md`](verification/windows-python-probe.md) records the measurements and the falsifiability demonstration.
 
 The general lesson for the rest of this port: on Windows, `command -v` is not evidence a tool works.
 
