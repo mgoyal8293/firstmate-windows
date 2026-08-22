@@ -14,7 +14,7 @@ Branch: `fm/fm-crew-state-stale-run-masks-live`.
 
 ```
 $ bash tests/fm-crew-state.test.sh | grep -c '^ok'
-73
+74
 $ bash tests/fm-inactive-reconcile.test.sh 2>/dev/null | grep -c '^ok'
 17
 ```
@@ -52,10 +52,11 @@ Every row must fail, and must fail on the named assertion.
 | `FM_CREW_STATE_NO_FORGE` honors any truthy value, as documented | narrow it back to the literal `1` | `test_no_forge_knob_honors_a_truthy_word` | fails: `missing: 'unverified'` |
 | The coarse row's PR url is found by shape, not by column index | read it from the fixed sixth field again | `test_coarse_pr_url_is_found_by_shape_not_by_column` | fails: `missing: 'state: done'` |
 | The `active_steps` table ends at any following TOON table header | end it only at a blank or comma-free line | `test_a_table_after_active_steps_is_not_read_as_an_active_step` | fails: `unexpected: 'test running'` |
+| Gate and step reads are scoped to the run object, not the whole record | let `nm_gate_status` scan raw `$RUN_OUT` again | `test_branch_sync_gate_status_does_not_park_a_running_run` | fails: `unexpected: 'state: parked'` |
 | The per-child forge bound is at most a third of the scan's remaining budget | pass the whole remaining budget as the bound | `test_forge_bound_is_derived_from_the_remaining_budget` (`tests/fm-inactive-reconcile.test.sh`) | fails: `forge bound exceeds a third of the 6s budget: '3\|'` |
 | A budget too small to spare the read skips it instead of shrinking it | take the bound arm unconditionally (`if true`) | the same case | fails: `a 2s budget cannot spare a whole second of forge read: '0\|'` |
 
-25 of 25.
+26 of 26.
 
 The first two rows share a case deliberately: both guards sit on the runs-list path, and the case needs both to hold - one stops the dead run being reached, the other makes the live run usable.
 Three later pairs share a mutation rather than a case, because one gate covers several distinct ways for the evidence to be absent and each way needs its own case to show it is covered.

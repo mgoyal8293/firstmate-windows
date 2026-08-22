@@ -227,20 +227,32 @@ nm_run() {  # <args...>
   fm_nm_run "$WT" "$NM_TIMEOUT" "$@"
 }
 
-# Scalar value of a TOON key in the captured run output ($RUN_OUT), read with
-# the `branch_sync:` block excluded - it repeats `branch`, `head` and `status`,
-# and fm-crew-run-verdict-lib.sh owns why a cross-read there is unsafe.
+# The captured run output ($RUN_OUT) with its `branch_sync:` block removed. Every
+# reader below that scans the record goes through this and never through
+# $RUN_OUT, because that block repeats key names the run object uses - `branch`,
+# `head`, `status`, `run` - and describes the branch's PUSH BINDING, which can
+# belong to a different run than the one being read. An unscoped match therefore
+# lets one section answer the other's question: a `pipeline.status` of
+# awaiting_approval reads as this run's own gate and parks a demonstrably running
+# pipeline. fm_crew_run_scalars in fm-crew-run-verdict-lib.sh is the one owner of
+# that scoping; nm_field composes with it, and the single deliberate reader INSIDE
+# the block is that library's ownership proof, which must clear three equalities
+# before the block may say anything about this run.
 RUN_OUT=""
+nm_run_object() {
+  fm_crew_run_scalars "$RUN_OUT"
+}
+# Scalar value of a TOON key in the run object.
 nm_field() {  # <key>
   fm_crew_run_field "$RUN_OUT" "$1"
 }
 # Finding count from a findings[N]{...} table header; empty when none.
 nm_findings_count() {
-  printf '%s\n' "$RUN_OUT" | grep -oE 'findings\[[0-9]+\]' | head -1 | grep -oE '[0-9]+'
+  nm_run_object | grep -oE 'findings\[[0-9]+\]' | head -1 | grep -oE '[0-9]+'
 }
 nm_gate_step_row() {
   local row step rest status findings
-  row=$(printf '%s\n' "$RUN_OUT" | grep -E '^[[:space:]]*[^,]+,[[:space:]]*"?(awaiting_approval|fix_review)"?[[:space:]]*,' | head -1)
+  row=$(nm_run_object | grep -E '^[[:space:]]*[^,]+,[[:space:]]*"?(awaiting_approval|fix_review)"?[[:space:]]*,' | head -1)
   [ -n "$row" ] || return 0
   row=$(trim "$row")
   step=$(trim "${row%%,*}")
@@ -252,7 +264,7 @@ nm_gate_step_row() {
 }
 nm_gate_status() {
   local s row
-  s=$(printf '%s\n' "$RUN_OUT" | grep -E '^[[:space:]]*(status|state):[[:space:]]*"?(awaiting_approval|fix_review)"?[[:space:]]*$' | head -1)
+  s=$(nm_run_object | grep -E '^[[:space:]]*(status|state):[[:space:]]*"?(awaiting_approval|fix_review)"?[[:space:]]*$' | head -1)
   if [ -n "$s" ]; then
     s=$(strip_quotes "$(trim "${s#*:}")")
     printf '%s' "$s"
@@ -262,13 +274,13 @@ nm_gate_status() {
   [ -n "$row" ] && { row=${row#*|}; printf '%s' "${row%%|*}"; }
 }
 nm_has_gate() {
-  printf '%s\n' "$RUN_OUT" | grep -Eq '^[[:space:]]*gate:[[:space:]]*'
+  nm_run_object | grep -Eq '^[[:space:]]*gate:[[:space:]]*'
 }
 nm_gate_line_name() {
   local gate step
   gate=$(strip_quotes "$(nm_field gate)")
   [ -n "$gate" ] && { printf '%s' "$gate"; return; }
-  step=$(printf '%s\n' "$RUN_OUT" | sed -n '/^[[:space:]]*gate:[[:space:]]*$/,/^[^[:space:]][^:]*:/s/^[[:space:]]*step:[[:space:]]*\(.*\)/\1/p' | head -1)
+  step=$(nm_run_object | sed -n '/^[[:space:]]*gate:[[:space:]]*$/,/^[^[:space:]][^:]*:/s/^[[:space:]]*step:[[:space:]]*\(.*\)/\1/p' | head -1)
   step=$(strip_quotes "$step")
   [ -n "$step" ] && printf '%s' "$step"
 }
@@ -301,7 +313,7 @@ log_reports_ci_ready() {
 
 nm_ci_step_status() {
   local row rest
-  row=$(printf '%s\n' "$RUN_OUT" | grep -E '^[[:space:]]*ci,[[:space:]]*"?(running|fixing)"?[[:space:]]*,' | head -1)
+  row=$(nm_run_object | grep -E '^[[:space:]]*ci,[[:space:]]*"?(running|fixing)"?[[:space:]]*,' | head -1)
   [ -n "$row" ] || return 0
   row=$(trim "$row")
   rest=${row#*,}
@@ -504,12 +516,12 @@ if [ "$HAVE_RUN" = 1 ]; then
     status=$(strip_quotes "$(nm_field status)")
     RUN_STATUS=$status
     outcome=$(strip_quotes "$(nm_field outcome)")
-    awaiting=$(printf '%s\n' "$RUN_OUT" | grep -E '^[[:space:]]*awaiting_agent:' | head -1 || true)
+    awaiting=$(nm_run_object | grep -E '^[[:space:]]*awaiting_agent:' | head -1 || true)
     gate_status=$(nm_gate_status)
     has_gate=0
     nm_has_gate && has_gate=1
 
-    ci_step_recorded=$(fm_crew_step_status "$RUN_OUT" ci)
+    ci_step_recorded=$(fm_crew_step_status "$(nm_run_object)" ci)
     if [ -n "$outcome" ]; then
       case "$outcome" in
         checks-passed)
@@ -547,7 +559,7 @@ if [ "$HAVE_RUN" = 1 ]; then
       RUN_DETAIL="parked at $gate"
       fcount=$(nm_gate_findings_count)
       [ -n "$fcount" ] && RUN_DETAIL="$RUN_DETAIL: $fcount finding(s)"
-      if printf '%s\n' "$RUN_OUT" | grep -q 'ask-user'; then
+      if nm_run_object | grep -q 'ask-user'; then
         RUN_DETAIL="$RUN_DETAIL (ask-user: authority decision)"
       fi
     else
@@ -569,7 +581,7 @@ if [ "$HAVE_RUN" = 1 ]; then
         # last did anything. Preferred over the coarse status word because it is
         # the signal that keeps a demonstrably live pipeline from reading as no
         # information at all.
-        active_note=$(fm_crew_active_step_note "$(fm_crew_active_step "$RUN_OUT")")
+        active_note=$(fm_crew_active_step_note "$(fm_crew_active_step "$(nm_run_object)")")
         [ -n "$active_note" ] && RUN_DETAIL=$active_note
         CI_STEP_STATUS=$(nm_effective_ci_step_status)
         case "$CI_STEP_STATUS" in

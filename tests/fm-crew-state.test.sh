@@ -605,8 +605,10 @@ EOF
 # has a live pipeline push binding - which is how fm-crew-state always invokes it,
 # from the task worktree. Field set and shape recorded from run
 # 01M0N8J9ET64CBM89W4D663WBZ read from its own worktree. The identities are
-# parameters so a case can drive each ownership equality apart deliberately.
-branch_sync_block() {  # <pipeline-run-id> <pipeline-head> <local-head> <branch>
+# parameters so a case can drive each ownership equality apart deliberately, and
+# so is the pipeline status, because that key sits at the same indent as the run
+# object's own `status:` and names the state of the run that owns the BINDING.
+branch_sync_block() {  # <pipeline-run-id> <pipeline-head> <local-head> <branch> [pipeline-status]
   cat <<EOF
 branch_sync:
   state: behind
@@ -617,7 +619,7 @@ branch_sync:
     clean: true
   pipeline:
     run: "$1"
-    status: running
+    status: ${5:-running}
     phase: ""
     submitted_head: $3
     current_head: $2
@@ -2166,6 +2168,30 @@ test_a_table_after_active_steps_is_not_read_as_an_active_step() {
   pass "a table after active_steps is not read as an active step"
 }
 
+# The branch_sync block describes the branch's PUSH BINDING, which routinely
+# belongs to a different run than the one `axi status` answers with. Its
+# `pipeline.status` sits at the same indent as the run object's own `status:`, so
+# an unscoped gate read takes a binding for another run as this run's gate: the
+# superseded/live pair this whole change exists for, where the older run parked at
+# a gate before its daemon died while the live run is plainly running. A
+# demonstrably working pipeline must not be reported parked at a gate it is not at.
+test_branch_sync_gate_status_does_not_park_a_running_run() {
+  reset_fakes
+  local d out
+  d=$(new_case branch-sync-gate)
+  make_repo_on_branch "$d/wt" fm/feat-bsgate
+  make_fakebin "$d" >/dev/null
+  fm_write_meta "$d/state/bsgate.meta" "window=fm:fm-bsgate" "worktree=$d/wt" "kind=ship" "harness=claude"
+  FM_FAKE_AXI_STATUS="$(run_running fm/feat-bsgate)
+$(branch_sync_block 01M0SOMEOTHERRUNIDENTIFIER "$FM_FAKE_RUN_HEAD" "$FM_FAKE_RUN_HEAD" fm/feat-bsgate awaiting_approval)"
+  out=$(run_crew_state "$d" bsgate)
+  assert_not_contains "$out" "state: parked" "another run's push binding is not this run's gate"
+  assert_not_contains "$out" "parked at" "a branch_sync status word never names a gate"
+  assert_contains "$out" "state: working" "the run's own object says it is running"
+  assert_contains "$out" "source: run-step" "the run itself remains the source"
+  pass "a branch_sync pipeline status does not park a running run"
+}
+
 test_active_run_is_authoritative
 test_stale_needs_decision_superseded
 test_stale_blocked_superseded
@@ -2230,6 +2256,7 @@ test_unrecognized_pr_url_is_named_not_reported_as_a_forge_failure
 test_no_forge_knob_honors_a_truthy_word
 test_coarse_pr_url_is_found_by_shape_not_by_column
 test_a_table_after_active_steps_is_not_read_as_an_active_step
+test_branch_sync_gate_status_does_not_park_a_running_run
 test_terminal_pass_without_a_steps_table_is_not_done
 test_terminal_pass_with_a_pending_ci_step_is_not_done
 test_coarse_completed_row_without_a_merge_is_not_done
