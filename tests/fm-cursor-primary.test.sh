@@ -74,7 +74,8 @@ install_scripts() {
            fm-cd-pretool-check.sh fm-claude-stop-autoarm.sh fm-hook-host-lib.sh \
            fm-primary-scope-lib.sh fm-supervision-lib.sh fm-proc-lib.sh \
            fm-path-lib.sh fm-wake-lib.sh \
-           fm-session-lock-lib.sh fm-cursor-lib.sh fm-operational-input.sh \
+           fm-session-lock-lib.sh fm-session-token-lib.sh fm-cursor-lib.sh \
+           fm-operational-input.sh \
            fm-supervision-instructions.sh fm-harness.sh fm-lock.sh \
            fm-gate-refuse-lib.sh; do
     cp "$ROOT/bin/$f" "$dir/bin/$f"

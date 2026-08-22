@@ -83,7 +83,8 @@ new_primary_home() {
   git -C "$h" commit -q --allow-empty -m init
   : > "$h/AGENTS.md"
   for lib in fm-claude-sessionend-release.sh fm-primary-scope-lib.sh fm-session-lock-lib.sh \
-    fm-cursor-lib.sh fm-proc-lib.sh fm-hook-host-lib.sh fm-wake-lib.sh fm-lock.sh; do
+    fm-cursor-lib.sh fm-proc-lib.sh fm-session-token-lib.sh fm-hook-host-lib.sh \
+    fm-path-lib.sh fm-wake-lib.sh fm-lock.sh; do
     cp "$ROOT/bin/$lib" "$h/bin/$lib"
   done
   chmod +x "$h/bin/fm-claude-sessionend-release.sh" "$h/bin/fm-lock.sh"
