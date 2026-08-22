@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # tests/fm-session-token.test.sh - per-session token ownership for the fleet lock
-# (bin/fm-session-lock-lib.sh, bin/fm-lock.sh).
+# (bin/fm-session-token-lib.sh, bin/fm-lock.sh).
 #
 # WHY THIS EXISTS. The ancestry walk cannot work on the Windows runtimes: MSYS's
 # /proc holds only MSYS processes, so a native harness never appears in it and
