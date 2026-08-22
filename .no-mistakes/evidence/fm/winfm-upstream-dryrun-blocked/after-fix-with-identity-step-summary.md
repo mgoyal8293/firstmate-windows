@@ -1,0 +1,18 @@
+## Upstream freshness
+
+```
+
+upstream:  upstream/main (1231b6ae7fd4)
+base:      origin/main (54a81254aa26)
+new upstream commits not in base: 29
+port commits not in upstream:     10
+
+CONFLICTS: 29 upstream commit(s) do not merge cleanly. Resolve by hand in a real branch; conflicted paths:
+  - .github/workflows/ci.yml
+  - bin/fm-supervise-daemon.sh
+  - bin/fm-test-run.sh
+  - docs/documentation-audiences.json
+  - docs/fm-test-portable-shards.md
+  - tests/fm-pending-reply.test.sh
+  - tests/fm-pi-watch-extension.test.sh
+```

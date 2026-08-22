@@ -1,0 +1,22 @@
+$ bash tests/fm-upstream-sync.test.sh      # target commit 601d5db
+ok - fm-upstream-sync.sh: reports an already-current port and does no work
+ok - fm-upstream-sync.sh: reports a clean merge and lands nothing
+ok - fm-upstream-sync.sh: reports conflicts with their exact paths and exits non-zero
+ok - fm-upstream-sync.sh: writes a machine-readable report a scheduled run can act on
+ok - fm-upstream-sync.sh: a blocked merge reports git's own reason
+ok - fm-upstream-sync.sh: refuses a missing upstream remote instead of reporting a false all-clear
+
+$ bash /tmp/vacuity/tests/fm-upstream-sync.test.sh   # same test file, bin/fm-upstream-sync.sh from base 54a8125
+ok - fm-upstream-sync.sh: reports an already-current port and does no work
+ok - fm-upstream-sync.sh: reports a clean merge and lands nothing
+ok - fm-upstream-sync.sh: reports conflicts with their exact paths and exits non-zero
+ok - fm-upstream-sync.sh: writes a machine-readable report a scheduled run can act on
+not ok - upstream-sync: a blocked merge must carry git's own stderr, not discard it (missing: 'git reported:')
+--- output ---
+
+upstream:  upstream/main (ecc02c801c58)
+base:      origin/main (c22eef1d97ab)
+new upstream commits not in base: 1
+port commits not in upstream:     0
+
+BLOCKED: the merge could not be attempted (no conflicted paths reported). Inspect with --keep.

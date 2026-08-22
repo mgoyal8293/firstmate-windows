@@ -1,0 +1,7 @@
+
+upstream:  upstream/main (1231b6ae7fd4)
+base:      origin/main (54a81254aa26)
+new upstream commits not in base: 29
+port commits not in upstream:     10
+
+BLOCKED: the merge could not be attempted (no conflicted paths reported). Inspect with --keep.

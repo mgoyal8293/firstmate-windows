@@ -1,0 +1,11 @@
+{
+  "status": "conflict",
+  "upstream_ref": "upstream/main",
+  "upstream_sha": "1231b6ae7fd4c5ff7e94d2f5ca2159536c4c41cb",
+  "base_ref": "origin/main",
+  "base_sha": "54a81254aa26e915d20db5eef287b6ffb956396c",
+  "commits_ahead": 29,
+  "commits_behind": 10,
+  "tests": "skipped",
+  "conflicts": [".github/workflows/ci.yml","bin/fm-supervise-daemon.sh","bin/fm-test-run.sh","docs/documentation-audiences.json","docs/fm-test-portable-shards.md","tests/fm-pending-reply.test.sh","tests/fm-pi-watch-extension.test.sh"]
+}
