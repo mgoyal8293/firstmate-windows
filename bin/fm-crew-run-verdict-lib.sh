@@ -159,22 +159,29 @@ fm_crew_run_field() {  # <run-output> <key>
 }
 
 # Status word of one step in a run's `steps[N]{step,status,...}` table, e.g.
-# `ci`. Empty when the run record has no row for that step. The table is plain
-# comma-separated TOON with no quoting in these columns.
+# `ci`. Empty when the run record has no row for that step.
+#
+# The recorded tables are unpadded and unquoted, but this column decides done
+# versus unknown for every full-path terminal pass, so it tolerates surrounding
+# whitespace and quoting rather than depending on that: `ci, completed,0,4221`
+# must not read as a missing pass. bin/fm-nm-run-lib.sh owns the trim-and-unquote
+# and the readers of the same table in bin/fm-crew-state.sh are written the same
+# way.
 fm_crew_step_status() {  # <run-output> <step-name>
-  printf '%s\n' "$1" \
-    | sed -n "s/^[[:space:]]*$2,\([^,]*\),.*/\1/p" \
-    | head -1 \
-    | tr -d '"'
+  fm_nm_strip_quotes "$(printf '%s\n' "$1" \
+    | sed -n "s/^[[:space:]]*$2[[:space:]]*,\([^,]*\),.*/\1/p" \
+    | head -1)"
 }
 
 # The first RUNNING or FIXING row of a run's `active_steps[N]{...}` table, as
 # "<step>|<status>|<active_for>|<last_activity>". Empty when the run has no
 # active step, which is the daemon's own statement that nothing is executing.
 #
-# Columns are read by NAME from the table header rather than by position, and
-# the row is split quote-aware, because `last_activity` is a quoted free-text
-# field that routinely contains commas of its own:
+# Columns are read by NAME from the table header rather than by position, each
+# split value is trimmed before the status word is compared - a padded
+# `test, running, 3m38s` must not silently stop the liveness override - and the
+# row is split quote-aware, because `last_activity` is a quoted free-text field
+# that routinely contains commas of its own:
 #   review,fixing,1h27m,"9m52s ago: log: I'll review the changes, then...","2010043",fix 3
 #
 # The table ends at a blank line, a line with no comma, or ANY following TOON
@@ -207,6 +214,9 @@ fm_crew_active_step() {  # <run-output>
         cur = cur c
       }
       val[++nval] = cur
+      for (i = 1; i <= nval; i++) {
+        gsub(/^[[:space:]]+|[[:space:]]+$/, "", val[i])
+      }
       step = ""; status = ""; active_for = ""; last_activity = ""
       for (i = 1; i <= ncol && i <= nval; i++) {
         if (col[i] == "step") step = val[i]

@@ -202,13 +202,11 @@ last_nonempty_line() {  # <file>
 #
 # That reader costs up to two 10s-bounded `no-mistakes` calls per task, plus one
 # 3s-bounded `gh pr view` for a task whose run reached a terminal pass. Keeping
-# the forge read is a ruling, not an oversight: this snapshot is the
-# captain-facing surface, which is exactly where a false "merged" claim does its
-# damage, so a live merge state is worth paying for here. Skipping it would render
-# the merge state unverified, and an unverified merge state makes a coarse
-# completed row read parked - suppressing the very signal this view exists to
-# surface. The marginal cost is noise beside the no-mistakes calls already spent
-# per task. Do not optimise it away without answering all three points.
+# the forge read is a ruling, not an oversight, and two reasons hold it:
+# this snapshot is the captain-facing surface, which is exactly where a false
+# "merged" claim does its damage, so a live merge state is worth a bounded read
+# here; and the marginal cost is noise beside the no-mistakes calls each task
+# already pays. Answer both before optimising it away.
 crew_state_json() {  # <id>
   local id=$1 raw rest state source detail sep
   raw=$(

@@ -2225,6 +2225,41 @@ test_terminal_pass_without_ci_evidence_supersedes_a_stale_gate_log() {
   pass "a terminal pass without CI evidence supersedes a stale gate log"
 }
 
+# Column padding. The recorded tables are unpadded, but the ci status column now
+# decides done versus unknown for every full-path terminal pass, and the
+# active_steps status column decides whether a live run is recognised at all. A
+# no-mistakes version that emits `ci, completed,0,0` would otherwise demote every
+# terminal pass fleet-wide and silently stop the liveness override, both in the
+# conservative direction and both invisible. The sibling readers of these same
+# tables already tolerate the padding; these assert that this one does too.
+test_padded_step_columns_do_not_change_the_verdict() {
+  reset_fakes
+  local d run_head out
+  d=$(new_case padded-columns)
+  make_repo_on_branch "$d/wt" fm/feat-padded
+  make_fakebin "$d" >/dev/null
+  fm_write_meta "$d/state/padded.meta" "window=fm:fm-padded" "worktree=$d/wt" "kind=ship" "harness=claude"
+  FM_FAKE_AXI_STATUS="$(run_passed fm/feat-padded | sed 's/^    ci,completed,0,0$/    ci , completed , 0, 0/')"
+  FM_FAKE_GH_PR='{"mergeStateStatus":"CLEAN","state":"MERGED","url":"https://github.com/o/r/pull/1"}'
+  out=$(run_crew_state "$d" padded)
+  assert_contains "$out" "state: done" "a padded ci,completed row is still CI evidence"
+  assert_contains "$out" "PR merged" "the forge-confirmed landing is still reported"
+  assert_not_contains "$out" "no CI evidence" "padding must not read as a missing ci row"
+
+  d=$(new_case padded-active-step)
+  make_repo_on_branch "$d/wt" fm/feat-paddedlive
+  run_head=$(git -C "$d/wt" rev-parse HEAD)
+  make_fakebin "$d" >/dev/null
+  fm_write_meta "$d/state/paddedlive.meta" "window=fm:fm-paddedlive" "worktree=$d/wt" "kind=ship" "harness=claude"
+  FM_FAKE_AXI_STATUS="$(run_live_active_step fm/feat-paddedlive "$run_head" |
+    sed 's/^    test,running,3m38s,/    test , running , 3m38s , /')"
+  out=$(run_crew_state "$d" paddedlive)
+  assert_contains "$out" "state: working" "a padded active_steps row is still an executing step"
+  assert_contains "$out" "test running" "the padded step and status words are reported unpadded"
+  assert_contains "$out" "active 3m38s" "so is the padded active_for column"
+  pass "padded step columns do not change the verdict"
+}
+
 test_active_run_is_authoritative
 test_stale_needs_decision_superseded
 test_stale_blocked_superseded
@@ -2291,6 +2326,7 @@ test_coarse_pr_url_is_found_by_shape_not_by_column
 test_a_table_after_active_steps_is_not_read_as_an_active_step
 test_branch_sync_gate_status_does_not_park_a_running_run
 test_terminal_pass_without_ci_evidence_supersedes_a_stale_gate_log
+test_padded_step_columns_do_not_change_the_verdict
 test_terminal_pass_without_a_steps_table_is_not_done
 test_terminal_pass_with_a_pending_ci_step_is_not_done
 test_coarse_completed_row_without_a_merge_is_not_done
