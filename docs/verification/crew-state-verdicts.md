@@ -14,7 +14,7 @@ Branch: `fm/fm-crew-state-stale-run-masks-live`.
 
 ```
 $ bash tests/fm-crew-state.test.sh | grep -c '^ok'
-74
+75
 $ bash tests/fm-inactive-reconcile.test.sh 2>/dev/null | grep -c '^ok'
 17
 ```
@@ -53,16 +53,18 @@ Every row must fail, and must fail on the named assertion.
 | The coarse row's PR url is found by shape, not by column index | read it from the fixed sixth field again | `test_coarse_pr_url_is_found_by_shape_not_by_column` | fails: `missing: 'state: done'` |
 | The `active_steps` table ends at any following TOON table header | end it only at a blank or comma-free line | `test_a_table_after_active_steps_is_not_read_as_an_active_step` | fails: `unexpected: 'test running'` |
 | Gate and step reads are scoped to the run object, not the whole record | let `nm_gate_status` scan raw `$RUN_OUT` again | `test_branch_sync_gate_status_does_not_park_a_running_run` | fails: `unexpected: 'state: parked'` |
+| A terminal pass with no CI evidence reads unknown, never parked | return `parked` for that verdict again | `test_terminal_pass_without_ci_evidence_supersedes_a_stale_gate_log` | fails: `missing: 'status-log superseded'` |
 | The per-child forge bound is at most a third of the scan's remaining budget | pass the whole remaining budget as the bound | `test_forge_bound_is_derived_from_the_remaining_budget` (`tests/fm-inactive-reconcile.test.sh`) | fails: `forge bound exceeds a third of the 6s budget: '3\|'` |
 | A budget too small to spare the read skips it instead of shrinking it | take the bound arm unconditionally (`if true`) | the same case | fails: `a 2s budget cannot spare a whole second of forge read: '0\|'` |
 
-26 of 26.
+27 of 27.
 
 The first two rows share a case deliberately: both guards sit on the runs-list path, and the case needs both to hold - one stops the dead run being reached, the other makes the live run usable.
 Three later pairs share a mutation rather than a case, because one gate covers several distinct ways for the evidence to be absent and each way needs its own case to show it is covered.
 The `branch_sync:` scoping row is pointed at the case where it carries weight: the pre-existing `test_missing_run_head_falls_back_to_current_state` stays green under that mutation, because its fixture has no `branch_sync:` block for the unscoped read to pick up.
 The strictness of the PR-URL rules themselves is not listed as a guard of this file's: `bin/fm-pr-lib.sh` owns them, and `fm_crew_forge_pr_state` reuses `fm_pr_url_parse` read-only rather than restating them.
 The look-alike-host case above pins that reuse behaviourally, since a loosened parse would send `https://evil-github.com/o/r/pull/6` to the real forge.
+The unknown-not-parked row is pointed at the case that shows the HARM, not just the word: with `parked` restored, the answered `needs-decision:` line stops being reconciled as superseded, which is what let a resolved decision resurface as a captain demand.
 The 7-character floor in `fm_crew_sha_matches` is deliberately absent from the table: it is defensive against a degenerate abbreviation and has no observed trigger, so there is no honest case to pin it with.
 The last two rows live in `tests/fm-inactive-reconcile.test.sh` because the budget belongs to that caller, and they are listed here because the bound it derives is what keeps this file's forge read affordable.
 
@@ -118,7 +120,7 @@ Both were verified on 2026-08-22 against `no-mistakes` v1.48.0, because run sele
 
 Selection uses the second because finding the branch's run at all outranks richer detail about it.
 The first would allow a follow-up `axi status --run <id>` and so give that path the same full step, activity and `branch_sync` evidence the `axi status` path gets, which a coarse row cannot carry; that upgrade is named in `bin/fm-crew-state.sh` as follow-up work rather than done here.
-Until it lands, a coarse `completed` row can never satisfy the CI-evidence whitelist, so the forge's own answer is the only terminal fact that path has: merged or closed reads done, and open or unanswered reads parked.
+Until it lands, a coarse `completed` row can never satisfy the CI-evidence whitelist, so the forge's own answer is the only terminal fact that path has: merged or closed reads done, and open or unanswered reads unknown.
 
 ## branch_sync availability
 

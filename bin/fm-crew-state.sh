@@ -32,9 +32,11 @@
 #      checks-passed -> done, since that word is itself a statement about the
 #      checks. `passed` is not: it says the PIPELINE completed, so it reads done
 #      only when this run's own ci step is recorded `completed`, and every other
-#      ci-step answer is the absence of CI evidence and reports parked. The
-#      coarse runs-list path carries no steps table at all, so a `completed` row
-#      there reads done only on a forge-confirmed merge or close. EXCEPT: while
+#      ci-step answer is the absence of CI evidence and reports unknown, because
+#      a terminated run whose validation cannot be established is exactly "I
+#      cannot tell", not a gate anyone can respond to. The coarse runs-list path
+#      carries no steps table at all, so a `completed` row there reads done only
+#      on a forge-confirmed merge or close, and unknown otherwise. EXCEPT: while
 #      the active step is ci, `axi status` alone cannot tell "still waiting on
 #      checks" from "checks green, waiting on merge" (see nm_ci_checks_state) -
 #      a ci-step log-tail check overrides working -> done once checks read
@@ -238,13 +240,20 @@ nm_run() {  # <args...>
 # that scoping; nm_field composes with it, and the single deliberate reader INSIDE
 # the block is that library's ownership proof, which must clear three equalities
 # before the block may say anything about this run.
+#
+# Computed ONCE, into $RUN_OBJECT, when $RUN_OUT is captured: the record does not
+# change afterwards, and every reader here would otherwise re-fork awk over the
+# same bytes - about fifteen times per classification pass, once per task in
+# bin/fm-fleet-snapshot.sh's fleet-wide loop.
 RUN_OUT=""
+RUN_OBJECT=""
 nm_run_object() {
-  fm_crew_run_scalars "$RUN_OUT"
+  printf '%s\n' "$RUN_OBJECT"
 }
-# Scalar value of a TOON key in the run object.
+# Scalar value of a TOON key in the run object. bin/fm-nm-run-lib.sh owns the
+# TOON scalar read; the scoping is already applied to $RUN_OBJECT.
 nm_field() {  # <key>
-  fm_crew_run_field "$RUN_OUT" "$1"
+  fm_nm_field "$RUN_OBJECT" "$1"
 }
 # Finding count from a findings[N]{...} table header; empty when none.
 nm_findings_count() {
@@ -418,6 +427,7 @@ COARSE_PR=""
 # worktree, so skip the lookup for them and read state from pane/log directly.
 if [ "$KIND" = ship ] && [ -n "$CREW_BRANCH" ] && command -v no-mistakes >/dev/null 2>&1; then
   RUN_OUT=$(nm_run axi status)
+  RUN_OBJECT=$(fm_crew_run_scalars "$RUN_OUT")
   if [ -n "$RUN_OUT" ]; then
     run_branch=$(strip_quotes "$(nm_field branch)")
     if [ -n "$run_branch" ] && [ "$run_branch" = "$CREW_BRANCH" ]; then

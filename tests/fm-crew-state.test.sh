@@ -1741,7 +1741,10 @@ test_ci_skipped_pass_never_reads_as_done() {
   FM_FAKE_GH_PR='{"mergeStateStatus":"DIRTY","state":"OPEN","url":"https://github.com/o/r/pull/6"}'
   out=$(run_crew_state "$d" skip)
   assert_not_contains "$out" "state: done" "a skipped ci step is the absence of validation, not validation"
+  assert_contains "$out" "state: unknown" "the evidence does not settle whether this passed"
+  assert_not_contains "$out" "state: parked" "a terminated run is not a gate the worker can respond to"
   assert_not_contains "$out" "merged" "an open PR must never be described as merged"
+  assert_contains "$out" "run terminated" "the detail says the run is over, not waiting"
   assert_contains "$out" "ci SKIPPED" "the missing CI evidence is named"
   assert_contains "$out" "PR still open" "the forge's own answer is reported"
   pass "a run that passed with ci skipped never reads as done"
@@ -1809,7 +1812,8 @@ test_terminal_pass_without_a_steps_table_is_not_done() {
   FM_FAKE_GH_PR='{"mergeStateStatus":"BLOCKED","state":"OPEN","url":"https://github.com/o/r/pull/1"}'
   out=$(run_crew_state "$d" nosteps)
   assert_not_contains "$out" "state: done" "a record with no ci evidence at all must not read as a pass"
-  assert_contains "$out" "state: parked" "no CI evidence needs a ruling, not a landing"
+  assert_contains "$out" "state: unknown" "no CI evidence cannot tell whether it passed"
+  assert_not_contains "$out" "state: parked" "a terminated run is not a gate anyone can respond to"
   assert_contains "$out" "no ci step recorded" "the absent ci row is named honestly"
   assert_not_contains "$out" "ci SKIPPED" "an absent ci row is not a skipped one"
   pass "a terminal pass with no steps table is not done"
@@ -1826,7 +1830,8 @@ test_terminal_pass_with_a_pending_ci_step_is_not_done() {
   FM_FAKE_GH_PR='{"mergeStateStatus":"UNKNOWN","state":"OPEN","url":"https://github.com/o/r/pull/1"}'
   out=$(run_crew_state "$d" cipending)
   assert_not_contains "$out" "state: done" "only a completed ci step earns the pass"
-  assert_contains "$out" "state: parked" "any other ci status word is absence of evidence"
+  assert_contains "$out" "state: unknown" "any other ci status word is absence of evidence"
+  assert_not_contains "$out" "state: parked" "a terminated run is not a gate anyone can respond to"
   assert_contains "$out" "ci pending" "the ci step's own word is reported"
   pass "a terminal pass whose ci step never completed is not done"
 }
@@ -1853,7 +1858,8 @@ EOF
   out=$(run_crew_state "$d" coarseopen)
   assert_contains "$out" "source: run-step" "the branch's own coarse row is still attributed"
   assert_not_contains "$out" "state: done" "a coarse completed row cannot rule out a skipped ci step"
-  assert_contains "$out" "state: parked" "no CI evidence on this path needs a ruling"
+  assert_contains "$out" "state: unknown" "no CI evidence on this path cannot settle the run"
+  assert_not_contains "$out" "state: parked" "a terminated coarse row is not a gate"
   assert_contains "$out" "runs-list path" "the detail names why the evidence is missing"
   assert_contains "$out" "PR still open" "the forge's own answer is reported"
   assert_not_contains "$out" "PR merged" "an open PR is never described as merged"
@@ -1898,7 +1904,7 @@ EOF
   FM_FAKE_GH_MISSING=1
   out=$(run_crew_state "$d" coarsesilent)
   assert_not_contains "$out" "state: done" "an unanswered forge cannot settle a coarse completed row"
-  assert_contains "$out" "state: parked" "unverified is not a landing"
+  assert_contains "$out" "state: unknown" "unverified is not a landing"
   assert_contains "$out" "unverified" "the unanswered forge is reported honestly"
   pass "a coarse completed row with an unanswered forge is not done"
 }
@@ -1974,7 +1980,7 @@ EOF
   FM_FAKE_GH_PR='{"mergeStateStatus":"CLEAN","state":"MERGED","url":"https://gitlab.com/grp/sub/proj/-/merge_requests/12"}'
   out=$(run_crew_state "$d" gitlab)
   assert_not_contains "$out" "state: done" "nothing proves a run landed without CI evidence or a forge answer"
-  assert_contains "$out" "state: parked" "an unqueryable provider keeps the run non-terminal"
+  assert_contains "$out" "state: unknown" "an unqueryable provider leaves the run unsettled"
   assert_contains "$out" "no forge client for gitlab" "the permanent condition names the provider"
   assert_not_contains "$out" "PR state unverified" "a permanent condition must not read as a transient forge failure"
   assert_not_contains "$out" "PR merged" "a merge claim is never emitted for a PR that was never read"
@@ -2192,6 +2198,33 @@ $(branch_sync_block 01M0SOMEOTHERRUNIDENTIFIER "$FM_FAKE_RUN_HEAD" "$FM_FAKE_RUN
   pass "a branch_sync pipeline status does not park a running run"
 }
 
+# The harm the overloaded word did. A crew appends `needs-decision:`, the captain
+# answers it, and the run then TERMINATES at `outcome: passed` with `ci,skipped`
+# without the crew appending anything further, so the log's last line is still
+# `needs-decision:` - the exact stale-log condition this whole script exists for.
+# While that verdict shared the word `parked` with a live gate, the reconciliation
+# below treated the answered decision as still live: the superseded annotation was
+# withheld, and a consumer that clears an open decision once the run moves off
+# parked stopped clearing it, so a resolved decision could resurface as a captain
+# demand. The state word is pinned in BOTH directions here so it cannot drift back.
+test_terminal_pass_without_ci_evidence_supersedes_a_stale_gate_log() {
+  reset_fakes
+  local d out
+  d=$(new_case terminal-pass-stale-gate)
+  make_repo_on_branch "$d/wt" fm/feat-staleg
+  make_fakebin "$d" >/dev/null
+  fm_write_meta "$d/state/staleg.meta" "window=fm:fm-staleg" "worktree=$d/wt" "kind=ship" "harness=claude"
+  printf 'needs-decision: review gate, finding r2 needs a ruling\n' > "$d/state/staleg.status"
+  FM_FAKE_AXI_STATUS="$(run_passed_ci_skipped fm/feat-staleg)"
+  FM_FAKE_GH_PR='{"mergeStateStatus":"DIRTY","state":"OPEN","url":"https://github.com/o/r/pull/6"}'
+  out=$(run_crew_state "$d" staleg)
+  assert_contains "$out" "status-log superseded" "the answered gate line is reconciled as stale"
+  assert_not_contains "$out" "state: parked" "the answered gate is gone, so nothing is parked"
+  assert_contains "$out" "state: unknown" "a terminated run with no CI evidence is unknown"
+  assert_contains "$out" "ci SKIPPED" "the detail still names what withheld the pass"
+  pass "a terminal pass without CI evidence supersedes a stale gate log"
+}
+
 test_active_run_is_authoritative
 test_stale_needs_decision_superseded
 test_stale_blocked_superseded
@@ -2257,6 +2290,7 @@ test_no_forge_knob_honors_a_truthy_word
 test_coarse_pr_url_is_found_by_shape_not_by_column
 test_a_table_after_active_steps_is_not_read_as_an_active_step
 test_branch_sync_gate_status_does_not_park_a_running_run
+test_terminal_pass_without_ci_evidence_supersedes_a_stale_gate_log
 test_terminal_pass_without_a_steps_table_is_not_done
 test_terminal_pass_with_a_pending_ci_step_is_not_done
 test_coarse_completed_row_without_a_merge_is_not_done

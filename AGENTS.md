@@ -351,7 +351,8 @@ Require the matching `resolved` event, forbid `--yes`, and require the worker to
 Resume fleet supervision immediately after the decision lands.
 
 Judge validation by `bin/fm-crew-state.sh`'s verdict for that task, not by shell liveness or the last status event.
-Working means the run is progressing; parked means the worker must follow the active gate help, or that a run finished without the evidence to call it done; done means the evidence settled it; failed or cancelled is failed.
+Working means the run is progressing; parked means the worker must follow the active gate help; done means the evidence settled it; failed or cancelled is failed.
+Unknown means the evidence does not settle it, which includes a run that terminated without the CI evidence to call it done; that is a run needing a ruling, not a gate anyone can respond to, and the detail line names the ci word and the forge's answer that led there.
 A worker hand-editing, committing, aborting, or restarting during an active validation run duplicates pipeline ownership outside the supersession sequence above; steer it back to the gate response flow.
 The worker reports the PR when CI first becomes green rather than waiting for merge monitoring to finish.
 
