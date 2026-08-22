@@ -18,6 +18,12 @@
 # Exit status: 0 the merge is clean AND the selected tests passed; 1 conflicts;
 # 2 clean merge but tests failed; 3 the run could not be performed.
 #
+# Requires a committer identity (git user.name and user.email): the dry run's
+# `git merge --no-ff --no-commit` records a merge state and git refuses without
+# one. A run that has none is reported BLOCKED, quoting git's own reason under
+# `git reported:`, rather than papered over - a bare CI checkout is exactly the
+# environment that produces it.
+#
 # WHY THIS NEVER MERGES
 #
 # This is a fork of an actively developed upstream, and its Windows delta is
