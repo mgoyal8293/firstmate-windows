@@ -47,8 +47,9 @@
 #     describes this code. Admit any verdict.
 #   * unresolvable (the run head is a real sha this checkout does not have): the
 #     signature of a pipeline that owns the branch and has pushed commits the
-#     task worktree never fetched. Admit only a NON-TERMINAL verdict - enough to
-#     report the task alive, never enough to declare it done or failed.
+#     task worktree never fetched. Admits a NON-TERMINAL verdict on geometry
+#     alone - enough to report the task alive - and a TERMINAL one only once
+#     ownership is positively proven (fm_crew_pipeline_ownership_proven).
 #   * local-ahead / diverged: the run describes other code (a prior run, or a
 #     rewritten tip). Admit nothing; fall back to live current-state sources.
 #   * absent (the run record carries no head at all): nothing to bind. Admit
@@ -67,13 +68,37 @@
 #   * outcome passed/checks-passed, ci SKIPPED    -> NOT done. Nothing validated
 #     this work, so it reports parked: it needs a ruling, not a landing.
 #
-# `no-mistakes axi sync --check` reports `branch_sync.pipeline.current_head` and
-# would prove pipeline ownership outright, which is the one thing that could
-# safely widen the unresolvable case to admit a TERMINAL verdict too. It is
-# deliberately not used: this reader runs on every heartbeat for every crew, and
-# `axi sync` without `--check` APPLIES a plan, so a read-only current-state tool
-# is the wrong caller for it. The head relation answers the live case, which is
-# the case the defect needed, at no extra process cost.
+# PROVING PIPELINE OWNERSHIP. An unresolvable head is refused a terminal verdict
+# on geometry alone because geometry cannot tell "the pipeline pushed commits we
+# have not fetched" from "the branch tip was rewritten and the old head pruned".
+# `axi status` settles that itself, at no extra process cost: invoked from the
+# task worktree - which is how this reader always invokes it - its answer carries
+# a `branch_sync:` block whose `pipeline.run`, `pipeline.current_head`,
+# `pipeline.pushed_head` and `local.head` state which run owns this branch, what
+# head it has advanced to, and which checkout the block describes. No `axi sync`
+# call is involved, and none should be: `axi sync` without `--check` APPLIES a
+# plan, which a read-only current-state reader must never do.
+#
+# Three equalities have to hold before that block may widen anything, and each
+# closes a different way of being wrong:
+#   * pipeline.run equals this run's id, so a binding for a DIFFERENT run can
+#     never vouch for this one;
+#   * pipeline.current_head or pipeline.pushed_head equals the run head under
+#     test, so the block is about the head we could not resolve;
+#   * local.head equals this worktree's HEAD, so the block describes THIS
+#     checkout.
+# Anything missing, empty, or mismatched leaves the conservative refusal in
+# place, so the proof only ever adds attribution and never removes it.
+#
+# Observed: the block is present for a live pipeline-owned run, and absent when
+# the invoking worktree's branch has no push binding at all (a runless branch
+# gets no block even though `axi status` still answers with another branch's
+# run - which is exactly what the pipeline.run equality is for). Its persistence
+# for a TERMINAL run on its own branch is expected but not yet observed here, and
+# `axi sync --recover`'s own contract - returning custody of a branch stranded by
+# a terminal run - is the reason to expect it. Where it is absent the terminal
+# refusal simply stands, so that gap costs a handling turn and nothing else.
+# docs/verification/crew-state-verdicts.md owns refreshing that observation.
 #
 # Everywhere the evidence does not settle the question, the answer is the
 # conservative one. A tool that says "I do not know" costs a handling turn; a
@@ -157,6 +182,66 @@ fm_crew_active_step_note() {  # <active-step-record>
   printf ')'
 }
 
+# --- branch_sync (pipeline ownership) ---------------------------------------
+
+# Scalar value of <key> inside the <block> sub-block of a run record's
+# `branch_sync:` section, e.g. `pipeline current_head` or `local head`. Empty
+# when the section, the sub-block, or the key is absent - which is the normal
+# answer for a branch with no pipeline push binding.
+#
+# Read with indent awareness rather than a bare grep on purpose: `branch_sync`
+# repeats key names the run block also uses (`branch`, `status`, `run`), so an
+# unscoped match would silently cross-read one section's value for another's.
+fm_crew_branch_sync_field() {  # <run-output> <block> <key>
+  printf '%s\n' "$1" | awk -v blk="$2" -v key="$3" '
+    /^branch_sync:/ { in_bs = 1; next }
+    in_bs && /^[^[:space:]]/ { exit }
+    !in_bs { next }
+    /^  [^[:space:]]/ {
+      in_blk = ($0 ~ "^  " blk ":[[:space:]]*$")
+      next
+    }
+    in_blk && $0 ~ "^    " key ":" {
+      value = $0
+      sub("^    " key ":[[:space:]]*", "", value)
+      gsub(/"/, "", value)
+      print value
+      exit
+    }
+  '
+}
+
+# 0 when two commit ids name the same commit, either being abbreviated. A run
+# record reports a short head while branch_sync reports the full sha, so an exact
+# comparison would never match; a prefix comparison with a floor stops a
+# degenerate empty or near-empty value from matching everything.
+fm_crew_sha_matches() {  # <sha-a> <sha-b>
+  local a=$1 b=$2 short long
+  [ -n "$a" ] && [ -n "$b" ] || return 1
+  if [ ${#a} -le ${#b} ]; then short=$a; long=$b; else short=$b; long=$a; fi
+  [ ${#short} -ge 7 ] || return 1
+  case "$long" in "$short"*) return 0 ;; esac
+  return 1
+}
+
+# 0 when the run record itself proves that the pipeline owns this branch and has
+# advanced it to <run-head>. See this file's header for what each equality rules
+# out; all three must hold, and an absent branch_sync block proves nothing.
+fm_crew_pipeline_ownership_proven() {  # <run-output> <worktree> <run-head>
+  local run_out=$1 wt=$2 run_head=$3 run_id bs_run bs_current bs_pushed bs_local local_head
+  bs_run=$(fm_crew_branch_sync_field "$run_out" pipeline run)
+  [ -n "$bs_run" ] || return 1
+  run_id=$(printf '%s\n' "$run_out" | sed -n 's/^[[:space:]]*id:[[:space:]]*\(.*\)/\1/p' | head -1 | tr -d '"')
+  [ -n "$run_id" ] && [ "$bs_run" = "$run_id" ] || return 1
+  bs_current=$(fm_crew_branch_sync_field "$run_out" pipeline current_head)
+  bs_pushed=$(fm_crew_branch_sync_field "$run_out" pipeline pushed_head)
+  fm_crew_sha_matches "$bs_current" "$run_head" ||
+    fm_crew_sha_matches "$bs_pushed" "$run_head" || return 1
+  bs_local=$(fm_crew_branch_sync_field "$run_out" local head)
+  local_head=$(git -C "$wt" rev-parse HEAD 2>/dev/null) || return 1
+  fm_crew_sha_matches "$bs_local" "$local_head"
+}
+
 # --- code identity ----------------------------------------------------------
 
 # Geometry between a run's head and a worktree's HEAD, as one word:
@@ -211,6 +296,14 @@ fm_crew_run_admits() {  # <worktree> <run-output> <run-head>
   relation=$(fm_crew_head_relation "$wt" "$run_head")
   terminality=$(fm_crew_terminality "$run_out")
   fm_crew_binding_admits "$relation" "$terminality" && return 0
+  # Ownership proof: geometry could not resolve the run head, but the run record
+  # itself shows the pipeline owns this branch and advanced it to exactly that
+  # head, from this checkout. That distinguishes an unfetched pipeline head from
+  # a pruned rewrite, which is the only reason a terminal verdict was withheld.
+  if [ "$relation" = unresolvable ] &&
+    fm_crew_pipeline_ownership_proven "$run_out" "$wt" "$run_head"; then
+    return 0
+  fi
   # Liveness override: an actively executing step is the daemon stating that
   # this run is alive NOW, and one branch cannot host two concurrent runs, so
   # the run is this task's regardless of head geometry. Non-terminal only.

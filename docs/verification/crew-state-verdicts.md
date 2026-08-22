@@ -4,17 +4,17 @@ Maintainer-verification record for the guards in [`bin/fm-crew-run-verdict-lib.s
 Its purpose is narrow: prove the regression cases in `tests/fm-crew-state.test.sh` are not vacuous.
 A guard whose test passes with the guard removed protects nothing, and this repo has shipped that mistake before.
 
-Refresh this record by re-running the two commands below after any change to run selection, code binding, or the terminal-pass evidence gates.
+Refresh this record after any change to run selection, code binding, ownership proof, or the terminal-pass evidence gates.
 
 ## Suite
 
 Date: 2026-08-22.
-Base: `7eb1816`.
+Branch: `fm/fm-crew-state-stale-run-masks-live`.
 `no-mistakes` v1.48.0, `gh` 2.x, ShellCheck 0.11.0.
 
 ```
 $ bash tests/fm-crew-state.test.sh | grep -c '^ok'
-57
+61
 ```
 
 The count is the evidence, not the exit status: a green step does not prove its assertions ran.
@@ -34,10 +34,15 @@ Every row must fail, and must fail on the named assertion.
 | A merged or closed claim comes only from the forge | restore the `run passed: PR merged/closed` detail | `test_open_pr_is_never_reported_as_merged` | fails: `missing: 'not merged'` |
 | An unanswered forge is never rendered as a landing | restore the same detail | `test_unanswered_forge_never_claims_a_landing` | fails: `missing: 'unverified'` |
 | `active_steps` columns are split quote-aware | stop treating `"` as a quote | `test_live_run_at_unfetched_head_is_not_replaced_by_older_failed_run` | fails: `missing: 'last activity 3m11s ago'` |
+| A proven pipeline head admits its run's terminal verdict | drop the ownership proof | `test_terminal_run_at_proven_pipeline_head_is_attributed` | fails: `missing: 'state: failed'` |
+| Ownership requires `pipeline.run` to be this run | drop that equality | `test_branch_sync_for_another_run_does_not_prove_ownership` | fails: `unexpected: 'source: run-step'` |
+| Ownership requires the pipeline head to be this run's head | drop that equality | `test_branch_sync_for_another_head_does_not_prove_ownership` | fails: `unexpected: 'source: run-step'` |
+| Ownership requires `local.head` to be this checkout | drop that equality | `test_branch_sync_for_another_checkout_does_not_prove_ownership` | fails: `unexpected: 'source: run-step'` |
 
-8 of 8.
+12 of 12.
 
 The first two rows share a case deliberately: both guards sit on the runs-list path, and the case needs both to hold - one stops the dead run being reached, the other makes the live run usable.
+The 7-character floor in `fm_crew_sha_matches` is deliberately absent from the table: it is defensive against a degenerate abbreviation and has no observed trigger, so there is no honest case to pin it with.
 
 ## Reproducing the matrix
 
@@ -55,5 +60,30 @@ The run records in those cases are recorded output from real runs on this fork, 
 | `run_passed_ci_completed` | `01M0JASXQ1H4Q5YAZYJT03F1HN` | the same outcome word with `ci,completed` |
 | `run_failed_at_local_head` | `01M0EFHKF1A3CJX4KK58HWJ7D2` | the terminal-failed run that masked a live one |
 | `run_live_active_step` | `01M0N8J9ET64CBM89W4D663WBZ` | a live `active_steps` row, including its quoted comma-bearing `last_activity` |
+| `branch_sync_block` | `01M0N8J9ET64CBM89W4D663WBZ` | the `branch_sync:` field set and shape, read from that run's own task worktree |
 
 `make_pipeline_ahead_topology` builds the geometry those cases need for real - a task worktree plus a separate clone standing in for the pipeline's own - so the run head under test is a genuine commit the checkout cannot resolve rather than a made-up sha.
+
+## branch_sync availability
+
+`bin/fm-crew-run-verdict-lib.sh` widens the unresolvable-head case using the `branch_sync:` block that `no-mistakes axi status` already returns, so what that block does and does not appear for is load-bearing.
+Observed on 2026-08-22 against `no-mistakes` v1.48.0:
+
+| Invocation | `branch_sync:` |
+| --- | --- |
+| `axi status` from the task worktree of a live pipeline-owned run | present, with `pipeline.run`, `submitted_head`, `current_head`, `pushed_head`, `local.head`, `remote.observed_head`, `pr_state` |
+| `axi status --run <that same live run>` from that worktree | present |
+| `axi status` from a worktree whose branch has no push binding | absent - the command still answers with another branch's run, and carries no block at all |
+| `axi status --run <terminal run>` from a worktree on a different branch | absent |
+| `axi status` from the primary checkout on `main` | present but `state: ambiguous_context`, every `pipeline` field empty |
+
+Two consequences worth keeping straight.
+The block is computed for the INVOKING worktree's branch, not for the run named by `--run`, which is why the ownership proof compares `pipeline.run` against the run under test instead of trusting the block's mere presence.
+And its persistence for a terminal run queried from its own branch is expected but NOT yet observed here, because no branch in this repo currently has both a worktree and a terminal run; `axi sync --recover`'s contract - returning custody of a branch stranded by a terminal run with unpublished pipeline commits - is the reason to expect the binding to outlive the run.
+Where the block is absent the conservative refusal simply stands, so that gap costs a handling turn and never a wrong verdict.
+Refresh this row the next time a completed run's branch still has its worktree:
+
+```
+cd <task worktree on the run's branch>
+no-mistakes axi status --run <that branch's terminal run id> | grep -A12 '^branch_sync:'
+```

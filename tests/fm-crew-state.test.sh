@@ -524,6 +524,47 @@ run:
 EOF
 }
 
+# The `branch_sync:` block `axi status` adds when the invoking worktree's branch
+# has a live pipeline push binding - which is how fm-crew-state always invokes it,
+# from the task worktree. Field set and shape recorded from run
+# 01M0N8J9ET64CBM89W4D663WBZ read from its own worktree. The identities are
+# parameters so a case can drive each ownership equality apart deliberately.
+branch_sync_block() {  # <pipeline-run-id> <pipeline-head> <local-head> <branch>
+  cat <<EOF
+branch_sync:
+  state: behind
+  changed: false
+  local:
+    branch: $4
+    head: $3
+    clean: true
+  pipeline:
+    run: "$1"
+    status: running
+    phase: ""
+    submitted_head: $3
+    current_head: $2
+    pushed_head: $2
+    pushed_at: 1787426383
+    push_generation: 1
+  target:
+    kind: upstream
+    remote: origin
+    url: "https://github.com/o/r.git"
+    ref: refs/heads/$4
+  remote:
+    observed_head: $2
+    freshness: pipeline_push
+    observed_at: 1787426383
+  relation: behind
+  safety: refresh_required
+  pr_state: open
+  next_action:
+    code: sync
+    command: no-mistakes axi sync
+EOF
+}
+
 # ---------------------------------------------------------------------------
 # (a) active run-step is authoritative
 test_active_run_is_authoritative() {
@@ -1674,6 +1715,88 @@ test_unanswered_forge_never_claims_a_landing() {
   pass "an unanswered forge never claims a landing"
 }
 
+# Ownership proof. Geometry cannot tell an unfetched pipeline head from a pruned
+# rewrite, so a terminal verdict is withheld there - but the run record itself
+# settles it, because `axi status` read from the task worktree reports which run
+# owns this branch and what head it advanced to. With that proof the terminal
+# verdict is admissible; the three equalities below each keep a different way of
+# being wrong out.
+test_terminal_run_at_proven_pipeline_head_is_attributed() {
+  reset_fakes
+  local d out
+  d=$(new_case proven-ownership)
+  make_pipeline_ahead_topology "$d" fm/feat-proven
+  make_fakebin "$d" >/dev/null
+  fm_write_meta "$d/state/proven.meta" "window=fm:fm-proven" "worktree=$d/wt" "kind=ship" "harness=claude"
+  printf 'working: fix round under way\n' > "$d/state/proven.status"
+  FM_FAKE_AXI_STATUS="$(run_failed_at_local_head fm/feat-proven "$PIPE_HEAD")
+$(branch_sync_block 01M0EFHKF1A3CJX4KK58HWJ7D2 "$PIPE_HEAD" "$LOCAL_HEAD" fm/feat-proven)"
+  out=$(run_crew_state "$d" proven)
+  assert_contains "$out" "state: failed" "a proven pipeline head carries its run's terminal verdict"
+  assert_contains "$out" "source: run-step" "the run itself is the source once ownership is proven"
+  pass "a terminal run at a proven pipeline head is attributed"
+}
+
+test_branch_sync_for_another_run_does_not_prove_ownership() {
+  reset_fakes
+  local d out
+  d=$(new_case proven-other-run)
+  make_pipeline_ahead_topology "$d" fm/feat-otherrun
+  make_fakebin "$d" >/dev/null
+  fm_write_meta "$d/state/otherrun.meta" "window=fm:fm-otherrun" "worktree=$d/wt" "kind=ship" "harness=claude"
+  printf 'resolved: firstmate answered the review question\n' > "$d/state/otherrun.status"
+  # Same heads, but the push binding belongs to a DIFFERENT run.
+  FM_FAKE_AXI_STATUS="$(run_failed_at_local_head fm/feat-otherrun "$PIPE_HEAD")
+$(branch_sync_block 01M0SOMEOTHERRUNIDENTIFIER "$PIPE_HEAD" "$LOCAL_HEAD" fm/feat-otherrun)"
+  FM_FAKE_BUSY=0
+  arm_idle_record "$d/state" otherrun
+  out=$(run_crew_state "$d" otherrun)
+  assert_not_contains "$out" "source: run-step" "another run's binding cannot vouch for this run"
+  assert_not_contains "$out" "state: failed" "no terminal verdict from an unproven head"
+  assert_contains "$out" "state: unknown" "the evidence still does not settle it"
+  pass "a branch_sync binding for another run does not prove ownership"
+}
+
+test_branch_sync_for_another_head_does_not_prove_ownership() {
+  reset_fakes
+  local d other out
+  d=$(new_case proven-other-head)
+  make_pipeline_ahead_topology "$d" fm/feat-otherhead
+  make_fakebin "$d" >/dev/null
+  fm_write_meta "$d/state/otherhead.meta" "window=fm:fm-otherhead" "worktree=$d/wt" "kind=ship" "harness=claude"
+  printf 'resolved: firstmate answered the review question\n' > "$d/state/otherhead.status"
+  # Right run, right checkout, but the branch has been advanced to some OTHER
+  # head, so this run's head is not the one the pipeline currently owns.
+  other=1111111111111111111111111111111111111111
+  FM_FAKE_AXI_STATUS="$(run_failed_at_local_head fm/feat-otherhead "$PIPE_HEAD")
+$(branch_sync_block 01M0EFHKF1A3CJX4KK58HWJ7D2 "$other" "$LOCAL_HEAD" fm/feat-otherhead)"
+  FM_FAKE_BUSY=0
+  arm_idle_record "$d/state" otherhead
+  out=$(run_crew_state "$d" otherhead)
+  assert_not_contains "$out" "source: run-step" "a binding for another head cannot vouch for this run head"
+  assert_contains "$out" "state: unknown" "the evidence still does not settle it"
+  pass "a branch_sync binding for another head does not prove ownership"
+}
+
+test_branch_sync_for_another_checkout_does_not_prove_ownership() {
+  reset_fakes
+  local d out
+  d=$(new_case proven-other-checkout)
+  make_pipeline_ahead_topology "$d" fm/feat-othertree
+  make_fakebin "$d" >/dev/null
+  fm_write_meta "$d/state/othertree.meta" "window=fm:fm-othertree" "worktree=$d/wt" "kind=ship" "harness=claude"
+  printf 'resolved: firstmate answered the review question\n' > "$d/state/othertree.status"
+  # Right run, right pipeline head, but the block describes a different checkout.
+  FM_FAKE_AXI_STATUS="$(run_failed_at_local_head fm/feat-othertree "$PIPE_HEAD")
+$(branch_sync_block 01M0EFHKF1A3CJX4KK58HWJ7D2 "$PIPE_HEAD" 0000000000000000000000000000000000000000 fm/feat-othertree)"
+  FM_FAKE_BUSY=0
+  arm_idle_record "$d/state" othertree
+  out=$(run_crew_state "$d" othertree)
+  assert_not_contains "$out" "source: run-step" "a binding for another checkout cannot vouch for this one"
+  assert_contains "$out" "state: unknown" "the evidence still does not settle it"
+  pass "a branch_sync binding for another checkout does not prove ownership"
+}
+
 test_active_run_is_authoritative
 test_stale_needs_decision_superseded
 test_stale_blocked_superseded
@@ -1727,6 +1850,10 @@ test_superseded_failed_row_does_not_mask_live_row
 test_live_run_at_unfetched_head_is_not_replaced_by_older_failed_run
 test_live_active_step_attributes_run_despite_head_geometry
 test_terminal_run_at_unfetched_head_is_not_attributed
+test_terminal_run_at_proven_pipeline_head_is_attributed
+test_branch_sync_for_another_run_does_not_prove_ownership
+test_branch_sync_for_another_head_does_not_prove_ownership
+test_branch_sync_for_another_checkout_does_not_prove_ownership
 test_ci_skipped_pass_never_reads_as_done
 test_merged_claim_requires_forge_confirmation
 test_open_pr_is_never_reported_as_merged
