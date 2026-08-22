@@ -17,8 +17,20 @@
 # This file's own uncertainty stays fail-safe either way - a scan that cannot run
 # returns "cannot prove".
 
-# shellcheck source=bin/fm-proc-lib.sh
-. "$(dirname -- "${BASH_SOURCE[0]}")/fm-proc-lib.sh"
+# Loaded only when it is not already here, and re-loaded whenever the platform
+# seam disagrees with what is loaded, so a test that sets
+# FM_PLATFORM_UNAME_OVERRIDE still gets its Windows arm.
+# Every sourcer of this file that matters is on a poll path - bin/fm-wake-lib.sh
+# alone is re-sourced from inside bin/fm-pending-reply-lib.sh once per unresolved
+# record per watcher tick - and it has already loaded bin/fm-proc-lib.sh by the
+# time it reaches here, so the common case must cost nothing.
+# `${BASH_SOURCE[0]%/*}` rather than `$(dirname ...)` for the same reason: a
+# command substitution plus a dirname exec, paid on every one of those sources.
+if ! command -v fm_platform_is_windows >/dev/null 2>&1 \
+  || [ "${FM_PLATFORM_UNAME_OVERRIDE:-${FM_PROC_UNAME_S:-}}" != "${FM_PROC_UNAME_S:-}" ]; then
+  # shellcheck source=bin/fm-proc-lib.sh
+  . "${BASH_SOURCE[0]%/*}/fm-proc-lib.sh"
+fi
 
 # fm_lock_proc_holder <target>: same contract as fm_lock_lsof_holder, answered
 # from /proc - 0 a process holds it (as cwd or an open fd), 1 provably none, 2
