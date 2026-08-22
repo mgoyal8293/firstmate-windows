@@ -2,7 +2,7 @@
 # Claude SessionEnd-owned release of this session's lock-ownership token.
 #
 # Registered in tracked .claude/settings.json as a SessionEnd command hook.
-# It exists for the token ownership path only (bin/fm-session-lock-lib.sh
+# It exists for the token ownership path only (bin/fm-session-token-lib.sh
 # "Session tokens"), which is reachable only where the ancestry walk cannot
 # answer at all - today, the Windows runtimes.
 #

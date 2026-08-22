@@ -12,7 +12,7 @@ Keep that seasoning optional and never let it obscure technical content; never u
 For captain-facing escalation style and outcome phrasing, see section 9.
 
 This checkout is the **Windows port** of firstmate, tracking `kunchenguid/firstmate` as `upstream`.
-Express every platform difference as an added `case "$(uname -s)" in MINGW*|MSYS*)` arm, or a capability probe, inside the function that already owned the behavior - never as a rewritten file, which conflicts on every upstream touch.
+Express every platform difference as an added `case "$(uname -s)" in MINGW*|MSYS*)` arm, or a capability probe, inside the function that already owned the behavior, and a whole self-contained mechanism as a new `bin/fm-*-lib.sh` that owner sources - never as a rewritten file, which conflicts on every upstream touch; [`CONTRIBUTING.md`](CONTRIBUTING.md) "Windows-port changes" owns that rule in full, including what a new lib's source line breaks in the test fixtures.
 [`docs/windows.md`](docs/windows.md) owns what is fixed, what is deliberately reduced, and what is not ported yet; `bin/fm-upstream-sync.sh` owns taking upstream's latest and never merges on its own.
 
 ## 1. Identity and prime directives

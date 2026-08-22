@@ -149,6 +149,78 @@ test_symlink_probe_proves_rather_than_assumes() {
   pass "fm_platform_symlink_probe: proves symlink creation and leaves no residue"
 }
 
+# The two preflight detectors bin/fm-bootstrap.sh calls at every session start,
+# which now live in bin/fm-symlink-preflight-lib.sh. Both answer with a PLATFORM
+# diagnostic line rather than a verdict, and BOTH must stay silent on a healthy
+# home: this pair runs on every session, so a false positive is a permanent
+# scary line, and a false negative is a home whose locks can never be acquired
+# or a harness that silently loads zero project skills.
+run_symlink_preflight() {  # <home> <root>
+  (
+    STATE="$1/state"
+    FM_HOME=$1
+    FM_ROOT=$2
+    # shellcheck source=/dev/null
+    . "$ROOT/bin/fm-symlink-preflight-lib.sh"
+    detect_symlink_capability
+    detect_repo_symlink_checkout
+  )
+}
+
+test_symlink_preflight_reports_only_a_proven_capability_failure() {
+  local fixture home root out
+  fixture=$(fm_test_tmproot fm-symlink-preflight) || fail "preflight: could not create a fixture root"
+  home=$fixture/home
+  root=$fixture/root
+  mkdir -p "$home/state" "$root/.claude" "$root/.agents/skills"
+  ln -s ../.agents/skills "$root/.claude/skills"
+
+  out=$(run_symlink_preflight "$home" "$root")
+  [ -z "$out" ] || fail "preflight: a healthy home must be silent, got [$out]"
+
+  # A state directory that cannot hold a symlink. Every fleet lock is created as
+  # one, so this is the difference between a refusal an operator can act on and
+  # a lock wait that spins forever. Skipped where the runner can write to a
+  # 0500 directory anyway, which is what running as root means.
+  chmod 0500 "$home/state"
+  if ln -s target "$home/state/.probe-writable" 2>/dev/null; then
+    rm -f "$home/state/.probe-writable"
+    chmod 0700 "$home/state"
+  else
+    out=$(run_symlink_preflight "$home" "$root")
+    chmod 0700 "$home/state"
+    case "$out" in
+      "PLATFORM: cannot create a symlink in $home/state, so no fleet lock can ever be acquired"*) ;;
+      *) fail "preflight: an unlinkable state dir must report the lock-layer failure, got [$out]" ;;
+    esac
+  fi
+
+  # core.symlinks=false checks the tracked .claude/skills blob out as a plain
+  # file holding its target path, and the harness then sees no project skills.
+  rm -f "$root/.claude/skills"
+  printf '../.agents/skills\n' > "$root/.claude/skills"
+  out=$(run_symlink_preflight "$home" "$root")
+  case "$out" in
+    "PLATFORM: $root/.claude/skills was checked out as a plain file"*) ;;
+    *) fail "preflight: a skills link checked out as a plain file must be reported, got [$out]" ;;
+  esac
+
+  # An ordinary file that merely happens to sit at that path is NOT the tracked
+  # symlink blob, so reporting it would be a false alarm.
+  printf 'notes an operator left here\n' > "$root/.claude/skills"
+  out=$(run_symlink_preflight "$home" "$root")
+  [ -z "$out" ] || fail "preflight: a plain file that is not the tracked link blob must stay silent, got [$out]"
+
+  # A home with no state directory at all - a read-only session that never got
+  # that far - must not fail, and must not invent a diagnostic.
+  rm -rf "$home/state"
+  rm -f "$root/.claude/skills"
+  ln -s ../.agents/skills "$root/.claude/skills"
+  out=$(run_symlink_preflight "$home" "$root")
+  [ -z "$out" ] || fail "preflight: a home without state/ must stay silent, got [$out]"
+  pass "symlink preflight: reports the lock-layer and skills-checkout failures, and stays silent otherwise"
+}
+
 test_native_symlink_mode_is_set_and_preserves_operator_choice() {
   local out start
   # The exported normalisation is what the whole lock layer depends on, so it is
@@ -717,6 +789,7 @@ test_proc_field_falls_back_to_ps_where_proc_is_absent
 test_proc_field_rejects_bad_input
 test_proc_field_rejects_unknown_field
 test_symlink_probe_proves_rather_than_assumes
+test_symlink_preflight_reports_only_a_proven_capability_failure
 test_native_symlink_mode_is_set_and_preserves_operator_choice
 test_proc_cwd_scan_finds_processes_rooted_under_a_directory
 test_proc_cwd_scan_reports_scan_failure_distinctly
