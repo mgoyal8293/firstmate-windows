@@ -11,6 +11,8 @@ FM_WAKE_LIB_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # caller of this library gets from here.
 # shellcheck source=bin/fm-proc-lib.sh
 . "$FM_WAKE_LIB_DIR/fm-proc-lib.sh"
+# shellcheck source=bin/fm-path-lib.sh
+. "$FM_WAKE_LIB_DIR/fm-path-lib.sh"
 FM_WAKE_DEFAULT_ROOT="$(cd "$FM_WAKE_LIB_DIR/.." && pwd)"
 FM_ROOT="${FM_ROOT_OVERRIDE:-${FM_ROOT:-$FM_WAKE_DEFAULT_ROOT}}"
 FM_HOME="${FM_HOME:-${FM_ROOT_OVERRIDE:-$FM_ROOT}}"
@@ -323,39 +325,6 @@ fm_lock_points_to_owner() {
   actual=$(readlink "$lockdir" 2>/dev/null) || return 1
   [ "$actual" = "$ownerdir" ] && return 0
   fm_lock_same_path "$actual" "$ownerdir"
-}
-
-# True when two path spellings name the same location.
-#
-# The raw string compare in fm_lock_points_to_owner is the fast path and stays
-# authoritative everywhere it succeeds. It needs a fallback on the Windows
-# runtimes because a NATIVE symlink stores a Windows target, and MSYS reads it
-# back through its mount table in that path's canonical POSIX spelling - which
-# is not necessarily the spelling that was passed to `ln -s`. A home under the
-# Windows temp directory is the case that bites: it is created as
-# /c/Users/<user>/AppData/Local/Temp/... and reads back as /tmp/..., because the
-# mount table aliases the two. Measured on Git-for-Windows MINGW64.
-#
-# Without this, fm_lock_try_create's validation never matches, the lock is never
-# acquired, and fm_lock_acquire_wait spins forever - the exact wedge the
-# winsymlinks fix was meant to remove, reintroduced one layer up.
-#
-# `cd ... && pwd -P` deliberately is NOT the resolver here: it canonicalises
-# symlinked COMPONENTS but preserves the mount alias, so it returns the two
-# spellings unchanged and answers this question wrongly (measured). cygpath is
-# the tool that owns the mount table, so it is the one that can answer it, and
-# its presence is the capability probe - no platform name is tested, and on a
-# runtime without cygpath the strict string compare above remains the only
-# verdict. This can therefore widen a match, never silently accept an
-# unresolvable one.
-fm_lock_same_path() {
-  local a=$1 b=$2 wa wb
-  [ -n "$a" ] && [ -n "$b" ] || return 1
-  command -v cygpath >/dev/null 2>&1 || return 1
-  wa=$(cygpath -m -- "$a" 2>/dev/null) || return 1
-  wb=$(cygpath -m -- "$b" 2>/dev/null) || return 1
-  [ -n "$wa" ] && [ -n "$wb" ] || return 1
-  [ "$wa" = "$wb" ]
 }
 
 fm_lock_discard_owner() {
