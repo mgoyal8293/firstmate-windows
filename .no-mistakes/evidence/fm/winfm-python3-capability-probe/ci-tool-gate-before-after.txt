@@ -1,0 +1,54 @@
+################ BEFORE  (main @ 54a8125) - ci.yml job "tests-herdr", step "Require tools for real Herdr"
+--- the step body the runner executes ---
+    set -eu
+    command -v jq >/dev/null || { echo "::error::jq is required"; exit 1; }
+    command -v python3 >/dev/null || { echo "::error::python3 is required"; exit 1; }
+    command -v curl >/dev/null || { echo "::error::curl is required"; exit 1; }
+    command -v tar >/dev/null || { echo "::error::tar is required"; exit 1; }
+    jq --version
+    python3 --version
+
+  $ # on a normal Linux runner (real python3 on PATH)
+  | jq-1.7
+  | Python 3.12.3
+  | rc=0
+
+  $ # on a box whose python3 is the Store alias and whose real interpreter is `python`
+  | jq-1.7
+  | Python was not found; run without arguments to install from the Microsoft Store, or disable this shortcut from Settings > Apps > Advanced app settings > App execution aliases.
+  | rc=49
+
+  $ # on a box with no working interpreter at all
+  | jq-1.7
+  | Python was not found; run without arguments to install from the Microsoft Store, or disable this shortcut from Settings > Apps > Advanced app settings > App execution aliases.
+  | rc=49
+
+################ AFTER   (this branch @ c6f8577) - ci.yml job "tests-herdr", step "Require tools for real Herdr"
+--- the step body the runner executes ---
+    set -eu
+    command -v jq >/dev/null || { echo "::error::jq is required"; exit 1; }
+    command -v curl >/dev/null || { echo "::error::curl is required"; exit 1; }
+    command -v tar >/dev/null || { echo "::error::tar is required"; exit 1; }
+    # shellcheck source=bin/fm-python-lib.sh
+    . bin/fm-python-lib.sh
+    fm_python3 || { fm_python3_refuse ci || true; echo "::error::a working python3 is required"; exit 1; }
+    jq --version
+    "${FM_PYTHON3_CMD[@]}" --version
+
+  $ # on a normal Linux runner (real python3 on PATH)
+  | jq-1.7
+  | Python 3.12.3
+  | rc=0
+
+  $ # on a box whose python3 is the Store alias and whose real interpreter is `python`
+  | jq-1.7
+  | Python 3.12.3
+  | rc=0
+
+  $ # on a box with no working interpreter at all
+  | ::error::a working python3 is required
+  | ci: refused: no working Python 3 found. Tried: python3, python, py -3.
+  | ci: a name that resolves on PATH is not enough - each candidate was run and had to report major version 3 or newer.
+  | ci: on Windows, PATH usually carries the Microsoft Store app-execution alias for python3, which exits 49 without running. Install Python 3 from python.org, or turn the alias off under Settings > Apps > Advanced app settings > App execution aliases.
+  | rc=1
+

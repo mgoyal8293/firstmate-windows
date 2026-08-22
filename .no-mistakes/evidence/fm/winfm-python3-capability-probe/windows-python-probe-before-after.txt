@@ -1,0 +1,46 @@
+################ Simulated Windows PATH ################
+
+$ command -v python3   # the Store alias resolves - a presence check says yes
+/tmp/win-fakebin/python3
+
+$ python3 -c 'print(1)'   # ...and then refuses to run
+Python was not found; run without arguments to install from the Microsoft Store, or disable this shortcut from Settings > Apps > Advanced app settings > App execution aliases.
+rc=49
+
+$ python -c 'import sys; print(sys.version.split()[0])'   # the real interpreter is named python
+3.12.3
+
+################ BEFORE  (main @ 54a8125) ################
+
+$ bash bin/fm-doc-audience-check.sh   # the documentation gate CONTRIBUTING.md mandates
+Python was not found; run without arguments to install from the Microsoft Store, or disable this shortcut from Settings > Apps > Advanced app settings > App execution aliases.
+rc=49
+
+$ bash bin/fm-ensure-agents-md.sh <worktree with CLAUDE.md -> nested/../AGENTS.md>
+Python was not found; run without arguments to install from the Microsoft Store, or disable this shortcut from Settings > Apps > Advanced app settings > App execution aliases.
+conflict: CLAUDE.md is a symlink in /tmp/win-wt-base but does not point to AGENTS.md
+rc=1
+CLAUDE.md is now: # Fixture project memory|
+
+$ bash bin/fm-kimi-turnend-hook.sh install   # with NO real interpreter on PATH at all
+Python was not found; run without arguments to install from the Microsoft Store, or disable this shortcut from Settings > Apps > Advanced app settings > App execution aliases.
+rc=49
+captain config after the refusal: model = "test"
+################ AFTER   (fm/winfm-python3-capability-probe @ c6f8577) ################
+
+$ bash bin/fm-doc-audience-check.sh   # the documentation gate CONTRIBUTING.md mandates
+fm-doc-audience-check: ok surfaces=73 local_links=286
+rc=0
+
+$ bash bin/fm-ensure-agents-md.sh <worktree with CLAUDE.md -> nested/../AGENTS.md>
+updated: added ## Maintaining this file to AGENTS.md and wrote CLAUDE.md @AGENTS.md pointer in /tmp/win-wt-head
+rc=0
+CLAUDE.md is now: <!-- Points Claude at AGENTS.md via import; edit AGENTS.md, not this file. -->|@AGENTS.md|
+
+$ bash bin/fm-kimi-turnend-hook.sh install   # with NO real interpreter on PATH at all
+fm-kimi-turnend-hook: refused: python3 with tomllib is required to validate config.toml.
+fm-kimi-turnend-hook: refused: no working Python 3 found. Tried: python3, python, py -3.
+fm-kimi-turnend-hook: a name that resolves on PATH is not enough - each candidate was run and had to report major version 3 or newer.
+fm-kimi-turnend-hook: on Windows, PATH usually carries the Microsoft Store app-execution alias for python3, which exits 49 without running. Install Python 3 from python.org, or turn the alias off under Settings > Apps > Advanced app settings > App execution aliases.
+rc=1
+captain config after the refusal: model = "test"

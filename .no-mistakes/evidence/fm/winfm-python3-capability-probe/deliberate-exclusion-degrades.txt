@@ -1,0 +1,7 @@
+### The one deliberate exclusion: bin/fm-remote-entrypoint.sh keeps its bare python3 (it must resolve its own path before it can source anything)
+### Proof that the exclusion degrades instead of dying: run its own suite with python3, python and py ALL replaced by the Store alias.
+
+$ PATH=/tmp/win-fakebin-nopy:$PATH bash tests/fm-remote-entrypoint.test.sh
+ok - fm-remote-entrypoint.sh invoked via a PATH symlink resolves SCRIPT_DIR to the real bin/ directory
+ok - fm-remote-entrypoint.sh invoked directly still resolves SCRIPT_DIR correctly
+rc=0

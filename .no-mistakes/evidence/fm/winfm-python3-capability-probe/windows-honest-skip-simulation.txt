@@ -1,0 +1,22 @@
+### The Windows honest-skip path: on a checkout that cannot create a real symlink, the six CLAUDE.md pointer cases must report a note and the suite must stay green.
+### Simulated here with an `ln` that refuses -s, which is what a stock Windows checkout does.
+
+$ PATH=/tmp/nosymlink-bin:$PATH bash tests/fm-python-lib.test.sh
+ok - the probe refuses a python3 that resolves on PATH and then exits 49
+ok - the probe falls through a broken python3 to a real python
+ok - the probe resolves and can invoke a multi-word 'py -3' launcher
+ok - the probe rejects an interpreter that starts but reports major version 2
+ok - re-sourcing the library keeps an interpreter the shell already resolved
+ok - clearing FM_PYTHON3_PROBED still forces a re-probe under a moved PATH
+ok - the refusal names every candidate tried and the Store-alias cause
+ok - the documentation gate refuses with an actionable message instead of dying rc=49
+ok - the documentation gate runs when the only real interpreter is named python
+note: correct-pointer case: this filesystem cannot create a real symlink, so the CLAUDE.md pointer case cannot be staged here (enable core.symlinks on Windows to exercise it)
+note: undeterminable-pointer case: this filesystem cannot create a real symlink, so the CLAUDE.md pointer case cannot be staged here (enable core.symlinks on Windows to exercise it)
+note: interpreter-answered-nothing case: this filesystem cannot create a real symlink, so the CLAUDE.md pointer case cannot be staged here (enable core.symlinks on Windows to exercise it)
+note: interpreter-answered-nothing refusal case: this filesystem cannot create a real symlink, so the CLAUDE.md pointer case cannot be staged here (enable core.symlinks on Windows to exercise it)
+note: silent-payload refusal case: this filesystem cannot create a real symlink, so the CLAUDE.md pointer case cannot be staged here (enable core.symlinks on Windows to exercise it)
+note: crashed-payload case: this filesystem cannot create a real symlink, so the CLAUDE.md pointer case cannot be staged here (enable core.symlinks on Windows to exercise it)
+ok - the herdr workspace mover runs through the resolved interpreter, not its shebang
+ok - the Kimi hook refuses cleanly, and writes nothing, when python3 is a Store stub
+rc=0

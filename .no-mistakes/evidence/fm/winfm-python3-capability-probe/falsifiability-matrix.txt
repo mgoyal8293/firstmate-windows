@@ -1,0 +1,40 @@
+### Falsifiability: each protection removed in turn, tests/fm-python-lib.test.sh re-run.
+### M1-M7 are surgical single-hunk mutations of the branch; R1-R4 restore a whole call-site file from main @ 54a8125.
+### The suite stops at its first failure, so each run names the one protection that was removed.
+
+=== M1 probe resolves instead of executing (command -v only) (rc=1)
+  not ok - a resolvable-but-broken python3 was accepted as an interpreter: 'python3'
+
+=== M2 major-version assertion dropped (payload reduced to -c 'pass') (rc=1)
+  not ok - a Python 2 was accepted, but every payload here needs Python 3: 'python'
+
+=== M3 multi-word candidate collapsed ('py -3' -> 'py') (rc=1)
+  not ok - the probe should have resolved the multi-word launcher 'py -3', got 'REFUSED'
+
+=== M4 re-source guard removed (rc=1)
+  not ok - re-sourcing the library lost the resolved interpreter: '_: line 5: -c: command not found'
+
+=== M5 herdr workspace mover back to its own python3 shebang (rc=1)
+  not ok - the workspace mover ran under the Store stub its own capability gate rejects: Python was not found; run without arguments to install from the Microsoft Store, or disable this shortcut from Settings > Apps > Advanced app settings > App execution aliases.
+
+=== M6 tri-state collapsed (every "return 2" -> "return 1") (rc=1)
+  not ok - an unanswerable pointer question was reported as a conflict: conflict: CLAUDE.md is a symlink in /tmp/fm-python-lib.HF6eei/ensure-none-wt but does not point to AGENTS.md
+
+=== M7 pointer answered by exit status instead of the stdout sentinel (rc=1)
+  not ok - a correct pointer was refused although realpath could answer it (rc=1): Fatal Python error: init_import_site: failed to import the site module
+
+=== R0 control: unmutated branch tree (rc=0)
+  (no failure - suite stayed green)
+
+=== R1 bin/fm-doc-audience-check.sh reverted to main (F2) (rc=1)
+  not ok - the documentation gate still dies with the Store stub's own exit 49
+
+=== R2 bin/fm-ensure-agents-md.sh reverted to main (F7) (rc=1)
+  not ok - a correct CLAUDE.md pointer was rejected behind a stubbed python3 (rc=1): Python was not found; run without arguments to install from the Microsoft Store, or disable this shortcut from Settings > Apps > Advanced app settings > App execution aliases.
+
+=== R3 bin/fm-kimi-turnend-hook.sh reverted to main (rc=1)
+  not ok - the Kimi hook still dies with the Store stub's own exit 49
+
+=== R4 bin/backends/herdr.sh reverted to main (rc=1)
+  not ok - the routed workspace mover did not reach its own argument check (rc=1): _: line 4: fm_backend_herdr_workspace_mover_cmd: command not found
+

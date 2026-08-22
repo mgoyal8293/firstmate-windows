@@ -1,0 +1,33 @@
+$ bash bin/fm-test-run.sh tests/fm-python-lib.test.sh
+FM_TEST_BEGIN 2026-08-22T19:06:43Z tests/fm-python-lib.test.sh family=pure-contract-unit expected_gate_skip=none
+ok - the probe refuses a python3 that resolves on PATH and then exits 49
+ok - the probe falls through a broken python3 to a real python
+ok - the probe resolves and can invoke a multi-word 'py -3' launcher
+ok - the probe rejects an interpreter that starts but reports major version 2
+ok - re-sourcing the library keeps an interpreter the shell already resolved
+ok - clearing FM_PYTHON3_PROBED still forces a re-probe under a moved PATH
+ok - the refusal names every candidate tried and the Store-alias cause
+ok - the documentation gate refuses with an actionable message instead of dying rc=49
+ok - the documentation gate runs when the only real interpreter is named python
+ok - a correct CLAUDE.md pointer survives a python3 that resolves and then fails
+ok - an undeterminable CLAUDE.md pointer is reported as undeterminable, never as a conflict
+ok - an interpreter that ran and answered nothing still lets realpath settle the pointer
+ok - the refusal names the interpreter that ran instead of claiming none was found
+ok - a payload that exits 0 without an answer is not reported as a failing exit status
+ok - an exit status of 1 from a crashed payload is not read as evidence about the pointer
+ok - the herdr workspace mover runs through the resolved interpreter, not its shebang
+ok - the Kimi hook refuses cleanly, and writes nothing, when python3 is a Store stub
+FM_TEST_END 2026-08-22T19:06:44Z tests/fm-python-lib.test.sh exit=0 duration_ms=728 gate_skip=false
+FM_TEST_SUMMARY total=1 failed=0 skipped_gate=0 duration_ms=763
+FM_TEST_SUMMARY_FAMILY family=pure-contract-unit count=1 duration_ms=728 failed=0
+FM_TEST_SLOWEST rank=1 script=tests/fm-python-lib.test.sh duration_ms=728
+
+$ bash bin/fm-test-run.sh --list --lane windows | grep -n fm-python-lib
+20:tests/fm-python-lib.test.sh
+
+$ bash bin/fm-test-run.sh --check-coverage
+FM_TEST_COVERAGE ok total=153 parallel=24 serial=117 serial_shards=4 herdr=12 unmeasured_serial=1
+fm-test-run: coverage guard: portable serial scripts with no measured duration, packed at 20000ms (docs/fm-test-portable-shards.md owns the refresh):
+tests/fm-python-lib.test.sh
+FM_TEST_COVERAGE_WINDOWS ok windows=40 windows_shards=4 unmeasured_windows=0
+rc=0

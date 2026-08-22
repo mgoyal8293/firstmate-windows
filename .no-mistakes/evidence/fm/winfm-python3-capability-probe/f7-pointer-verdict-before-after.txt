@@ -1,0 +1,42 @@
+### The F7 predicate: an interpreter that cannot run is not evidence about a symlink
+### Fixture in each case: AGENTS.md + CLAUDE.md -> nested/../AGENTS.md (a CORRECT pointer that only a path resolver can confirm)
+
+################ BEFORE  (main @ 54a8125)
+
+$ # python3 is the Store alias, real interpreter is 'python'
+$ bash bin/fm-ensure-agents-md.sh <fixture>
+Python was not found; run without arguments to install from the Microsoft Store, or disable this shortcut from Settings > Apps > Advanced app settings > App execution aliases.
+conflict: CLAUDE.md is a symlink in /tmp/f7-wt-base-1 but does not point to AGENTS.md
+rc=1
+
+$ # no working interpreter, realpath available
+$ bash bin/fm-ensure-agents-md.sh <fixture>
+Python was not found; run without arguments to install from the Microsoft Store, or disable this shortcut from Settings > Apps > Advanced app settings > App execution aliases.
+conflict: CLAUDE.md is a symlink in /tmp/f7-wt-base-2 but does not point to AGENTS.md
+rc=1
+
+$ # no working interpreter AND no realpath - genuinely unanswerable
+$ bash bin/fm-ensure-agents-md.sh <fixture>
+Python was not found; run without arguments to install from the Microsoft Store, or disable this shortcut from Settings > Apps > Advanced app settings > App execution aliases.
+conflict: CLAUDE.md is a symlink in /tmp/f7-wt-base-3 but does not point to AGENTS.md
+rc=1
+
+################ AFTER   (this branch @ c6f8577)
+
+$ # python3 is the Store alias, real interpreter is 'python'
+$ bash bin/fm-ensure-agents-md.sh <fixture>
+updated: added ## Maintaining this file to AGENTS.md and wrote CLAUDE.md @AGENTS.md pointer in /tmp/f7-wt-head-1
+rc=0
+
+$ # no working interpreter, realpath available
+$ bash bin/fm-ensure-agents-md.sh <fixture>
+updated: added ## Maintaining this file to AGENTS.md and wrote CLAUDE.md @AGENTS.md pointer in /tmp/f7-wt-head-2
+rc=0
+
+$ # no working interpreter AND no realpath - genuinely unanswerable
+$ bash bin/fm-ensure-agents-md.sh <fixture>
+error: cannot determine whether the CLAUDE.md symlink in /tmp/f7-wt-head-3 resolves to AGENTS.md
+fm-ensure-agents-md: refused: no working Python 3 found. Tried: python3, python, py -3.
+fm-ensure-agents-md: a name that resolves on PATH is not enough - each candidate was run and had to report major version 3 or newer.
+fm-ensure-agents-md: on Windows, PATH usually carries the Microsoft Store app-execution alias for python3, which exits 49 without running. Install Python 3 from python.org, or turn the alias off under Settings > Apps > Advanced app settings > App execution aliases.
+rc=1
