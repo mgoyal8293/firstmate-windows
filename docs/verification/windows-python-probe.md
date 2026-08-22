@@ -73,7 +73,7 @@ Making that suite green, and making it fast enough to run, remain separate work.
 
 ## Falsifiability
 
-`tests/fm-python-lib.test.sh` fences seven distinct protections.
+`tests/fm-python-lib.test.sh` fences eleven distinct protections.
 Each was removed in turn and the run re-executed; each removal produced exactly one failure, and restoring it returned the file to green.
 The whole fixture is a shim that prints the Store advert and exits 49, so every case reproduces on Linux.
 
@@ -86,13 +86,17 @@ The whole fixture is a shim that prints the Store advert and exits 49, so every 
 | `bin/fm-ensure-agents-md.sh` routed through the probe (back to `command -v python3` plus `return $?`) | `not ok - a correct CLAUDE.md pointer was rejected behind a stubbed python3 (rc=1)` |
 | `bin/fm-ensure-agents-md.sh`'s undeterminable verdict (tri-state collapsed to `return 1`) | `not ok - an unanswerable pointer question was reported as a conflict` |
 | `bin/fm-kimi-turnend-hook.sh` routed through the probe (back to `command -v python3`) | `not ok - the Kimi hook still dies with the Store stub's own exit 49` |
+| the library's re-source guard (`FM_PYTHON_LIB_SOURCED` removed, so a second source reinitializes the cache) | `not ok - re-sourcing the library lost the resolved interpreter: '_: line 5: -c: command not found'` |
+| `bin/fm-ensure-agents-md.sh`'s fall-through to `realpath` when the interpreter ran and answered nothing (`*) return 2 ;;` restored) | `not ok - a correct pointer was refused although realpath could answer it (rc=1)` |
+| `bin/fm-ensure-agents-md.sh`'s two distinct undeterminable causes (always emitting `fm_python3_refuse`) | `not ok - the refusal does not name the interpreter that ran and answered nothing` |
+| the herdr workspace mover routed through the resolved interpreter (back to its own `#!/usr/bin/env python3` shebang) | `not ok - the workspace mover ran under the Store stub its own capability gate rejects` |
 
 ## Green runs
 
 ```console
 # Linux
 $ bash tests/fm-python-lib.test.sh | wc -l
-10
+15
 
 # Windows box, through the runner, twice
 $ bash bin/fm-test-run.sh tests/fm-python-lib.test.sh
@@ -100,6 +104,7 @@ FM_TEST_END ... tests/fm-python-lib.test.sh exit=0 duration_ms=11512 gate_skip=f
 FM_TEST_END ... tests/fm-python-lib.test.sh exit=0 duration_ms=11129 gate_skip=false
 ```
 
-Eight of the ten cases run on Windows.
-The two CLAUDE.md pointer cases report a `note:` and stage nothing there, because a stock Windows checkout cannot create a real symlink and `ln -s` copies the target instead - which is also why the defect they fence is latent on Windows until `core.symlinks` is enabled.
+Eleven of the fifteen cases run on Windows.
+The four CLAUDE.md pointer cases report a `note:` and stage nothing there, because a stock Windows checkout cannot create a real symlink and `ln -s` copies the target instead - which is also why the defect they fence is latent on Windows until `core.symlinks` is enabled.
 That measured 11512 ms is the Windows lane weight hint recorded for this script in `bin/fm-test-run.sh`.
+The two Windows timings above were measured when this file held ten cases; the five cases added in review are green on Linux and have not been re-timed on the Windows box, so the recorded lane weight is a floor rather than a fresh measurement.

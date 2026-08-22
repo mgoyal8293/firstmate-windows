@@ -26,6 +26,7 @@ Each is fixed at exactly one owner:
 `python3` on a stock Windows box is a Microsoft Store app execution alias: it resolves on PATH and then exits 49 without running, so `command -v python3` was a presence check standing in for a capability check.
 [`../bin/fm-python-lib.sh`](../bin/fm-python-lib.sh) is the one owner of the answer - it runs each of `python3`, `python`, and `py -3` and takes the first that reports major version 3 or newer - and every caller in this repo goes through it, including the `bin/fm-doc-audience-check.sh` gate the contributor guidelines mandate, which could not run here at all before.
 One caller is deliberately left alone: `bin/fm-remote-entrypoint.sh` must resolve its own real path before it can source anything, and it already falls back through `realpath`.
+That is the only exclusion: even `bin/backends/herdr-workspace-move.py`, which keeps its own `#!/usr/bin/env python3` shebang so a human can still run it directly, is invoked by firstmate through the resolved interpreter, so the workspace.move capability gate and the transport it certifies can never disagree about which Python answers.
 [`verification/windows-python-probe.md`](verification/windows-python-probe.md) records the evidence.
 
 There is no tmux on Windows either, so multi-agent work runs on the ConPTY

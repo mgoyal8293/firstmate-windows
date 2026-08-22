@@ -52,6 +52,19 @@
 # returns status only.
 #
 # Set FM_PYTHON3_PROBED= to force a re-probe (tests that move PATH under it).
+# Re-sourcing this file in a shell that already has it is a no-op.
+
+# Idempotent guard, the same shape tests/lib.sh uses: this library is sourced
+# both by a caller directly and by bin/backends/herdr.sh at adapter load, so one
+# shell legitimately sources it twice. Re-running the initializers below would
+# wipe an already-resolved FM_PYTHON3_CMD back to an empty array, and a caller
+# holding a "yes" answer would then expand nothing in front of its arguments and
+# run its first argument as the command. The probe itself is NOT guarded:
+# FM_PYTHON3_PROBED= still forces a re-probe, which tests rely on.
+if [ -n "${FM_PYTHON_LIB_SOURCED:-}" ]; then
+  return 0
+fi
+FM_PYTHON_LIB_SOURCED=1
 
 # '' = unprobed, 'yes' = FM_PYTHON3_CMD is usable, 'no' = nothing works.
 FM_PYTHON3_PROBED=

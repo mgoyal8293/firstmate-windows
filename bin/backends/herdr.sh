@@ -983,6 +983,27 @@ fm_backend_herdr_workspace_move_capable() {  # <session>
   ' >/dev/null 2>&1 || return 5
 }
 
+# fm_backend_herdr_workspace_mover_cmd: build the argv for one workspace.move
+# request into FM_BACKEND_HERDR_MOVER_CMD. The repo's own mover is a Python
+# script, so firstmate runs it through the interpreter fm_python3 resolved
+# instead of through its own `#!/usr/bin/env python3` shebang: on Windows that
+# shebang finds the Microsoft Store alias, which exits 49 without running, so
+# the capability gate above would certify one interpreter while the transport
+# used another. The script keeps its shebang for direct human invocation. An
+# explicit FM_BACKEND_HERDR_WORKSPACE_MOVER override is an arbitrary executable
+# and is invoked exactly as given.
+# Returns 1 when no working python3 resolved; each caller owns its own warning.
+fm_backend_herdr_workspace_mover_cmd() {
+  if [ -n "${FM_BACKEND_HERDR_WORKSPACE_MOVER:-}" ]; then
+    FM_BACKEND_HERDR_MOVER_CMD=("$FM_BACKEND_HERDR_WORKSPACE_MOVER")
+    return 0
+  fi
+  fm_python3 || return 1
+  FM_BACKEND_HERDR_MOVER_CMD=(
+    "${FM_PYTHON3_CMD[@]}" "$FM_BACKEND_HERDR_ROOT/bin/backends/herdr-workspace-move.py"
+  )
+}
+
 # fm_backend_herdr_emptying_close_plan: choose the focus-safe removal for one
 # exact pane. The LAST echoed line is the plan: "plain" (use the ordinary
 # explicit close; below the presentation version floor the exact-tab restore
@@ -1001,7 +1022,7 @@ fm_backend_herdr_workspace_move_capable() {  # <session>
 # to hold one provably lone idle recognized shell.
 fm_backend_herdr_emptying_close_plan() {  # <session> <pane-id> <workspace-id> <tab-id> <focused-workspace-id>
   local session=$1 pane_id=$2 ws_id=$3 tab_id=$4 focused_ws=$5
-  local tabs panes list indices r rest a len capable socket mover response move_status shell_pid before_order
+  local tabs panes list indices r rest a len capable socket response move_status shell_pid before_order
   [ -n "$ws_id" ] && [ -n "$tab_id" ] && [ -n "$focused_ws" ] || { printf 'plain\n'; return 0; }
   tabs=$(fm_backend_herdr_cli "$session" tab list --workspace "$ws_id" 2>/dev/null) || { printf 'plain\n'; return 0; }
   printf '%s' "$tabs" | jq -e --arg tab "$tab_id" '
@@ -1057,9 +1078,13 @@ fm_backend_herdr_emptying_close_plan() {  # <session> <pane-id> <workspace-id> <
       printf 'plain\n'
       return 0
     }
-    mover=${FM_BACKEND_HERDR_WORKSPACE_MOVER:-$FM_BACKEND_HERDR_ROOT/bin/backends/herdr-workspace-move.py}
+    if ! fm_backend_herdr_workspace_mover_cmd; then
+      echo "warning: herdr presentation cleanup has no working python3 for the workspace mover; closing without the focus-safe removal path" >&2
+      printf 'plain\n'
+      return 0
+    fi
     before_order=$(printf '%s' "$list" | jq -c '[.result.workspaces[].workspace_id]' 2>/dev/null)
-    if response=$("$mover" "$socket" "$ws_id" "$len" 2>/dev/null); then
+    if response=$("${FM_BACKEND_HERDR_MOVER_CMD[@]}" "$socket" "$ws_id" "$len" 2>/dev/null); then
       move_status=0
     else
       move_status=$?
@@ -1097,7 +1122,7 @@ fm_backend_herdr_emptying_close_plan() {  # <session> <pane-id> <workspace-id> <
 # The rollback is verified against the mover's returned order and focus and
 # warns on any failure, so a lasting reorder is never silent.
 fm_backend_herdr_emptying_move_rollback() {  # <move-record>
-  local record=$1 marker ws index socket focused order mover response
+  local record=$1 marker ws index socket focused order response
   [ -n "$record" ] || return 0
   IFS=$'\t' read -r marker ws index socket focused order <<FMEOF
 $record
@@ -1112,8 +1137,11 @@ FMEOF
       return 1
       ;;
   esac
-  mover=${FM_BACKEND_HERDR_WORKSPACE_MOVER:-$FM_BACKEND_HERDR_ROOT/bin/backends/herdr-workspace-move.py}
-  if ! response=$("$mover" "$socket" "$ws" "$index" 2>/dev/null) \
+  if ! fm_backend_herdr_workspace_mover_cmd; then
+    echo "warning: herdr presentation cleanup has no working python3 to restore the original workspace order after a failed removal; the workspace order may remain changed" >&2
+    return 1
+  fi
+  if ! response=$("${FM_BACKEND_HERDR_MOVER_CMD[@]}" "$socket" "$ws" "$index" 2>/dev/null) \
     || ! printf '%s' "$response" | jq -e --argjson expected "$order" --arg focused "$focused" '
       .result.type == "workspace_list"
       and ([.result.workspaces[].workspace_id] == $expected)
@@ -1282,7 +1310,7 @@ fm_backend_herdr_pane_idle_shell_sample() {  # <session> <pane-id>
 # After a successful move, every pre-existing workspace id sequence excluding
 # the new id must be byte-identical to the pre-move sequence.
 fm_backend_herdr_projection_order_best_effort() {  # <session> <created-workspace-id> <parent-label> [<parent-workspace-id>]
-  local session=$1 created=$2 parent=$3 parent_ws=${4:-} list analysis current desired socket mover response move_status focus_before move_capable
+  local session=$1 created=$2 parent=$3 parent_ws=${4:-} list analysis current desired socket response move_status focus_before move_capable
   local before_existing after_existing
   [ -n "$parent" ] || {
     echo "warning: herdr presentation ordering missing owning parent label; leaving worker in Herdr's current order" >&2
@@ -1405,12 +1433,15 @@ fm_backend_herdr_projection_order_best_effort() {  # <session> <created-workspac
     return 0
   }
 
-  mover=${FM_BACKEND_HERDR_WORKSPACE_MOVER:-$FM_BACKEND_HERDR_ROOT/bin/backends/herdr-workspace-move.py}
+  if ! fm_backend_herdr_workspace_mover_cmd; then
+    echo "warning: herdr presentation ordering has no working python3 for the workspace mover; leaving worker in Herdr's current order" >&2
+    return 0
+  fi
   focus_before=$(fm_backend_herdr_projection_focus_snapshot "$session") || {
     echo "warning: herdr presentation ordering could not capture exact active workspace and tab; leaving worker in Herdr's current order" >&2
     return 0
   }
-  if response=$("$mover" "$socket" "$created" "$desired" 2>/dev/null); then
+  if response=$("${FM_BACKEND_HERDR_MOVER_CMD[@]}" "$socket" "$created" "$desired" 2>/dev/null); then
     move_status=0
   else
     move_status=$?

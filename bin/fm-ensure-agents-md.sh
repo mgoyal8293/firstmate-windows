@@ -145,6 +145,8 @@ install_claude_pointer() {
 # alias and exits 49 without running - a correct pointer was judged wrong and
 # the caller refused a healthy worktree with a false conflict. A failed
 # interpreter is not evidence about the symlink, and no caller may read it as any.
+# Sets UNDETERMINABLE_CAUSE so a verdict of 2 can name why it could not answer.
+UNDETERMINABLE_CAUSE=interpreter
 is_correct_claude_symlink() {
   [ -L "$CLAUDE" ] || return 1
   target=$(readlink "$CLAUDE")
@@ -152,20 +154,28 @@ is_correct_claude_symlink() {
     "$AGENTS"|"./$AGENTS") return 0 ;;
   esac
   [ -e "$AGENTS" ] || return 1
+  UNDETERMINABLE_CAUSE=interpreter
   if fm_python3; then
+    UNDETERMINABLE_CAUSE=payload
     "${FM_PYTHON3_CMD[@]}" - "$CLAUDE" "$AGENTS" <<'PY'
 import os
 import sys
 sys.exit(0 if os.path.realpath(sys.argv[1]) == os.path.realpath(sys.argv[2]) else 1)
 PY
+    # Only 0 and 1 are answers. Any other status - a signal, or a broken stdlib
+    # on a half-installed Python - means the interpreter ran and reported
+    # nothing, so fall through to the resolver below instead of giving up: an
+    # interpreter that misbehaved is exactly the case the tri-state exists to
+    # keep from refusing a healthy worktree.
     case $? in
       0) return 0 ;;
       1) return 1 ;;
-      *) return 2 ;;
     esac
   fi
-  # No interpreter at all: ask the shell's own resolver before giving up, so a
-  # box without Python still gets a real answer rather than a false conflict.
+  # No usable answer from Python, either because nothing ran or because what ran
+  # did not answer: ask the shell's own resolver before giving up, so a box
+  # without a working interpreter still gets a real answer rather than a false
+  # conflict.
   if command -v realpath >/dev/null 2>&1; then
     resolved_claude=$(realpath "$CLAUDE" 2>/dev/null) || return 2
     resolved_agents=$(realpath "$AGENTS" 2>/dev/null) || return 2
@@ -181,7 +191,14 @@ PY
 # for a question that was never answered.
 refuse_undeterminable_symlink() {
   echo "error: cannot determine whether the CLAUDE.md symlink in $DIR resolves to AGENTS.md" >&2
-  fm_python3_refuse fm-ensure-agents-md || true
+  # Name the cause that actually applies. Printing "no working Python 3 found"
+  # when an interpreter was found and ran sends the reader after the wrong
+  # problem.
+  if [ "${UNDETERMINABLE_CAUSE:-interpreter}" = payload ]; then
+    echo "error: fm-ensure-agents-md: $FM_PYTHON3 ran but its path comparison exited with an unexpected status, and realpath could not answer either" >&2
+  else
+    fm_python3_refuse fm-ensure-agents-md || true
+  fi
   exit 1
 }
 

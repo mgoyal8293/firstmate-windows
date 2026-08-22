@@ -82,6 +82,25 @@ SH
   chmod +x "$dir/$name"
 }
 
+# broken_payload_python <dir> <name>: an interpreter that STARTS and reports
+# major version 3, so the probe rightly accepts it, and then dies with an
+# unexpected status on any real payload - a signal, or a broken stdlib on a
+# half-installed Python. An interpreter that ran and answered nothing is not
+# evidence about anything a caller asked.
+broken_payload_python() {
+  local dir=$1 name=$2
+  mkdir -p "$dir"
+  cat >"$dir/$name" <<'SH'
+#!/usr/bin/env bash
+case "$*" in
+  *"version_info[0] >= 3"*) exit 0 ;;
+esac
+echo "Fatal Python error: init_import_site: failed to import the site module" >&2
+exit 70
+SH
+  chmod +x "$dir/$name"
+}
+
 # probe_in <bindir>: run one fresh fm_python3 probe with <bindir> prepended,
 # echoing the resolved command or REFUSED.
 probe_in() {
@@ -151,6 +170,54 @@ test_probe_rejects_a_python_2() {
   [ "$resolved" = REFUSED ] \
     || fail "a Python 2 was accepted, but every payload here needs Python 3: '$resolved'"
   pass "the probe rejects an interpreter that starts but reports major version 2"
+}
+
+test_resourcing_the_library_keeps_an_already_resolved_interpreter() {
+  local bin out
+  bin="$TMP_ROOT/resource-twice"
+  store_stub "$bin" python3
+  real_python_as "$bin" python
+  # Two sources in one shell is the ordinary case, not a contrived one:
+  # bin/backends/herdr.sh sources this library at adapter load inside a shell
+  # whose caller already sourced and probed it. If the second source resets the
+  # cache, the caller's "yes" answer expands to nothing and its first argument
+  # runs as the command name.
+  # shellcheck disable=SC2016 # Deliberately expanded by the child shell, not here.
+  out=$(PATH="$bin:$PATH" "$(command -v bash)" -c '
+    . "$1/bin/fm-python-lib.sh"
+    fm_python3 || { printf "PROBE-FAILED\n"; exit 0; }
+    . "$1/bin/fm-python-lib.sh"
+    "${FM_PYTHON3_CMD[@]}" -c "print(\"SURVIVED\")"
+  ' _ "$ROOT" 2>&1)
+  [ "$out" = SURVIVED ] \
+    || fail "re-sourcing the library lost the resolved interpreter: '$out'"
+  pass "re-sourcing the library keeps an interpreter the shell already resolved"
+}
+
+test_clearing_the_probe_flag_still_forces_a_re_probe() {
+  local first second out
+  first="$TMP_ROOT/reprobe-first"
+  second="$TMP_ROOT/reprobe-second"
+  store_stub "$first" python3
+  real_python_as "$first" python
+  real_python_as "$second" python3
+  # The re-source guard must protect the cache without freezing it: a test that
+  # moves PATH under the library still has to be able to ask again.
+  # shellcheck disable=SC2016 # Deliberately expanded by the child shell, not here.
+  out=$(PATH="$first:$PATH" "$(command -v bash)" -c '
+    . "$1/bin/fm-python-lib.sh"
+    fm_python3 || exit 1
+    printf "%s\n" "$FM_PYTHON3"
+    PATH="$2:$PATH"
+    FM_PYTHON3_PROBED=
+    . "$1/bin/fm-python-lib.sh"
+    fm_python3 || exit 1
+    printf "%s\n" "$FM_PYTHON3"
+  ' _ "$ROOT" "$second" 2>&1)
+  [ "$out" = "python
+python3" ] \
+    || fail "clearing FM_PYTHON3_PROBED no longer forces a re-probe: '$out'"
+  pass "clearing FM_PYTHON3_PROBED still forces a re-probe under a moved PATH"
 }
 
 test_refusal_names_the_candidates_and_the_store_alias() {
@@ -278,6 +345,84 @@ SH
   pass "an undeterminable CLAUDE.md pointer is reported as undeterminable, never as a conflict"
 }
 
+test_ensure_agents_md_asks_realpath_when_the_interpreter_answers_nothing() {
+  local bin dir out rc=0
+  bin="$TMP_ROOT/ensure-broken-payload"
+  dir="$TMP_ROOT/ensure-broken-payload-wt"
+  store_stub "$bin" python3
+  broken_payload_python "$bin" python
+  store_stub "$bin" py
+  fixture_pointer_worktree "$dir" || {
+    no_symlinks_note "interpreter-answered-nothing case"
+    return 0
+  }
+  out=$(PATH="$bin:$PATH" "$ENSURE" "$dir" 2>&1) || rc=$?
+  [ "$rc" -eq 0 ] \
+    || fail "a correct pointer was refused although realpath could answer it (rc=$rc): $out"
+  case "$out" in
+    *conflict*) fail "a correct pointer was reported as a conflict: $out" ;;
+  esac
+  pass "an interpreter that ran and answered nothing still lets realpath settle the pointer"
+}
+
+test_ensure_agents_md_names_the_interpreter_when_nothing_can_answer() {
+  local bin dir out rc=0
+  bin="$TMP_ROOT/ensure-broken-payload-no-realpath"
+  dir="$TMP_ROOT/ensure-broken-payload-no-realpath-wt"
+  store_stub "$bin" python3
+  broken_payload_python "$bin" python
+  store_stub "$bin" py
+  cat >"$bin/realpath" <<'SH'
+#!/usr/bin/env bash
+echo "realpath: unavailable in this fixture" >&2
+exit 127
+SH
+  chmod +x "$bin/realpath"
+  fixture_pointer_worktree "$dir" || {
+    no_symlinks_note "interpreter-answered-nothing refusal case"
+    return 0
+  }
+  out=$(PATH="$bin:$PATH" "$ENSURE" "$dir" 2>&1) || rc=$?
+  [ "$rc" -ne 0 ] || fail "an unanswerable pointer question was reported as success: $out"
+  case "$out" in
+    *conflict*) fail "an unanswerable pointer question was reported as a conflict: $out" ;;
+  esac
+  assert_contains "$out" 'cannot determine' \
+    "the refusal does not say the question could not be answered: $out"
+  assert_contains "$out" 'unexpected status' \
+    "the refusal does not name the interpreter that ran and answered nothing: $out"
+  assert_not_contains "$out" 'no working Python 3 found' \
+    "the refusal blames a missing interpreter although one was found and ran: $out"
+  pass "the refusal names the interpreter that ran instead of claiming none was found"
+}
+
+test_herdr_workspace_mover_runs_through_the_resolved_interpreter() {
+  local bin out rc=0
+  bin="$TMP_ROOT/herdr-mover"
+  store_stub "$bin" python3
+  real_python_as "$bin" python
+  # No override, so this is the repo's own mover, whose `#!/usr/bin/env python3`
+  # shebang would find the Store stub and exit 49 - the interpreter the
+  # workspace.move capability gate just rejected. Invoked with no arguments the
+  # routed mover must reach the script's own argument check (exit 2) instead.
+  # shellcheck disable=SC2016 # Deliberately expanded by the child shell, not here.
+  out=$(PATH="$bin:$PATH" "$(command -v bash)" -c '
+    unset FM_BACKEND_HERDR_WORKSPACE_MOVER
+    . "$1/bin/backends/herdr.sh"
+    fm_backend_herdr_workspace_mover_cmd || { printf "NO-INTERPRETER\n"; exit 1; }
+    "${FM_BACKEND_HERDR_MOVER_CMD[@]}"
+  ' _ "$ROOT" 2>&1) || rc=$?
+  case "$out" in
+    *"Microsoft Store"*)
+      fail "the workspace mover ran under the Store stub its own capability gate rejects: $out"
+      ;;
+  esac
+  [ "$rc" -ne 49 ] || fail "the workspace mover still dies with the Store stub's exit 49: $out"
+  [ "$rc" -eq 2 ] \
+    || fail "the routed workspace mover did not reach its own argument check (rc=$rc): $out"
+  pass "the herdr workspace mover runs through the resolved interpreter, not its shebang"
+}
+
 test_kimi_hook_refuses_cleanly_on_the_stub() {
   local bin home out rc=0
   bin="$TMP_ROOT/kimi-stub"
@@ -304,9 +449,14 @@ test_probe_rejects_the_store_stub_and_refuses_when_nothing_runs
 test_probe_falls_through_the_store_stub_to_a_real_python
 test_probe_resolves_the_multi_word_windows_launcher
 test_probe_rejects_a_python_2
+test_resourcing_the_library_keeps_an_already_resolved_interpreter
+test_clearing_the_probe_flag_still_forces_a_re_probe
 test_refusal_names_the_candidates_and_the_store_alias
 test_doc_audience_check_refuses_instead_of_dying_on_the_stub
 test_doc_audience_check_runs_when_only_python_is_real
 test_ensure_agents_md_does_not_read_a_dead_interpreter_as_a_wrong_pointer
 test_ensure_agents_md_reports_undeterminable_rather_than_a_false_conflict
+test_ensure_agents_md_asks_realpath_when_the_interpreter_answers_nothing
+test_ensure_agents_md_names_the_interpreter_when_nothing_can_answer
+test_herdr_workspace_mover_runs_through_the_resolved_interpreter
 test_kimi_hook_refuses_cleanly_on_the_stub
