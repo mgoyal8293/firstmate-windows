@@ -1729,7 +1729,7 @@ test_live_active_step_attributes_run_despite_head_geometry() {
 # at all. A firstmate trusting that reports the work as landed and tears down an
 # unmerged branch.
 
-test_ci_skipped_pass_never_reads_as_done() {
+test_ci_skipped_pass_does_not_read_as_done_by_itself() {
   reset_fakes
   local d out
   d=$(new_case ci-skipped-pass)
@@ -1747,7 +1747,7 @@ test_ci_skipped_pass_never_reads_as_done() {
   assert_contains "$out" "run terminated" "the detail says the run is over, not waiting"
   assert_contains "$out" "ci SKIPPED" "the missing CI evidence is named"
   assert_contains "$out" "PR still open" "the forge's own answer is reported"
-  pass "a run that passed with ci skipped never reads as done"
+  pass "a run that passed with ci skipped does not read as done by itself"
 }
 
 test_merged_claim_requires_forge_confirmation() {
@@ -1797,11 +1797,13 @@ test_unanswered_forge_never_claims_a_landing() {
   pass "an unanswered forge never claims a landing"
 }
 
-# The CI-evidence gate is a WHITELIST. A skipped ci step is only one way for the
-# evidence to be missing; a record with no steps table at all, and a ci row with
-# any other status word, are the same absence spelled differently, and each one
-# used to fall straight through to `done - run passed`.
-test_terminal_pass_without_a_steps_table_is_not_done() {
+# CI evidence is one arm of the ranking, and a skipped ci step is only one way for
+# it to be missing; a record with no steps table at all, and a ci row with any
+# other status word, are the same absence spelled differently, and each one used
+# to fall straight through to `done - run passed`. Both fixtures below hold an
+# OPEN PR, so no confirmed landing is available to settle them either - that is
+# what makes the absence decisive rather than merely present.
+test_terminal_pass_with_no_steps_table_and_no_landing_is_not_done() {
   reset_fakes
   local d out
   d=$(new_case pass-no-steps)
@@ -1816,10 +1818,10 @@ test_terminal_pass_without_a_steps_table_is_not_done() {
   assert_not_contains "$out" "state: parked" "a terminated run is not a gate anyone can respond to"
   assert_contains "$out" "no ci step recorded" "the absent ci row is named honestly"
   assert_not_contains "$out" "ci SKIPPED" "an absent ci row is not a skipped one"
-  pass "a terminal pass with no steps table is not done"
+  pass "a terminal pass with no steps table and no landing is not done"
 }
 
-test_terminal_pass_with_a_pending_ci_step_is_not_done() {
+test_terminal_pass_with_a_pending_ci_step_and_no_landing_is_not_done() {
   reset_fakes
   local d out
   d=$(new_case pass-ci-pending)
@@ -1833,7 +1835,7 @@ test_terminal_pass_with_a_pending_ci_step_is_not_done() {
   assert_contains "$out" "state: unknown" "any other ci status word is absence of evidence"
   assert_not_contains "$out" "state: parked" "a terminated run is not a gate anyone can respond to"
   assert_contains "$out" "ci pending" "the ci step's own word is reported"
-  pass "a terminal pass whose ci step never completed is not done"
+  pass "a terminal pass whose ci step never completed, with no landing, is not done"
 }
 
 # The runs-list path carries a status word, a sha and a PR url and nothing else,
@@ -2288,7 +2290,12 @@ test_forge_confirmed_merge_settles_a_ci_skipped_run() {
 # in flight - which is what decides who `axi status` answers for. Same run, same
 # PR, same forge answer, asserted for BYTE equality across both paths rather than
 # each path in isolation.
-test_both_paths_agree_on_one_world_state() {
+#
+# This covers the forge-confirmed merge, not agreement in general: where the ci
+# step alone would settle the run, the coarse path cannot see that step at all and
+# honestly answers unknown, an accepted residual recorded at
+# fm_crew_terminal_verdict in bin/fm-crew-run-verdict-lib.sh.
+test_both_paths_agree_on_a_forge_confirmed_merge() {
   reset_fakes
   local d short full coarse
   d=$(new_case path-agreement)
@@ -2313,14 +2320,14 @@ EOF
     fail "the two paths disagree on one world state:"$'\n'"full:   $full"$'\n'"coarse: $coarse"
   assert_contains "$full" "state: done" "the full path settles the merged run"
   assert_contains "$coarse" "state: done" "so does the coarse path"
-  pass "both paths agree on one world state"
+  pass "both paths agree on a forge-confirmed merge"
 }
 
-# The same agreement where nothing settles the run: an open PR and no ci evidence
-# is unknown on either path, and neither may claim a landing. The gap phrase
-# differs by construction, because the paths genuinely know different things about
-# the ci step, so this asserts the verdict rather than the whole line.
-test_both_paths_agree_when_nothing_settles_the_run() {
+# The same agreement for one more world state: an open PR with no ci evidence is
+# unknown on either path, and neither may claim a landing. The gap phrase differs
+# by construction, because the paths genuinely know different things about the ci
+# step, so this asserts the verdict rather than the whole line.
+test_both_paths_agree_on_an_open_pr_with_no_ci_evidence() {
   reset_fakes
   local d short full coarse
   d=$(new_case path-agreement-open)
@@ -2342,7 +2349,7 @@ EOF
   assert_contains "$coarse" "state: unknown" "and the coarse path says the same"
   assert_not_contains "$full" "PR merged" "an open PR is never a landing on either path"
   assert_not_contains "$coarse" "PR merged" "including from the runs-list row"
-  pass "both paths agree when nothing settles the run"
+  pass "both paths agree on an open PR with no ci evidence"
 }
 
 test_active_run_is_authoritative
@@ -2402,7 +2409,7 @@ test_terminal_run_at_proven_pipeline_head_is_attributed
 test_branch_sync_for_another_run_does_not_prove_ownership
 test_branch_sync_for_another_head_does_not_prove_ownership
 test_branch_sync_for_another_checkout_does_not_prove_ownership
-test_ci_skipped_pass_never_reads_as_done
+test_ci_skipped_pass_does_not_read_as_done_by_itself
 test_checks_passed_outcome_is_done_without_a_completed_ci_row
 test_gitlab_merge_request_is_named_not_reported_as_a_forge_failure
 test_unrecognized_pr_url_is_named_not_reported_as_a_forge_failure
@@ -2413,10 +2420,10 @@ test_branch_sync_gate_status_does_not_park_a_running_run
 test_terminal_pass_without_ci_evidence_supersedes_a_stale_gate_log
 test_padded_step_columns_do_not_change_the_verdict
 test_forge_confirmed_merge_settles_a_ci_skipped_run
-test_both_paths_agree_on_one_world_state
-test_both_paths_agree_when_nothing_settles_the_run
-test_terminal_pass_without_a_steps_table_is_not_done
-test_terminal_pass_with_a_pending_ci_step_is_not_done
+test_both_paths_agree_on_a_forge_confirmed_merge
+test_both_paths_agree_on_an_open_pr_with_no_ci_evidence
+test_terminal_pass_with_no_steps_table_and_no_landing_is_not_done
+test_terminal_pass_with_a_pending_ci_step_and_no_landing_is_not_done
 test_coarse_completed_row_without_a_merge_is_not_done
 test_coarse_completed_row_is_done_once_the_forge_confirms_the_merge
 test_coarse_completed_row_with_an_unanswered_forge_is_not_done

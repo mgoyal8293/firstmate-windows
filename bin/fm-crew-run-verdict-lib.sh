@@ -393,10 +393,11 @@ fm_crew_run_admits() {  # <worktree> <run-output> <run-head>
 # found by SHAPE, not by column index. It is load-bearing on this path - a coarse
 # `completed` row reads done only on a forge-confirmed merge or close - and the
 # date column has been described both as one field and as two, so any fixed index
-# is one layout change away from handing a timestamp to the URL owner and parking
-# every completed row forever with "PR url not recognized". A field starting
-# `http://` or `https://` cannot be confused with a status word, a branch, a sha
-# or a date; bin/fm-pr-lib.sh still rules on whether it is a PR or MR at all.
+# is one layout change away from handing a timestamp to the URL owner and leaving
+# every completed row unknown forever with "PR url not recognized". A field
+# starting `http://` or `https://` cannot be confused with a status word, a
+# branch, a sha or a date; bin/fm-pr-lib.sh still rules on whether it is a PR or
+# MR at all.
 fm_crew_runs_newest_row_for_branch() {  # <runs-output> <branch>
   printf '%s\n' "$1" | awk -v want="$2" '
     { sub(/^[[:space:]]+/, "") }
@@ -474,10 +475,13 @@ fm_crew_forge_pr_state() {  # <pr-url> <timeout-secs>
 }
 
 # Verdict detail for a run that reached a terminal pass. The merged/closed words
-# come from the forge answer or not at all. The lead phrase distinguishes the two
-# evidence levels honestly: "run passed" when this run's own ci step was seen to
-# complete, "run completed" when the record carried no step detail to check (the
-# runs-list path), because that path cannot rule out a skipped ci step.
+# come from the forge answer or not at all. The lead phrase reports the CI
+# evidence level and nothing else: "run passed" only when this run's own ci step
+# was seen to complete, and "run completed" for every other level - an absent ci
+# row, a recorded `skipped`, any other status word, and the runs-list path that
+# carries no steps table at all. So a full-path run with `ci,skipped` whose PR the
+# forge confirms merged reads "run completed: PR merged": done on the landing, and
+# the lead deliberately withholding a claim that its checks ran.
 fm_crew_done_detail() {  # <forge-answer> <ci-evidence: verified|unverified>
   local answer=$1 word=${1%% *} rest="" qualifier="" lead=run\ completed
   [ "${2:-unverified}" = verified ] && lead=run\ passed
@@ -599,6 +603,21 @@ FM_CREW_CI_NO_STEP_DETAIL='(no steps table)'
 #     captain's attention.
 # No precision is lost, because the detail helpers carry it. And unknown is still
 # non-terminal, so it cannot license teardown or a captain-facing failure either.
+#
+# ACCEPTED RESIDUAL, not an oversight. Rule 2 can only ever be satisfied by a path
+# that can read a steps table, so one run with `ci,completed` and no confirmed
+# landing reads done on the full path and unknown on the coarse one - reachable on
+# a GitLab project (always `unqueryable`), on a host with no `gh`, and whenever
+# bin/fm-inactive-reconcile.sh skips the forge read because its budget cannot
+# spare it. That is NOT the contradiction rule 1 fixed, and the distinction is the
+# whole reason it is acceptable: there the two paths held the SAME evidence and
+# ranked it differently, which is indefensible; here they hold DIFFERENT evidence,
+# because a coarse row cannot see the ci table at all, so each answer is honest
+# about what that path actually observed. The direction is conservative - unknown,
+# never a false done - and the cost is a delayed presentation receipt, not a wrong
+# verdict. The remedy is the filed runs-list upgrade named in bin/fm-crew-state.sh
+# (try the home view first and re-query any id it yields, so this path reads the
+# same steps table), NOT giving this ranking a second way to guess at ci evidence.
 fm_crew_terminal_verdict() {  # <ci-step-status> <forge-answer>
   local ci=$1 answer=$2 evidence=unverified
   [ "$ci" = completed ] && evidence=verified
