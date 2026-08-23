@@ -346,11 +346,12 @@ SH
   pass "create_task spawns a home-scoped shell session and confirms it answers before reporting success"
 ) || exit 1
 
-# The CR guard, read from the spawn it produces rather than from the source. A
-# Windows checkout made with core.autocrlf=true rewrites the rcfile's line
-# endings, and bash sourcing a CR-bearing file prints syntax errors into the
-# very screen the composer classifier reads. No rcfile is the safe outcome, so
-# the spawn must simply carry no --rcfile at all.
+# The CR guard, read from the spawn it produces rather than from the source.
+# bash sourcing a CR-bearing file prints syntax errors into the very screen the
+# composer classifier reads, so no rcfile is the safe outcome and the spawn must
+# simply carry no --rcfile at all. .gitattributes pins `* text=auto eol=lf`, so
+# no clone can deliver a CRLF rcfile - the case has to synthesise one to reach
+# the branch, which is what the awk rewrite below is for.
 (
   CASE="$TMP_ROOT/create-rcfile-cr"; mkdir -p "$CASE"
   load_adapter "$CASE"
@@ -910,6 +911,31 @@ PRE
   [ "$a_last" = "$a_prompts" ] \
     || fail "an operator's trailing array hook ran $a_last times across $a_prompts prompts; the flattened copy left the original array element in place, so it runs twice per prompt"
   pass "conpty shell integration: an operator's array-form prompt hooks survive arming without the trailing one running twice"
+
+  # AN OPERATOR'S OWN PS0 MUST SURVIVE ARMING. PS0 is exported so nested shells
+  # inherit the carrier, so clobbering it would cost the operator their value in
+  # the session shell and in every nested bash for the session's life. It arrives
+  # the same way the array does, from a file sourced before this one, and the file
+  # is sourced twice to hold the idempotence guard to the same standard.
+  #
+  # The counts are the discriminator: a clobbering assignment leaves zero copies
+  # of the operator's text, and a non-idempotent prepend leaves two marks per
+  # command start against its one copy, so requiring the two counts to be equal
+  # and non-zero separates both defects from correct behaviour.
+  pre_ps0="$CASE/pre-ps0.bash"
+  cat > "$pre_ps0" <<'PRE'
+PS0='FMPS0OP'
+PRE
+  printf '. %s\n. %s\n' "$RC" "$RC" >> "$pre_ps0"
+  ps0ed=$(printf 'true\nexit\n' \
+    | env -i HOME="$H" PATH="$PATH" bash --rcfile "$pre_ps0" -i 2>&1)
+  p_marks=$(printf '%s' "$ps0ed" | LC_ALL=C grep -ao '133;C;fmpty=1' | wc -l | tr -d ' ')
+  p_ops=$(printf '%s' "$ps0ed" | LC_ALL=C grep -ao 'FMPS0OP' | wc -l | tr -d ' ')
+  [ "$p_marks" -gt 0 ] \
+    || fail "the pre-set-PS0 case emitted no command-start mark, so it proved nothing about the operator's value"
+  [ "$p_ops" = "$p_marks" ] \
+    || fail "an operator's pre-set PS0 appeared $p_ops times against $p_marks command-start marks; equal counts were expected (zero copies means arming clobbered it, half means the mark was prepended twice)"
+  pass "conpty shell integration: an operator's pre-set PS0 survives arming, and re-sourcing adds no second mark"
 ) || exit 1
 
 pass "conpty adapter unit tests complete"

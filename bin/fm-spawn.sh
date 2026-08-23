@@ -712,21 +712,32 @@ parse_orca_worktree_result() {
 # outlive its acquirer: everywhere else `treehouse get`'s subshell holds the slot
 # and releases it when the endpoint dies, so an aborted spawn leaked nothing.
 #
-# The slot is found by THIS task's holder label rather than by $WT, because the
-# abort can happen before the cwd poll ever landed - and because a $WT that
-# validate_spawn_worktree rejected is not a slot to hand back anyway.
-# `--if-lease-holder` is what makes the return safe to automate: treehouse
-# refuses it unless that holder still holds the lease, so this can never take
-# another task's slot.
+# The slot is looked up by THIS task's holder label first, because the abort can
+# happen before the cwd poll ever landed and $WT is then empty. When that scan
+# yields no path the code does fall back to $WT, rejected or not, and
+# `--if-lease-holder` is what makes that fallback safe: treehouse refuses the
+# return unless that holder still holds the lease. Naming a wrong target would
+# therefore take two firstmate homes sharing one treehouse pool with the same
+# task id, which no firstmate-provisioned layout produces - the pool is keyed per
+# clone path, and every home clones into its own projects/.
+#
+# The scan also answers whether there is anything to release at all, and the two
+# answers must not be conflated. A pool that read cleanly and holds no row for
+# this holder means the lease was never taken (the most likely abort: the
+# in-session `treehouse get --lease` itself failed, so the shell never left the
+# project and the cwd poll timed out), and telling the operator a slot stays
+# leased there would send them after a lease that does not exist. A pool that
+# could not be read or parsed is genuinely unknown, and an unknown state still
+# earns the hint.
 #
 # Best-effort by design. A failed abort is worse than a leaked slot, so when the
 # release cannot be made this prints the exact one-line command instead of
 # failing.
 conpty_release_spawn_lease() {  # <holder>
-  local holder=$1 path=
+  local holder=$1 path= probe= pool_read=
   [ -n "$holder" ] || return 0
   if command -v treehouse >/dev/null 2>&1 && command -v node >/dev/null 2>&1; then
-    path=$( cd "${PROJ_ABS:-.}" 2>/dev/null && treehouse status --json 2>/dev/null | node -e '
+    probe=$( cd "${PROJ_ABS:-.}" 2>/dev/null && treehouse status --json 2>/dev/null | node -e '
       let s = "";
       process.stdin.on("data", function (d) { s += d; });
       process.stdin.on("end", function () {
@@ -735,10 +746,21 @@ conpty_release_spawn_lease() {  # <holder>
           const hit = (Array.isArray(rows) ? rows : []).find(function (r) {
             return r && r.lease_holder === process.argv[1] && r.path;
           });
-          if (hit) process.stdout.write(String(hit.path));
-        } catch (e) { /* no readable pool: fall through to the printed hint */ }
+          process.stdout.write("readable\n" + (hit ? String(hit.path) : ""));
+        } catch (e) { /* no readable pool: the state is unknown, not empty */ }
       });
-    ' "$holder" ) || path=
+    ' "$holder" ) || probe=
+  fi
+  case "$probe" in
+    readable*)
+      pool_read=1
+      path=${probe#readable}
+      path=${path#$'\n'}
+      ;;
+  esac
+  if [ "$pool_read" = 1 ] && [ -z "$path" ]; then
+    echo "note: task $ID took no worktree lease as $holder, so the abort had none to release" >&2
+    return 0
   fi
   [ -n "$path" ] || path=${WT:-}
   if [ -n "$path" ] \

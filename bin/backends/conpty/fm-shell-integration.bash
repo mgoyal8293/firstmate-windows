@@ -143,9 +143,16 @@ _fm_conpty_bash_has_ps0() {
 # re-arm. Reading the carrier is right for both: a re-source adds nothing, and a
 # clobbered carrier heals.
 if _fm_conpty_bash_has_ps0; then
-  # C: a command has started, so a command owns the foreground. A plain
-  # assignment, so it needs no guard of its own.
-  PS0='\e]133;C;fmpty=1\a'
+  # C: a command has started, so a command owns the foreground. Prepended rather
+  # than assigned, behind the same contains-the-mark test the other carriers use,
+  # because an operator who sets PS0 in their own rc files would otherwise lose it
+  # here and - PS0 being exported so nested shells inherit the carrier - in every
+  # nested interactive bash for the session's life. The mark still lands on the
+  # stream at command start either way.
+  case "${PS0:-}" in
+    *'133;C;fmpty=1'*) ;;
+    *) PS0='\e]133;C;fmpty=1\a'"${PS0:-}" ;;
+  esac
   export PS0
 
   # A and B bracket the prompt itself. Both are wrapped in \[ \] so bash counts

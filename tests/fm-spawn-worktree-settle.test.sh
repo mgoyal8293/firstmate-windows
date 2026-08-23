@@ -249,6 +249,12 @@ set -u
 { printf 'treehouse'; for a in "$@"; do printf '\x1f%s' "$a"; done; printf '\n'; } >> "${FM_TREEHOUSE_LOG:?}"
 case "${1:-}" in
   status)
+    # An unreadable pool is the other half of the abort path: the release cannot
+    # tell "nothing was leased" from "cannot say" without it.
+    if [ -n "${FM_FAKE_STATUS_UNREADABLE:-}" ]; then
+      printf 'treehouse: no pool here\n' >&2
+      exit 1
+    fi
     printf '[{"name":"1","path":"%s","status":"leased","lease_holder":"%s","processes":[]}]\n' \
       "${FM_FAKE_LEASED_PATH:-}" "${FM_FAKE_LEASE_HOLDER:-}"
     exit 0 ;;
@@ -300,6 +306,7 @@ run_acquire_spawn() {  # <case-dir> <fakebin> <spawn> <id> [extra spawn args...]
     FM_TREEHOUSE_LOG="$case_dir/treehouse.log" \
     FM_FAKE_LEASED_PATH="${FM_FAKE_LEASED_PATH:-}" FM_FAKE_LEASE_HOLDER="${FM_FAKE_LEASE_HOLDER:-}" \
     FM_FAKE_RETURN_EXIT="${FM_FAKE_RETURN_EXIT:-0}" \
+    FM_FAKE_STATUS_UNREADABLE="${FM_FAKE_STATUS_UNREADABLE:-}" \
     FM_BACKEND_CONPTY_ALLOW_NON_WINDOWS=1 \
     FM_BACKEND_CONPTY_SHELL='C:\fake\bash.exe' \
     FM_BACKEND_CONPTY_STATE="$case_dir/conpty-state" \
@@ -407,11 +414,65 @@ test_unreleasable_lease_prints_the_operator_command() {
   pass "a lease the abort cannot release is reported with the exact one-line command, not swallowed and not fatal"
 }
 
+# THE TWO ANSWERS THE PROBE GIVES MUST NOT READ THE SAME. The likeliest abort is
+# the in-session `treehouse get --lease` failing outright: the shell never leaves
+# the project, the cwd poll times out, and NOTHING was ever leased. Telling the
+# operator a slot stays leased there sends them after a lease that does not
+# exist, so a pool that read cleanly and holds no row for this holder must say so
+# and hand over no `treehouse return` command. A pool that could not be read is a
+# different answer and keeps the hint.
+test_no_lease_taken_is_not_reported_as_a_leak() {
+  local case_dir id fakebin spawn out status
+  id=acquire-conpty-nolease-z5
+  case_dir=$(make_abort_case acquire-conpty-nolease "$id")
+  # The pool reads cleanly and its one slot is leased to a DIFFERENT task, so the
+  # probe positively answers "this holder holds nothing".
+  export FM_FAKE_LEASED_PATH="$case_dir/leased-slot" FM_FAKE_LEASE_HOLDER="firstmate-someone-else" FM_FAKE_RETURN_EXIT=0
+  fakebin=$(make_conpty_fakebin "$case_dir/fake" "$case_dir/not-a-worktree")
+  spawn=$(make_conpty_binroot "$case_dir")
+
+  out=$(run_acquire_spawn "$case_dir" "$fakebin" "$spawn" "$id" --backend conpty)
+  status=$?
+  export FM_FAKE_LEASE_HOLDER=
+  [ "$status" -ne 0 ] || fail "the spawn should have aborted on a worktree that is not isolated"$'\n'"$out"
+  assert_not_contains "$out" "stays leased" \
+    "the abort claimed a leaked slot although the pool positively reported no lease for this holder"
+  assert_not_contains "$out" "treehouse return --force" \
+    "the abort handed the operator a release command for a lease that was never taken"
+  [ -z "$(treehouse_return_call "$case_dir/treehouse.log")" ] \
+    || fail "the abort ran treehouse return although this holder held no lease"$'\n'"$out"
+  assert_contains "$out" "took no worktree lease as firstmate-$id" \
+    "the abort said nothing about the lease it found was never taken"
+  pass "an abort whose pool reports no lease for this task reports that, and neither warns of a leak nor offers a release command"
+}
+
+test_unreadable_pool_still_prints_the_operator_command() {
+  local case_dir id fakebin spawn out status
+  id=acquire-conpty-unknown-z6
+  case_dir=$(make_abort_case acquire-conpty-unknown "$id")
+  # `treehouse status` cannot answer, so whether a lease is held is unknown - and
+  # an unknown state still earns the hint, aimed at the path the session settled
+  # in because it is the only one this spawn observed.
+  export FM_FAKE_STATUS_UNREADABLE=1 FM_FAKE_RETURN_EXIT=1
+  fakebin=$(make_conpty_fakebin "$case_dir/fake" "$case_dir/not-a-worktree")
+  spawn=$(make_conpty_binroot "$case_dir")
+
+  out=$(run_acquire_spawn "$case_dir" "$fakebin" "$spawn" "$id" --backend conpty)
+  status=$?
+  export FM_FAKE_STATUS_UNREADABLE= FM_FAKE_RETURN_EXIT=0
+  [ "$status" -ne 0 ] || fail "the spawn should have aborted on a worktree that is not isolated"$'\n'"$out"
+  assert_contains "$out" "treehouse return --force --if-lease-holder firstmate-$id $case_dir/not-a-worktree" \
+    "an unreadable pool suppressed the operator command instead of falling back to the observed path"
+  pass "an abort that cannot read the pool keeps the exact one-line release command, because unknown is not the same as none"
+}
+
 test_single_stale_first_read_is_not_accepted
 test_already_settled_pane_costs_one_confirm_sleep
 test_default_backend_sends_bare_treehouse_get
 test_conpty_leases_and_cds_in_the_session_shell
 test_aborted_conpty_spawn_returns_its_own_lease
 test_unreleasable_lease_prints_the_operator_command
+test_no_lease_taken_is_not_reported_as_a_leak
+test_unreadable_pool_still_prints_the_operator_command
 
 echo "# all fm-spawn-worktree-settle tests passed"

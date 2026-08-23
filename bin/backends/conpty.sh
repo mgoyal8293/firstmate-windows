@@ -257,12 +257,18 @@ fm_backend_conpty_shell() {
 # session shell announce whether it is at a prompt, as a Windows path, or
 # nothing at all when it must not be used.
 #
-# It refuses on a CR-bearing copy rather than passing it to bash. A Windows
-# checkout made with core.autocrlf=true rewrites this file's line endings, and a
+# It refuses on a CR-bearing copy rather than passing it to bash, because a
 # sourced bash file whose lines end in CR does not merely lose the marks - it
 # fails mid-file and prints syntax errors into the session the composer
 # classifier then reads. No rcfile is the safe outcome: liveness falls back to
 # the reading this backend shipped with.
+#
+# This is belt-and-braces, not a state a clone reaches: .gitattributes pins
+# `* text=auto eol=lf`, which overrides core.autocrlf and core.eol, so even a
+# Windows checkout gets LF here. What it defends is a tree that arrived some
+# other way - hand-copied, unpacked from an archive, or run through a filter
+# that rewrote line endings - where bash would otherwise choke on the CR. The
+# dedicated test has to synthesise the CRLF file to reach this branch at all.
 fm_backend_conpty_shell_integration_rcfile() {
   local rc="$FM_BACKEND_CONPTY_ROOT/bin/backends/conpty/fm-shell-integration.bash"
   [ -f "$rc" ] || return 1

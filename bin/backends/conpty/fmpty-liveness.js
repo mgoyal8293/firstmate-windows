@@ -6,9 +6,12 @@
 // node-pty's prebuilt binary and a real ConPTY. Its liveness verdict, though, is
 // pure logic over a handful of facts, and that verdict is what decides whether
 // firstmate is allowed to recover a task - so it is the part that most needs a
-// regression test on every platform CI runs. Splitting it out is what lets
-// tests/fm-conpty-liveness.test.sh exercise the real decision with plain node
-// instead of asserting it by reading the daemon's source.
+// regression test on every platform CI runs. Splitting it out is what lets the
+// liveness block of tests/fm-backend-conpty.test.sh - the decideAgentState,
+// createPromptTracker and classifyScreenRows cases - exercise the real decision
+// with plain node instead of asserting it by reading the daemon's source. The
+// real-host end of that coverage is the opt-in guard
+// tests/fm-conpty-liveness-live-e2e.test.sh.
 //
 // TWO SOURCES, AND WHY THE PROMPT MARKER LEADS. tmux scopes liveness to the
 // pane tty's FOREGROUND process group, which is how a harness-named process
