@@ -26,6 +26,9 @@
 # ORDERING, and why LOCK now runs before BOOTSTRAP (the old AGENTS.md order
 # was bootstrap-then-lock):
 #
+#   0. startup        - this script's own setup: the harness probe, the library
+#                       sources, and the tasks-axi compatibility probe. Named as
+#                       a stage only so a truncation inside it can say so.
 #   1. lock          - acquire the per-home session lock FIRST, before any
 #                       mutating step runs.
 #   2. bootstrap      - home-local stale Herdr projection cleanup runs only
@@ -56,7 +59,7 @@
 #                       script points back to the emitted harness supervision
 #                       block and deliberately never arms the watcher itself.
 #
-# Those nine names are also the runtime-bound stage list below, so a truncated
+# Those ten names are also the runtime-bound stage list below, so a truncated
 # startup can name exactly which of them never ran.
 #
 # NO NETWORK ON THE BLOCKING PATH. This digest runs on a session-open hook that
@@ -166,7 +169,8 @@
 # not the same as bounded: tool version probes, the backlog listing, and the
 # per-task endpoint reads are all unbounded subprocesses. So the whole digest
 # still runs as ONE bounded child of this script (FM_SESSION_START_TIMEOUT,
-# default 120s). The deferred network stage deliberately sits OUTSIDE that bound,
+# defaulting per platform - see bin/fm-session-start-bound-lib.sh). The
+# deferred network stage deliberately sits OUTSIDE that bound,
 # in its own process group under its own aggregate deadline, so a truncated
 # digest neither waits for it nor orphans it unbounded. The
 # child writes the digest straight to this script's stdout, so everything it
@@ -253,24 +257,30 @@ done
 # The ordered stage list is the contract behind the truncation banner: the child
 # names the stage it is entering, and the parent reports every stage at or after
 # that one as never emitted. Keep it in the exact order the digest prints.
-SESSION_START_STAGES='lock bootstrap wake-queue supervision-instructions read-once fleet-state network-checks context next-step'
+SESSION_START_STAGES='startup lock bootstrap wake-queue supervision-instructions read-once fleet-state network-checks context next-step'
 
 stage() {  # <stage-name>: breadcrumb for the parent's truncation banner
+  # Records the stage's ENTRY INSTANT as well as its name, so a truncated
+  # startup can attribute its own time instead of asking the operator to
+  # re-run it under tracing. Appends, and costs no subprocess: see
+  # bin/fm-session-start-bound-lib.sh.
   [ -n "${FM_SESSION_START_STAGE_FILE:-}" ] || return 0
-  printf '%s\n' "$1" > "$FM_SESSION_START_STAGE_FILE" 2>/dev/null || true
+  fm_session_stage_mark "$FM_SESSION_START_STAGE_FILE" "$1"
 }
 
 # shellcheck source=bin/fm-timeout-lib.sh
 . "$SCRIPT_DIR/fm-timeout-lib.sh"
 # shellcheck source=bin/fm-session-lock-lib.sh
 . "$SCRIPT_DIR/fm-session-lock-lib.sh"
+# shellcheck source=bin/fm-session-start-bound-lib.sh
+. "$SCRIPT_DIR/fm-session-start-bound-lib.sh"
 
 if [ -z "${FM_SESSION_START_STAGE_FILE:-}" ]; then
-  SESSION_START_BUDGET=${FM_SESSION_START_TIMEOUT:-120}
-  # A non-positive or non-numeric budget is not a budget (`timeout 0` disables
-  # the deadline outright), so an unusable value falls back to the default
-  # rather than silently removing the bound.
-  case "$SESSION_START_BUDGET" in ''|*[!0-9]*|0) SESSION_START_BUDGET=120 ;; esac
+  # An explicit FM_SESSION_START_TIMEOUT wins; otherwise the default is per
+  # platform, because the identical digest costs about 40x more per subprocess
+  # under MSYS than on Linux. bin/fm-session-start-bound-lib.sh owns that
+  # resolution, its evidence, and the unusable-value fallback.
+  SESSION_START_BUDGET=$(fm_session_start_resolve_budget "${FM_SESSION_START_TIMEOUT:-}")
   SESSION_START_STAGE_FILE=$(mktemp "${TMPDIR:-/tmp}/fm-session-start-stage.XXXXXX" 2>/dev/null) || SESSION_START_STAGE_FILE=
   if [ -z "$SESSION_START_STAGE_FILE" ]; then
     # Without a breadcrumb the bound still holds; only the banner's precision
@@ -298,7 +308,7 @@ if [ -z "${FM_SESSION_START_STAGE_FILE:-}" ]; then
   fi
   SESSION_START_RC=$?
   if [ "$SESSION_START_RC" -eq 124 ]; then
-    SESSION_START_LAST_STAGE=$(cat "$SESSION_START_STAGE_FILE" 2>/dev/null) || SESSION_START_LAST_STAGE=
+    SESSION_START_LAST_STAGE=$(fm_session_stage_last "$SESSION_START_STAGE_FILE") || SESSION_START_LAST_STAGE=
     [ -n "$SESSION_START_LAST_STAGE" ] || SESSION_START_LAST_STAGE=unknown
     SESSION_START_PENDING=$(
       printf '%s\n' "$SESSION_START_STAGES" | tr ' ' '\n' |
@@ -315,11 +325,21 @@ if [ -z "${FM_SESSION_START_STAGE_FILE:-}" ]; then
     printf '●  Rerun bin/fm-session-start.sh now to finish taking the helm. If it truncates\n'
     printf '●  again, raise FM_SESSION_START_TIMEOUT and report the slow stage - a stage that\n'
     printf '●  cannot finish inside the bound is a fleet problem, not a reporting detail.\n'
+    fm_session_stage_render "$SESSION_START_STAGE_FILE" "$SESSION_START_BUDGET"
     printf '%s\n' "$BAR"
   fi
   rm -f "$SESSION_START_STAGE_FILE" 2>/dev/null || true
   exit 0
 fi
+
+# Marked BEFORE the harness probe, the seven library sources and the tasks-axi
+# compatibility probe below, because that window is real work - four subprocesses
+# and every library prologue - and it used to sit outside every stage. A
+# truncation inside it could only report the stage as "unknown" and list no lost
+# stages at all, which is precisely the case where the banner explains least. It
+# is invisible on Linux, where the window is milliseconds, and seconds long under
+# MSYS.
+stage startup
 
 PRIMARY_HARNESS=$("$SCRIPT_DIR/fm-harness.sh" 2>/dev/null || printf unknown)
 
@@ -723,6 +743,7 @@ fi
 
 # --- 4. supervision operating instructions ----------------------------------
 stage supervision-instructions
+subsection "SUPERVISION INSTRUCTIONS"
 AFK_PRESENT=0
 [ -e "$STATE/.afk" ] && AFK_PRESENT=1
 X_MODE_PRESENT=0

@@ -48,6 +48,27 @@ One narrower variant remains outside that owner, `task_process_identity` in `bin
 Prefer capability detection over a platform name wherever the question is really "does this work here?" - `/proc` presence, chmod round-trip, symlink creation.
 Reserve the `uname -s` arms for behaviour that is genuinely platform-specific.
 
+## The session-start runtime bound is raised here, because a truncated startup is not supervising
+
+`bin/fm-session-start.sh` runs its whole digest as one bounded child.
+When that bound is hit the digest truncates, and the stages it loses are the wake-queue drain, the supervision operating instructions and the whole context digest - so a truncated startup is a session that looks started and is not steering, which is a supervision failure rather than a slow banner.
+
+A subprocess costs about 1 ms on Linux and about 42 ms under MSYS, so the identical digest that finishes in seconds here takes over a minute there, and one portable bound cannot be right for both.
+On a Windows 11 box under Git Bash, on a home with no tasks, no projects and an absent backlog - the floor, with nothing to reconcile and nothing to sync - the digest took 72 s and 76 s, already 60% of the old 120 s bound before any real work exists in the home.
+One run of that same empty home with a test lane competing for CPU took 123 s and truncated; because it truncated, 123 s is a lower bound on what that run needed rather than what it would have taken.
+
+So the default bound is now per platform: 120 s as before, and 300 s under MSYS, MINGW and Cygwin.
+[`../bin/fm-session-start-bound-lib.sh`](../bin/fm-session-start-bound-lib.sh) is the one owner of that resolution and records the reasoning behind the number, which is a margin over a censored observation and not a measured maximum.
+An explicit `FM_SESSION_START_TIMEOUT` still wins on every platform, including a value below the raised default; an unusable one falls back to the platform default rather than to a portable constant, because `timeout 0` disables the deadline outright.
+`bin/fm-startup-network.sh` resolves its inline-delivery window through that same owner, so the worker keeps offering its result for exactly as long as the digest it reports to might still be running.
+
+Raising a bound does not make the subprocess count that forced it acceptable, so the truncation banner now attributes its own time.
+It already named the stage it died in and every stage it never reached; it also asked the operator to "report the slow stage" while nothing measured a stage.
+Each stage now records its entry instant, and the banner prints per-stage elapsed times with the unfinished stage marked, so the question the banner asks is answerable from the banner itself.
+Those marks are shell builtins reading `EPOCHREALTIME` and spawn nothing: the path being measured is one whose cost *is* its subprocess count, so an instrument that forked per stage would inflate the number it exists to report.
+The script's own setup is now a named stage too, because it was outside every stage before and a truncation inside it could only report `unknown` and list no lost stages; on Windows that window is 9.9 s against 312 ms on Linux, which is the first thing the attribution turned up.
+`tests/fm-session-start-bound.test.sh` drives the Windows arm from a POSIX runner through `FM_PLATFORM_UNAME_OVERRIDE`, the same seam `bin/fm-proc-lib.sh` uses, which is the only way that arm is covered by CI at all.
+
 ## Security note: the private-file mode assertion
 
 `fm_pr_private_file_valid` normally asserts an artifact's exact mode, so a

@@ -42,7 +42,7 @@ On a run-tier harness the nudge cannot also fire: `resume`, `reload`, and `fork`
 
 The run tier blocks session initialization while the digest runs, so `bin/fm-session-start.sh` bounds itself rather than betting on each harness's own hook timeout.
 The digest makes no external-network call at all: every one it owes runs concurrently in the separately bounded deferred stage owned by `bin/fm-startup-network.sh`, so an unreachable host can no longer consume this budget.
-What remains is still not individually bounded - tool version probes, the backlog listing, and the per-task endpoint reads are all local but unbounded subprocesses - so the whole digest runs as one bounded child, default 120s via `FM_SESSION_START_TIMEOUT`.
+What remains is still not individually bounded - tool version probes, the backlog listing, and the per-task endpoint reads are all local but unbounded subprocesses - so the whole digest runs as one bounded child, bounded by `FM_SESSION_START_TIMEOUT` and otherwise by a per-platform default (120s, raised to 300s under MSYS/MINGW/Cygwin, where each subprocess costs about 40x more).
 The shared timeout owner falls back to a pure-Bash process-group watchdog when timeout, gtimeout, and perl are unavailable, so no supported host runs the digest unbounded.
 Because the child writes straight to the hook's stdout, everything emitted before the bound was hit is already delivered; the parent then prints a `STARTUP TRUNCATED` banner naming the stage that did not finish and the stages that were therefore never emitted, and still exits 0.
 The registered hook timeouts sit above that budget so the harness never preempts the banner.
