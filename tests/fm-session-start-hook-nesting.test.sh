@@ -203,6 +203,14 @@ test_every_registered_digest_hook_outlives_the_startup_bound() {
 #
 # The number these cases nest under is read with jq, independently of the awk
 # scanner the library uses, so the two implementations have to agree.
+#
+# Every resolve below asserts hook context explicitly with the marker
+# bin/fm-sessionstart-run.sh exports, because the clamp is scoped to the paths
+# the harness ceiling governs and this suite is about the hook path. Leaving it
+# implicit would make these assertions depend on whether the runner happens to
+# hand the suite a terminal on stderr, which is not a property of the invariant.
+# tests/fm-session-start-bound.test.sh owns the scoping itself, including that an
+# UNDETERMINED context still clamps.
 
 # The shortest timeout any tracked registration declares for a DIGEST-tier
 # session-start hook. This is the deadline that actually kills the hook first.
@@ -240,7 +248,8 @@ test_an_explicit_override_is_clamped_below_the_shortest_registration() {
   # platform arm - the Windows one especially, since its default is already the
   # closest to the registrations.
   for plat in $FM_TEST_SESSION_START_PLATFORMS; do
-    got=$(FM_PLATFORM_UNAME_OVERRIDE="$plat" fm_session_start_resolve_budget "$((harness * 10))")
+    got=$(FM_SESSION_START_UNDER_HOOK=1 FM_PLATFORM_UNAME_OVERRIDE="$plat" \
+      fm_session_start_resolve_budget "$((harness * 10))")
     case "$got" in ''|*[!0-9]*|0) fail "an over-cap override on '$plat' resolved to '$got', which is not a usable bound" ;; esac
     [ "$got" -lt "$harness" ] \
       || fail "FM_SESSION_START_TIMEOUT=$((harness * 10)) on '$plat' resolves to ${got}s, at or above the ${harness}s harness hook timeout: the harness kills the hook first, so there is no STARTUP TRUNCATED banner, no named stage and no reconcile list"
@@ -248,7 +257,8 @@ test_an_explicit_override_is_clamped_below_the_shortest_registration() {
 
   # Clamped, never reduced to the default and never rejected: an operator who
   # asked for MORE time must not be handed LESS than the machine can give.
-  got=$(FM_PLATFORM_UNAME_OVERRIDE=MINGW64_NT-10.0-26200 fm_session_start_resolve_budget "$((harness * 10))")
+  got=$(FM_SESSION_START_UNDER_HOOK=1 FM_PLATFORM_UNAME_OVERRIDE=MINGW64_NT-10.0-26200 \
+    fm_session_start_resolve_budget "$((harness * 10))")
   [ "$got" -eq "$cap" ] \
     || fail "an over-cap override must land ON the ${cap}s cap, got ${got}s"
   [ "$got" -gt "$(FM_PLATFORM_UNAME_OVERRIDE=MINGW64_NT-10.0-26200 fm_session_start_default_budget)" ] \
@@ -256,17 +266,17 @@ test_an_explicit_override_is_clamped_below_the_shortest_registration() {
 
   # And the clamp must not become a floor or eat a usable value: anything at or
   # below the cap is honoured exactly.
-  got=$(FM_PLATFORM_UNAME_OVERRIDE=Linux fm_session_start_resolve_budget "$cap")
+  got=$(FM_SESSION_START_UNDER_HOOK=1 FM_PLATFORM_UNAME_OVERRIDE=Linux fm_session_start_resolve_budget "$cap")
   [ "$got" -eq "$cap" ] \
     || fail "an override exactly AT the ${cap}s cap must be honoured, got ${got}s"
-  got=$(FM_PLATFORM_UNAME_OVERRIDE=Linux fm_session_start_resolve_budget 45)
+  got=$(FM_SESSION_START_UNDER_HOOK=1 FM_PLATFORM_UNAME_OVERRIDE=Linux fm_session_start_resolve_budget 45)
   [ "$got" -eq 45 ] \
     || fail "an override well below the cap must be honoured exactly, got ${got}s"
 
   # An UNUSABLE value still resolves to the platform default. `timeout 0`
   # disables the deadline outright, so the clamp must not turn a garbage value
   # into the cap either.
-  got=$(FM_PLATFORM_UNAME_OVERRIDE=MINGW64_NT-10.0-26200 fm_session_start_resolve_budget abc)
+  got=$(FM_SESSION_START_UNDER_HOOK=1 FM_PLATFORM_UNAME_OVERRIDE=MINGW64_NT-10.0-26200 fm_session_start_resolve_budget abc)
   [ "$got" -eq "$(FM_PLATFORM_UNAME_OVERRIDE=MINGW64_NT-10.0-26200 fm_session_start_default_budget)" ] \
     || fail "an unusable override must still fall back to the platform default, got ${got}s"
 
@@ -279,7 +289,7 @@ test_a_clamp_says_so_on_the_digest() {
   local harness cap out
   harness=$(min_registered_digest_timeout) || fail "no digest-tier timeout could be read"
   cap=$(fm_session_start_hook_ceiling) || fail "no cap could be derived"
-  out=$(fm_session_start_budget_advisory "$((harness * 10))" "$cap")
+  out=$(fm_session_start_budget_advisory "$((harness * 10))" "$cap" hook)
   case "$out" in
     *"$((harness * 10))"*) : ;;
     *) fail "the clamp advisory must name the value that was requested, got: $out" ;;
@@ -294,9 +304,9 @@ test_a_clamp_says_so_on_the_digest() {
   esac
   # And it stays quiet when nothing was clamped, so the digest does not carry a
   # warning about a bound that is in force exactly as asked.
-  out=$(fm_session_start_budget_advisory 45 45)
+  out=$(fm_session_start_budget_advisory 45 45 hook)
   [ -z "$out" ] || fail "an unclamped bound must produce no advisory, got: $out"
-  out=$(fm_session_start_budget_advisory '' 300)
+  out=$(fm_session_start_budget_advisory '' 300 hook)
   [ -z "$out" ] || fail "an unset FM_SESSION_START_TIMEOUT must produce no advisory, got: $out"
   pass "hook nesting: a clamped bound names the requested value, the cap applied and why, and an unclamped one stays silent"
 }

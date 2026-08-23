@@ -36,6 +36,13 @@
 # result inline or as a wake, for exactly that reason.
 set -u
 
+# This script is ONLY ever a hook entrypoint: all three run-tier registrations
+# invoke it, .cursor/hooks.json through bin/fm-sessionstart-cursor.sh which
+# delegates here. So it can positively assert hook context, which
+# bin/fm-session-start-bound-lib.sh needs in order to know that the harness will
+# kill this process at its registered timeout - and must never have to guess.
+export FM_SESSION_START_UNDER_HOOK=1
+
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 FM_ROOT="${FM_ROOT_OVERRIDE:-$(cd "$SCRIPT_DIR/.." && pwd)}"
 FM_HOME="${FM_HOME:-${FM_ROOT_OVERRIDE:-$FM_ROOT}}"

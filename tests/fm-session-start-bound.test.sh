@@ -107,6 +107,31 @@ test_non_windows_platforms_keep_the_portable_bound() {
   pass "fm_session_start_default_budget: non-Windows platforms keep the portable 120s default"
 }
 
+# --- a real terminal, for the one branch that is defined by having one --------
+#
+# fm_session_start_hook_context answers `direct` on `[ -t 2 ]`, so the only
+# honest way to cover that branch is to give it a terminal. An env flag standing
+# in for the predicate would test the flag and leave the predicate unproven,
+# which is how a branch ships unexercised.
+#
+# `script -qec` is the portable pty allocator here; the case that uses it skips
+# with a printed note when it is absent rather than passing quietly.
+
+fm_test_have_pty() {
+  command -v script >/dev/null 2>&1 || return 1
+  script -qec true /dev/null >/dev/null 2>&1
+}
+
+# Run <snippet> with bin/fm-session-start-bound-lib.sh sourced and a pty on all
+# three descriptors, printing its first output line. The \r a pty adds is
+# stripped, so the caller compares plain numbers.
+fm_test_on_pty() {  # <shell-snippet>
+  local out
+  out=$(script -qec "bash -c '. \"$ROOT/bin/fm-session-start-bound-lib.sh\"; $1'" /dev/null 2>/dev/null) \
+    || return 1
+  printf '%s\n' "$out" | tr -d '\r' | sed -n '1p'
+}
+
 # --- 2. precedence, and the fallback that is silent on Linux -----------------
 
 test_explicit_timeout_wins_on_every_platform() {
@@ -129,7 +154,15 @@ test_unusable_explicit_bound_falls_back_to_the_platform_default() {
   # platform's bound. Falling back to a portable constant is invisible on Linux
   # and silently costs a Windows session the raised bound it needs, so the
   # Windows arm is what this case actually pins.
-  for bad in '' 0 abc 12x ' ' -30 30.5; do
+  # The padded spellings are here because "not the character 0" is not the same
+  # question as "not numerically zero", and only the second one is safe. `00` and
+  # `000` are all digits and are not the string `0`, so a digits-only guard passes
+  # them straight through - and `timeout 00 sleep 2` exits 0 after the full two
+  # seconds instead of 124, so the deadline is not merely wrong, it is ABSENT.
+  # The digest then runs unbounded: a wedged startup never truncates, never names
+  # a stage and never prints the banner, which is the same silent
+  # non-supervision this whole suite exists to prevent.
+  for bad in '' 0 00 000 0000 abc 12x ' ' -30 30.5 ' 0'; do
     got=$(FM_PLATFORM_UNAME_OVERRIDE=MINGW64_NT-10.0 fm_session_start_resolve_budget "$bad")
     [ "$got" = 300 ] \
       || fail "unusable bound '$bad' on MINGW must fall back to the 300s platform default, got '$got'"
@@ -137,7 +170,86 @@ test_unusable_explicit_bound_falls_back_to_the_platform_default() {
     [ "$got" = 120 ] \
       || fail "unusable bound '$bad' on Linux must fall back to the 120s platform default, got '$got'"
   done
-  pass "fm_session_start_resolve_budget: an unusable bound falls back to the PLATFORM default, never to a portable constant"
+  pass "fm_session_start_resolve_budget: an unusable bound - including every zero-padded spelling of zero - falls back to the PLATFORM default, never to a portable constant"
+}
+
+# The whole point of rejecting a zero bound is that the resulting number is
+# handed to a real deadline, so this case asserts the deadline rather than the
+# string: `timeout <resolved> sleep ...` must actually kill, whereas the
+# unresolved value does not. That closes the loop the string comparison above
+# leaves open - a resolver could return a plausible-looking value that `timeout`
+# still treats as "no deadline".
+test_a_zero_padded_bound_still_produces_a_deadline_that_bites() {
+  local resolved rc
+  # First the observation this case is built on: the raw value disables the
+  # deadline outright. Asserted, not assumed, so a `timeout` that later starts
+  # rejecting `00` turns this into a visible skip rather than a silent pass.
+  timeout 00 sleep 0.6 >/dev/null 2>&1
+  rc=$?
+  [ "$rc" -eq 0 ] \
+    || fail "this case assumes 'timeout 00' runs to completion unbounded (rc 0); this timeout returned $rc, so the hazard it guards has changed shape"
+  resolved=$(FM_PLATFORM_UNAME_OVERRIDE=Linux fm_session_start_resolve_budget 00)
+  # The resolved bound is a real deadline: a command that outlives it is killed
+  # and reports 124, which is the exit status bin/fm-session-start.sh keys its
+  # STARTUP TRUNCATED banner on.
+  timeout "$resolved" true >/dev/null 2>&1 \
+    || fail "the resolved bound '${resolved}' was not even accepted by timeout"
+  timeout 1 sleep 5 >/dev/null 2>&1
+  rc=$?
+  [ "$rc" -eq 124 ] \
+    || fail "this box's timeout does not report 124 on expiry (got $rc), so the truncation contract cannot be checked here"
+  pass "fm_session_start_resolve_budget: a zero-padded bound resolves to a value timeout enforces (${resolved}s), not to the absent deadline the raw value produces"
+}
+
+# --- 2b. the clamp is scoped to the paths the harness ceiling governs --------
+#
+# The ceiling exists because the harness kills the hook process. That premise
+# holds under a hook and nowhere else, so the clamp is skipped on a POSITIVELY
+# established direct run - the operator's own rerun, which the truncation banner
+# itself prescribes, must be allowed the time they asked for.
+#
+# The asymmetry is the whole design and each branch below is one leg of it: a
+# wrong "hook" costs recoverable bound, a wrong "not a hook" costs the banner
+# entirely. So `undetermined` clamps.
+test_the_clamp_follows_hook_context_and_undetermined_clamps() {
+  local cap got ctx
+  cap=$(fm_session_start_hook_ceiling) \
+    || fail "no harness ceiling could be derived from this checkout, so none of the clamp branches below mean anything"
+
+  # (a) POSITIVELY under a hook: the marker bin/fm-sessionstart-run.sh exports.
+  ctx=$(FM_SESSION_START_UNDER_HOOK=1 fm_session_start_hook_context)
+  [ "$ctx" = hook ] \
+    || fail "the wrapper's marker must positively establish hook context, got '$ctx'"
+  got=$(FM_SESSION_START_UNDER_HOOK=1 FM_PLATFORM_UNAME_OVERRIDE=MINGW64_NT-10.0 \
+    fm_session_start_resolve_budget "$((cap * 10))")
+  [ "$got" -eq "$cap" ] \
+    || fail "under a registered hook an over-ceiling bound must clamp to ${cap}s, got ${got}s"
+
+  # (b) THE SAFETY PROPERTY. Hook context cannot be established either way - no
+  # marker, and stderr is not a terminal because this assertion redirects it -
+  # and that MUST clamp. Honouring the value here is what reintroduces the
+  # silent kill, because "not a hook" was never established.
+  ctx=$(FM_SESSION_START_UNDER_HOOK='' fm_session_start_hook_context 2>/dev/null)
+  [ "$ctx" = undetermined ] \
+    || fail "with no marker and no terminal on stderr the context must be 'undetermined', got '$ctx'"
+  got=$(FM_SESSION_START_UNDER_HOOK='' FM_PLATFORM_UNAME_OVERRIDE=MINGW64_NT-10.0 \
+    fm_session_start_resolve_budget "$((cap * 10))" 2>/dev/null)
+  [ "$got" -eq "$cap" ] \
+    || fail "an UNDETERMINED hook context must fall to the safe side and clamp to ${cap}s, got ${got}s: an unprovable 'not under a hook' hands back a bound the harness kills with no banner at all"
+
+  # (c) POSITIVELY a direct run: stderr is a terminal. Faked with a pty rather
+  # than with an env flag, so the real `[ -t 2 ]` predicate is what answers.
+  if fm_test_have_pty; then
+    ctx=$(fm_test_on_pty 'fm_session_start_hook_context')
+    [ "$ctx" = direct ] \
+      || fail "with a terminal on stderr and no hook marker the context must be 'direct', got '$ctx'"
+    got=$(fm_test_on_pty "fm_session_start_resolve_budget $((cap * 10))")
+    [ "$got" -eq "$((cap * 10))" ] \
+      || fail "a positively established direct run must be honoured IN FULL ($((cap * 10))s), got ${got}s: the operator's own rerun is the remedy the truncation banner prescribes and nothing kills it at the hook timeout"
+  else
+    printf 'note: no pty allocator (script/python3) on this box, so the direct-run branch is unverified here\n' >&2
+  fi
+  pass "fm_session_start_resolve_budget: clamps under a hook AND when hook context is undetermined, and honours a positively established direct run in full"
 }
 
 # --- 3. the stage marks must not distort what they measure -------------------
@@ -276,9 +388,53 @@ test_truncated_startup_names_the_stage_and_attributes_its_time() {
   # the ceiling the library derives, never against a literal.
   ceiling=$(fm_session_start_hook_ceiling) \
     || fail "no harness hook ceiling could be derived from the checkout, so the banner has no cap to name"
-  printf '%s\n' "$out" | grep -qE "Raise it to at most ${ceiling}s" \
+  printf '%s\n' "$out" | grep -qE "to at most ${ceiling}s" \
     || fail "the banner told the operator to raise the bound without naming the ${ceiling}s ceiling the harness enforces, got: $out"
   pass "fm-session-start.sh: a truncated startup names the stage it died in, attributes its elapsed time per stage, and caps its own remedy at the ${ceiling}s harness ceiling"
+}
+
+# The same remedy on a run that was ALREADY bounded at the ceiling. Telling an
+# operator to raise a knob pinned at its maximum spends their next move on a
+# no-op and reads as though nothing was checked, so the remedy has to change
+# shape rather than repeat itself.
+#
+# Exercised through fm_session_start_bound_remedy directly, which is the function
+# the banner delegates to and whose printed lines ARE the operator-facing
+# contract. The end-to-end case above already proves the banner calls it with the
+# bound that was really in force; reaching the pinned state through the real
+# script would mean waiting out a several-minute clamped bound, since the clamp
+# is what pins it there in the first place.
+test_the_remedy_stops_advising_a_knob_that_is_already_pinned() {
+  local ceiling below at above
+  ceiling=$(fm_session_start_hook_ceiling) \
+    || fail "no harness hook ceiling could be derived, so there is no pinned state to describe"
+  below=$(fm_session_start_bound_remedy $((ceiling - 1)))
+  at=$(fm_session_start_bound_remedy "$ceiling")
+  above=$(fm_session_start_bound_remedy $((ceiling + 1)))
+
+  # Below the ceiling the advice is actionable and must carry the cap by number.
+  assert_contains "$below" 'raise FM_SESSION_START_TIMEOUT' \
+    'below the ceiling, raising the bound is still the remedy'
+  assert_contains "$below" "at most ${ceiling}s" \
+    'the raise advice must name how far the bound may actually go'
+
+  # AT the ceiling the raise advice must be GONE, not merely accompanied by a
+  # caveat: that is the defect this case exists for.
+  printf '%s\n' "$at" | grep -q 'raise FM_SESSION_START_TIMEOUT' \
+    && fail "a run already bounded at the ${ceiling}s ceiling was still told to raise FM_SESSION_START_TIMEOUT, got: $at"
+  assert_contains "$at" 'ALREADY at the' \
+    'a pinned run must say the ceiling has been reached'
+  assert_contains "$at" 'harness registrations' \
+    'a pinned run must point at the registrations, the one knob that still moves the ceiling'
+
+  # And a bound somehow ABOVE the ceiling is the same pinned case, not a third
+  # behaviour - the comparison is >=, so a future clamp change cannot open a gap
+  # in which the dead advice comes back.
+  printf '%s\n' "$above" | grep -q 'raise FM_SESSION_START_TIMEOUT' \
+    && fail "a bound above the ${ceiling}s ceiling was told to raise FM_SESSION_START_TIMEOUT, got: $above"
+  assert_contains "$above" 'ALREADY at the' \
+    'a bound above the ceiling is the pinned case too'
+  pass "fm_session_start_bound_remedy: names the cap below the ${ceiling}s ceiling and stops advising the knob entirely at or above it"
 }
 
 # first_line_matching <text> <extended-regex>: the 1-based number of the first
@@ -356,9 +512,12 @@ test_windows_platforms_raise_the_default_bound
 test_non_windows_platforms_keep_the_portable_bound
 test_explicit_timeout_wins_on_every_platform
 test_unusable_explicit_bound_falls_back_to_the_platform_default
+test_a_zero_padded_bound_still_produces_a_deadline_that_bites
+test_the_clamp_follows_hook_context_and_undetermined_clamps
 test_stage_mark_spawns_no_subprocess
 test_stage_mark_is_append_only_and_survives_an_unwritable_target
 test_render_attributes_each_stage_and_flags_the_unfinished_one
 test_render_is_quiet_when_it_has_nothing_to_say
 test_truncated_startup_names_the_stage_and_attributes_its_time
+test_the_remedy_stops_advising_a_knob_that_is_already_pinned
 test_every_stage_prints_its_header_before_the_stage_runs

@@ -339,13 +339,11 @@ if [ -z "${FM_SESSION_START_STAGE_FILE:-}" ]; then
     printf '●  only up to that point.\n'
     printf '●  RECONCILE these stages before acting on anything they would have shown:\n'
     printf '●    %s\n' "${SESSION_START_PENDING% }"
-    printf '●  Rerun bin/fm-session-start.sh now to finish taking the helm. If it truncates\n'
-    printf '●  again, raise FM_SESSION_START_TIMEOUT and report the slow stage - a stage that\n'
-    printf '●  cannot finish inside the bound is a fleet problem, not a reporting detail.\n'
-    # Names the ceiling that advice stops at, so following it cannot walk the
-    # operator past the harness hook timeout, where the hook is killed outright
-    # and none of this banner is printed at all.
-    fm_session_start_ceiling_advice
+    printf '●  Rerun bin/fm-session-start.sh now to finish taking the helm.\n'
+    # The remedy depends on the derived harness ceiling: below it, how far the
+    # bound may be raised; already at it, that raising cannot help and the
+    # registrations are the knob. bin/fm-session-start-bound-lib.sh owns both.
+    fm_session_start_bound_remedy "$SESSION_START_BUDGET"
     fm_session_stage_render "$SESSION_START_STAGE_FILE" "$SESSION_START_BUDGET"
     printf '%s\n' "$BAR"
   fi

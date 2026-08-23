@@ -54,6 +54,23 @@ Both of those figures are against the 1016 row - the tree the reductions were ac
 At the 42 ms measured under MSYS, 199 forks is about 8 s off a 72 s floor.
 That is a real improvement and it is not a fix on its own, which is why the bound was raised as well.
 
+### Re-measurement, and an offset worth recording
+
+The table above was taken once, early in the branch.
+It was re-taken later on the same box with the same method and a rebuilt interposer, over `6d7dc9a`, `45e6708`, `c1725d0`, `f07110f` and the final tree, each on its own pristine home and its own clone checked out as `main`:
+
+| Variant | Blocking-path forks | Detached network stage | Total |
+|---|---|---|---|
+| `main` at `6d7dc9a` | 976 | 535 | 1511 |
+| `45e6708`, `f07110f`, final tree | 789 | 416 | 1205 |
+
+The percentage reproduces and the absolutes do not: 976 to 789 is 187 forks and 19.2%, against the 19.3% the table above records for `main`, while both absolute counts land about 30 lower.
+A host-global fork counter was already rejected here for exactly this reason, and the per-tree interposer still sees whatever the digest's own children find on PATH, which is not identical between two sessions weeks apart.
+So the RATIO is the durable result and the absolute floor is only reproducible against its own run.
+Both readings are kept rather than one overwriting the other, because a single number silently replaced is how a measured claim turns into remembered prose.
+
+The three later commits measure identically to `45e6708` on the blocking path, so the runtime bound, the stage marks and the harness-ceiling clamp cost nothing on the default path - which is what deriving the ceiling only for an explicit override was for.
+
 ## Where the forks were, ranked
 
 Attribution came from a second, independent instrument: `bash` xtrace with `PS4` carrying `${BASH_SOURCE[0]}` and `${LINENO}`, inherited by every child through `SHELLOPTS=xtrace` and a `BASH_XTRACEFD` the children inherit.
@@ -100,6 +117,22 @@ So an unreadable file is handled by testing `[ -r f ]` first - a builtin - rathe
 The test and the read are two steps, so a file deleted between them still spills bash's own error; that is suppressed by putting the `2>/dev/null` on the enclosing `{ ...; }` group, where it is an fd save and restore, and `{ x=$(<f); } 2>/dev/null` measured 0 forks per call on this same instrument.
 
 The harness-timeout ceiling that clamps an explicit `FM_SESSION_START_TIMEOUT` costs one `awk` over the registrations, and it is derived only when such an override is set, so every count above - all taken with no override - is unchanged by it.
+
+## The contended lock path, which no count above reaches
+
+Every figure above is an UNCONTENDED empty home, and that is a real blind spot rather than a caveat.
+`fm_lock_acquire_wait` re-enters `fm_lock_try_acquire` every 100 ms until the lock frees, and each of those iterations read `$lockdir/pid` through `$(cat f)`; on an uncontended home `fm_lock_try_create` succeeds immediately and that read is never reached, so the profile could not have ranked it.
+
+Measured directly instead, with the same interposer: one waiter polling a lock held by a live process, 20 poll iterations.
+
+| Variant | Forks | `cat` execs |
+|---|---|---|
+| before the pid-read conversion | 177 | 20 |
+| after | 137 | 0 |
+
+Two forks per poll iteration, which is one `$(cat f)`: the substitution's subshell and `cat` itself.
+Converting those reads leaves the uncontended steady state at 789 exactly - unchanged, as expected, since it never executes them - so this is a win that is invisible to the headline number and is recorded here rather than folded into it.
+At the 42 ms a fork costs under MSYS that is about 84 ms per second of waiting, paid by whichever session is second to the lock.
 
 ## On the Windows box itself
 

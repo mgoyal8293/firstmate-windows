@@ -102,7 +102,8 @@ fm_watcher_healthy() {
   FM_WATCHER_HEALTHY_IDENTITY=
   lockdir="$state/.watch.lock"
   beat="$state/.last-watcher-beat"
-  pid=$(cat "$lockdir/pid" 2>/dev/null || true)
+  fm_lock_read_owner_pid "$lockdir"
+  pid=$FM_LOCK_OWNER_PID
   fm_pid_alive "$pid" || return 1
   fm_watcher_lock_matches_pid "$state" "$watch_path" "$pid" "$home" || return 1
   identity=$FM_WATCHER_MATCHED_IDENTITY
@@ -284,14 +285,14 @@ fm_lock_clean_known_files() {
 }
 
 fm_lock_set_role() {
-  local lockdir=$1 role=$2 current pid back
+  local lockdir=$1 role=$2 current back
   case "$role" in
     autoarm|terminal-check) : ;;
     *) return 1 ;;
   esac
   current=${BASHPID:-$$}
-  pid=$(cat "$lockdir/pid" 2>/dev/null || true)
-  [ "$pid" = "$current" ] || return 1
+  fm_lock_read_owner_pid "$lockdir"
+  [ "$FM_LOCK_OWNER_PID" = "$current" ] || return 1
   printf '%s\n' "$role" > "$lockdir/role" 2>/dev/null || return 1
   back=$(cat "$lockdir/role" 2>/dev/null || true)
   [ "$back" = "$role" ]
@@ -321,13 +322,19 @@ fm_lock_owner_dir() {
   mktemp -d "${lock_abs}.owner.XXXXXX" 2>/dev/null
 }
 
-# Reads an owner-directory `pid` file into FM_LOCK_OWNER_PID, empty when it
-# cannot be read. Always succeeds, because every caller below treats an
-# unreadable pid file as "not mine" rather than as an error.
+# Reads a lock or owner directory's `pid` file into FM_LOCK_OWNER_PID, empty when
+# it cannot be read. Always succeeds, because every caller below treats an
+# unreadable pid file as "not mine" rather than as an error - which is exactly
+# what the `$(cat "$d/pid" 2>/dev/null || true)` form it replaces meant.
 #
 # `$(<f)` rather than `$(cat f)`: bash reads the file itself for that form with
 # no subprocess at all. Every lock acquisition reads this file back and a session
 # start acquires fourteen locks, so the `cat` here was paid twenty-eight times.
+# The contended path costs more again: fm_lock_acquire_wait re-enters
+# fm_lock_try_acquire every 100 ms until the lock frees, and every one of those
+# iterations read the pid file at least once, at the 42 ms a fork costs under
+# MSYS. That path is not in the measured steady-state profile, which had no
+# contention, so it was never ranked there.
 #
 # THE TWO REDIRECTIONS ARE BOTH DELIBERATE AND NEITHER IS INTERCHANGEABLE.
 # `$(<f 2>/dev/null)` is not the same thing: the redirection defeats bash's
@@ -359,7 +366,7 @@ fm_lock_read_owner_pid() {  # <owner-dir>
 fm_lock_prepare_owner() {
   local ownerdir=$1 mypid
   mypid=${BASHPID:-$$}
-  printf '%s\n' "$mypid" > "$ownerdir/pid" 2>/dev/null || return 1
+  { printf '%s\n' "$mypid" > "$ownerdir/pid"; } 2>/dev/null || return 1
   fm_lock_read_owner_pid "$ownerdir"
   [ "$FM_LOCK_OWNER_PID" = "$mypid" ]
 }
@@ -410,8 +417,10 @@ fm_lock_remove_symlink_copy() {
   fm_platform_is_windows || return 0
   [ -d "$lockdir" ] && [ ! -L "$lockdir" ] || return 0
   mypid=${BASHPID:-$$}
-  [ "$(cat "$lockdir/pid" 2>/dev/null || true)" = "$mypid" ] || return 0
-  [ "$(cat "$ownerdir/pid" 2>/dev/null || true)" = "$mypid" ] || return 0
+  fm_lock_read_owner_pid "$lockdir"
+  [ "$FM_LOCK_OWNER_PID" = "$mypid" ] || return 0
+  fm_lock_read_owner_pid "$ownerdir"
+  [ "$FM_LOCK_OWNER_PID" = "$mypid" ] || return 0
   rm -rf -- "$lockdir" 2>/dev/null || true
 }
 
@@ -510,7 +519,8 @@ fm_lock_recheck_stale_owner() {
   elif [ -e "$lockdir" ] || [ -L "$lockdir" ]; then
     [ -d "$lockdir" ] && [ ! -L "$lockdir" ] || return 1
   fi
-  actual_pid=$(cat "$lockdir/pid" 2>/dev/null || true)
+  fm_lock_read_owner_pid "$lockdir"
+  actual_pid=$FM_LOCK_OWNER_PID
   [ "$actual_pid" = "$expected_pid" ] || return 1
   if fm_pid_alive "$actual_pid"; then
     return 1
@@ -783,7 +793,8 @@ fm_lock_try_acquire() {
 
   # Compare against ${BASHPID:-$$} inline, never via a command substitution:
   # $() forks a subshell whose BASHPID is not this frame's pid.
-  pid=$(cat "$lockdir/pid" 2>/dev/null || true)
+  fm_lock_read_owner_pid "$lockdir"
+  pid=$FM_LOCK_OWNER_PID
   if [ -n "$pid" ] && [ "$pid" = "${BASHPID:-$$}" ]; then
     # The recorded holder is THIS very process. Single-threaded bash can only
     # observe that when an interrupting trap abandoned the frame that held the
@@ -797,7 +808,8 @@ fm_lock_try_acquire() {
     if fm_lock_try_create "$lockdir"; then
       return 0
     fi
-    FM_LOCK_HELD_PID=$(cat "$lockdir/pid" 2>/dev/null || true)
+    fm_lock_read_owner_pid "$lockdir"
+    FM_LOCK_HELD_PID=$FM_LOCK_OWNER_PID
     return 1
   fi
   if fm_pid_alive "$pid"; then
@@ -811,13 +823,15 @@ fm_lock_try_acquire() {
 
   steal="$lockdir.steal"
   if ! fm_lock_try_acquire "$steal"; then
-    FM_LOCK_HELD_PID=$(cat "$lockdir/pid" 2>/dev/null || true)
+    fm_lock_read_owner_pid "$lockdir"
+    FM_LOCK_HELD_PID=$FM_LOCK_OWNER_PID
     FM_LOCK_OWNER_DIR=
     return 1
   fi
   steal_owner=${FM_LOCK_OWNER_DIR:-}
 
-  cur=$(cat "$lockdir/pid" 2>/dev/null || true)
+  fm_lock_read_owner_pid "$lockdir"
+  cur=$FM_LOCK_OWNER_PID
   if fm_pid_alive "$cur"; then
     fm_lock_release "$steal"
     FM_LOCK_HELD_PID=$cur
@@ -832,7 +846,8 @@ fm_lock_try_acquire() {
   fi
   if ! fm_lock_points_to_owner "$steal" "$steal_owner"; then
     fm_lock_release "$steal"
-    FM_LOCK_HELD_PID=$(cat "$lockdir/pid" 2>/dev/null || true)
+    fm_lock_read_owner_pid "$lockdir"
+    FM_LOCK_HELD_PID=$FM_LOCK_OWNER_PID
     FM_LOCK_OWNER_DIR=
     return 1
   fi
@@ -841,10 +856,12 @@ fm_lock_try_acquire() {
   if [ -L "$lockdir" ]; then
     primary_owner=$(fm_lock_link_owner "$lockdir" 2>/dev/null || true)
   fi
-  cur=$(cat "$lockdir/pid" 2>/dev/null || true)
+  fm_lock_read_owner_pid "$lockdir"
+  cur=$FM_LOCK_OWNER_PID
   if ! fm_lock_recheck_stale_owner "$lockdir" "$primary_owner" "$cur"; then
     fm_lock_release "$steal"
-    FM_LOCK_HELD_PID=$(cat "$lockdir/pid" 2>/dev/null || true)
+    fm_lock_read_owner_pid "$lockdir"
+    FM_LOCK_HELD_PID=$FM_LOCK_OWNER_PID
     FM_LOCK_OWNER_DIR=
     return 1
   fi
@@ -864,8 +881,9 @@ fm_lock_try_acquire() {
     FM_LOCK_RECOVERED_PID=$cur
   fi
   if [ "$rc" -ne 0 ]; then
+    fm_lock_read_owner_pid "$lockdir"
     # shellcheck disable=SC2034 # Read by callers after fm_lock_try_acquire returns.
-    FM_LOCK_HELD_PID=$(cat "$lockdir/pid" 2>/dev/null || true)
+    FM_LOCK_HELD_PID=$FM_LOCK_OWNER_PID
     FM_LOCK_OWNER_DIR=
   fi
   fm_lock_release "$steal"
@@ -880,7 +898,7 @@ fm_lock_acquire_wait() {
 }
 
 fm_lock_release() {
-  local lockdir=$1 pid current ownerdir
+  local lockdir=$1 current ownerdir
   current=${BASHPID:-$$}
   if [ -L "$lockdir" ]; then
     ownerdir=$(fm_lock_link_owner "$lockdir" 2>/dev/null || true)
@@ -892,8 +910,8 @@ fm_lock_release() {
     fm_lock_discard_owner "$ownerdir"
     return 0
   fi
-  pid=$(cat "$lockdir/pid" 2>/dev/null || true)
-  [ "$pid" = "$current" ] || return 0
+  fm_lock_read_owner_pid "$lockdir"
+  [ "$FM_LOCK_OWNER_PID" = "$current" ] || return 0
   fm_lock_clean_known_files "$lockdir"
   rmdir "$lockdir" 2>/dev/null || true
 }
@@ -935,7 +953,7 @@ fm_task_set_lock_path() {  # <state-dir>
 }
 
 fm_failure_episode_reset() {
-  local state=$1 mode=${2:-acquire} lock current pid acquired=0 path
+  local state=$1 mode=${2:-acquire} lock current acquired=0 path
   lock="$state/.turnend-claude-blocks.lock"
   case "$mode" in
     acquire)
@@ -944,8 +962,8 @@ fm_failure_episode_reset() {
       ;;
     held)
       current=${BASHPID:-$$}
-      pid=$(cat "$lock/pid" 2>/dev/null || true)
-      [ "$pid" = "$current" ] || return 1
+      fm_lock_read_owner_pid "$lock"
+      [ "$FM_LOCK_OWNER_PID" = "$current" ] || return 1
       ;;
     *) return 1 ;;
   esac

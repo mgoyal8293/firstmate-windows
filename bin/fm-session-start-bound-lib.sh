@@ -136,15 +136,12 @@ fm_session_start_hook_ceiling() {
       *) root=$dir/.. ;;
     esac
   fi
-  # Cached per root: the banner asks for this number after the resolver already
-  # did, and neither should pay a second scan.
-  if [ "${_FM_SESSION_START_CEILING_ROOT:-}" = "$root" ]; then
-    [ "${_FM_SESSION_START_CEILING:-none}" != none ] || return 1
-    printf '%s\n' "$_FM_SESSION_START_CEILING"
-    return 0
-  fi
-  _FM_SESSION_START_CEILING_ROOT=$root
-  _FM_SESSION_START_CEILING=none
+  # Deliberately NOT memoised. Both callers reach this from inside a command
+  # substitution or from a parent that has already forked once, so a cache would
+  # be written into a subshell that exits immediately and could never be read -
+  # an optimisation claimed in a comment and absent from the code. The real cost
+  # is one awk per caller, on the truncation path only and only when an explicit
+  # FM_SESSION_START_TIMEOUT is set, so no ordinary session start pays it.
   for f in "$root"/.[!.]*/*.json "$root"/.[!.]*/*/*.json; do
     [ -f "$f" ] && [ -r "$f" ] && regs[${#regs[@]}]=$f
   done
@@ -224,6 +221,47 @@ fm_session_start_hook_ceiling() {
   printf '%s\n' "$_FM_SESSION_START_CEILING"
 }
 
+# Is this process running as a registered harness session-start hook?
+#
+# Prints exactly one of:
+#   hook          - POSITIVELY established: a session-start wrapper set the marker.
+#   direct        - POSITIVELY established: this is a terminal invocation.
+#   undetermined  - neither could be established.
+#
+# WHY BOTH ANSWERS MUST BE POSITIVE. The ceiling exists because the harness kills
+# the hook, so it applies only under a hook. The tempting shortcut is "no hook
+# marker, therefore not a hook" - and that is the one inference that must never
+# be made here. A wrong "not a hook" hands back the full explicit bound on a path
+# the harness really does kill, which reintroduces the silent kill with no banner:
+# exactly the defect the ceiling was added to remove. A wrong "hook" only costs an
+# operator some bound they can recover by raising the registrations. The two
+# errors are not symmetric, so uncertainty is reported as uncertainty and the
+# caller resolves it to the safe side.
+#
+# THE MARKER IS SET BY THE WRAPPER, not guessed here. bin/fm-sessionstart-run.sh
+# is only ever a hook entrypoint - all three run-tier registrations invoke it,
+# .cursor/hooks.json through bin/fm-sessionstart-cursor.sh which delegates to it -
+# so it exports FM_SESSION_START_UNDER_HOOK=1 and every hook-launched digest
+# inherits it.
+#
+# THE TERMINAL TEST USES FD 2, NOT FD 1, and that is load-bearing rather than
+# stylistic: fm_session_start_resolve_budget is called inside a command
+# substitution, where fd 1 is always a pipe, so `[ -t 1 ]` could never establish a
+# terminal and the `direct` branch would be dead code. Command substitution does
+# not touch fd 2. An operator who redirects stderr gets `undetermined`, which
+# clamps - the safe side, by construction.
+fm_session_start_hook_context() {
+  if [ "${FM_SESSION_START_UNDER_HOOK:-}" = 1 ]; then
+    printf 'hook\n'
+    return 0
+  fi
+  if [ -t 2 ]; then
+    printf 'direct\n'
+    return 0
+  fi
+  printf 'undetermined\n'
+}
+
 # The effective runtime bound, given the operator's explicit
 # FM_SESSION_START_TIMEOUT (empty when unset).
 #
@@ -236,6 +274,16 @@ fm_session_start_hook_ceiling() {
 # perl fallback's `alarm 0` both DISABLE the deadline - so an unusable value must
 # resolve to a real default rather than removing the bound.
 #
+# NUMERICALLY ZERO, not the character `0`. A digits-only case cannot express that:
+# `00` and `000` pass any `*[!0-9]*` test and are not the string `0`, and
+# `timeout 00 sleep 2` exits 0 after the full two seconds instead of 124 - the
+# deadline is entirely absent, so the digest runs UNBOUNDED and a wedged startup
+# never truncates and never prints a banner. That is the same silent
+# non-supervision an unusable value is supposed to be protected against, so the
+# value is normalised through base-10 arithmetic and every spelling of zero lands
+# on the platform default. Normalising also canonicalises `07` to `7`, so the
+# banner reports the bound the way `timeout` read it.
+#
 # The one thing an explicit value does NOT win against is the harness. A usable
 # value above fm_session_start_hook_ceiling is CLAMPED to that ceiling, because
 # above it the harness kills the hook first and the operator gets nothing printed
@@ -245,58 +293,104 @@ fm_session_start_hook_ceiling() {
 # on the ceiling and never back on the platform default.
 # fm_session_start_budget_advisory below is what says so on the digest.
 #
-# The ceiling is only derived when there IS an explicit value, which keeps the
-# default path - every ordinary session start - at exactly the subprocess count
-# it had before. The defaults are guarded instead by
+# THE CLAMP IS SCOPED TO THE PATHS THE CEILING GOVERNS. It applies when
+# fm_session_start_hook_context reports `hook` OR `undetermined`, and is skipped
+# only on a positively established `direct` run, where nothing kills this process
+# at the hook timeout and the operator's own rerun - the remedy this script's own
+# truncation banner prescribes - must be allowed the time they asked for. So the
+# clamp refuses time the machine will not give, or time this process cannot
+# establish that the machine will give; it is not a global cap.
+#
+# The ceiling is only derived when there IS an explicit value that could be
+# clamped, which keeps the default path - every ordinary session start - at
+# exactly the subprocess count it had before. The defaults are guarded instead by
 # tests/fm-session-start-hook-nesting.test.sh, which asserts every platform arm
 # nests under every registration.
 fm_session_start_resolve_budget() {  # [explicit-seconds]
   local explicit=${1:-} fallback ceiling
   case "$explicit" in
-    ''|*[!0-9]*|0)
+    ''|*[!0-9]*)
       fallback=$(fm_session_start_default_budget)
       printf '%s\n' "$fallback"
       return 0
       ;;
   esac
-  if ceiling=$(fm_session_start_hook_ceiling) && [ "$explicit" -gt "$ceiling" ]; then
+  explicit=$((10#$explicit))
+  if [ "$explicit" -le 0 ]; then
+    fallback=$(fm_session_start_default_budget)
+    printf '%s\n' "$fallback"
+    return 0
+  fi
+  if [ "$(fm_session_start_hook_context)" != direct ] \
+    && ceiling=$(fm_session_start_hook_ceiling) && [ "$explicit" -gt "$ceiling" ]; then
     printf '%s\n' "$ceiling"
     return 0
   fi
   printf '%s\n' "$explicit"
 }
 
-# The digest line a clamp owes the operator. Never clamps silently: it names what
+# The digest lines a clamp owes the operator. Never clamps silently: it names what
 # was asked for, what was applied, and what would have happened otherwise, so the
 # operator is not left believing a bound that is not in force.
 #
 # Takes both numbers rather than re-deriving the ceiling, so it costs no
-# subprocess and cannot disagree with the bound that is actually running.
-fm_session_start_budget_advisory() {  # <requested> <effective>
-  local requested=${1:-} effective=${2:-}
-  case "$requested" in ''|*[!0-9]*|0) return 0 ;; esac
+# subprocess and cannot disagree with the bound that is actually running. The
+# context is named too, because "we know this is a hook" and "we could not
+# establish that this is not a hook" are different claims and the operator's next
+# move differs between them.
+fm_session_start_budget_advisory() {  # <requested> <effective> [context]
+  local requested=${1:-} effective=${2:-} context=${3:-}
+  case "$requested" in ''|*[!0-9]*) return 0 ;; esac
   case "$effective" in ''|*[!0-9]*|0) return 0 ;; esac
+  requested=$((10#$requested))
   [ "$requested" -gt "$effective" ] || return 0
+  [ -n "$context" ] || context=$(fm_session_start_hook_context)
   printf '●  FM_SESSION_START_TIMEOUT=%ss was CLAMPED to %ss.\n' "$requested" "$effective"
-  printf '●  A registered session-start hook is killed by the harness after %ss, which\n' \
+  printf '●  A registered session-start hook is killed by the harness after %ss, and that\n' \
     "$((effective + FM_SESSION_START_NESTING_MARGIN))"
-  printf '●  would take this script with the digest and print no truncation banner at\n'
-  printf '●  all. Raise the hook timeouts in the harness registrations to go higher.\n'
+  printf '●  kill takes this script with the digest, printing no truncation banner at all.\n'
+  case "$context" in
+    hook) printf '●  This run IS under a registered session-start hook.\n' ;;
+    *) printf '●  This run could not be established as a direct terminal invocation, so it is\n'
+       printf '●  treated as a hook: an unprovable "not a hook" is what loses the banner.\n' ;;
+  esac
+  printf '●  Raise the SessionStart timeouts in the harness registrations to go higher.\n'
 }
 
-# The cap the truncation banner names right after it tells the operator to raise
-# FM_SESSION_START_TIMEOUT, so the printed remedy cannot walk them past the
-# harness hook timeout - where the hook is killed outright and this banner never
-# prints, which is the one outcome worse than truncating.
+# The truncation banner's remedy, which has to stay ACTIONABLE. Owned here rather
+# than spelled at the call site because it depends on the derived ceiling, and
+# because the wrong branch of it is worse than silence: telling an operator to
+# raise a knob already pinned at its maximum spends their next move on a no-op
+# and reads as though nothing was checked.
 #
-# Prints nothing when no ceiling could be derived: saying nothing is honest, and
-# naming a number this shell could not read would not be.
-fm_session_start_ceiling_advice() {
-  local ceiling
-  ceiling=$(fm_session_start_hook_ceiling) || return 0
-  printf '●  Raise it to at most %ss. Above that the harness kills this hook after %ss\n' \
-    "$ceiling" "$((ceiling + FM_SESSION_START_NESTING_MARGIN))"
-  printf '●  and there is no banner at all, so the bound is clamped there anyway.\n'
+# Three cases, and the middle one is the reason this exists:
+#   below the ceiling  - raise it, and here is how far it can go.
+#   at or above it     - raising it cannot help; the registrations are the knob.
+#   no ceiling read    - the original uncapped advice, because naming a number
+#                        this shell could not read would not be honest.
+fm_session_start_bound_remedy() {  # <effective-budget>
+  local effective=${1:-} ceiling
+  if ! ceiling=$(fm_session_start_hook_ceiling); then
+    printf '●  If it truncates again, raise FM_SESSION_START_TIMEOUT and report the slow\n'
+    printf '●  stage - a stage that cannot finish inside the bound is a fleet problem, not a\n'
+    printf '●  reporting detail.\n'
+    return 0
+  fi
+  case "$effective" in ''|*[!0-9]*) effective=0 ;; esac
+  if [ "$effective" -lt "$ceiling" ]; then
+    printf '●  If it truncates again, raise FM_SESSION_START_TIMEOUT - to at most %ss, above\n' "$ceiling"
+    printf '●  which the harness kills this hook after %ss and prints no banner at all - and\n' \
+      "$((ceiling + FM_SESSION_START_NESTING_MARGIN))"
+    printf '●  report the slow stage: a stage that cannot finish inside the bound is a fleet\n'
+    printf '●  problem, not a reporting detail.\n'
+    return 0
+  fi
+  printf '●  FM_SESSION_START_TIMEOUT is ALREADY at the %ss harness ceiling, so raising it\n' "$ceiling"
+  printf '●  cannot help: the harness kills this hook after %ss and prints no banner at all.\n' \
+    "$((ceiling + FM_SESSION_START_NESTING_MARGIN))"
+  printf '●  Raise the SessionStart timeouts in the harness registrations, or fix the stage\n'
+  printf '●  named above - a stage that cannot finish inside the bound is a fleet problem,\n'
+  printf '●  not a reporting detail.\n'
 }
 
 # Append the entry instant of <stage> to <file>. Never fails the caller: a
