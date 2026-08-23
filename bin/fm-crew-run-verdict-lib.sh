@@ -557,6 +557,9 @@ fm_crew_forge_pr_state() {  # <pr-url> <timeout-secs>
 #   checks-green  the checks are green on a run that has NOT terminated, from
 #                 `outcome: checks-passed` or a green ci-step log tail
 #                                                                -> "checks green"
+#   reported      no run at all: the WORKER's own status log claimed done, which
+#                 is a self-report and the weakest evidence here
+#                                                    -> "worker reported done"
 #   unverified    anything else                                  -> "run completed"
 #
 # `checks-green` exists because the other two are both statements about a
@@ -566,34 +569,55 @@ fm_crew_forge_pr_state() {  # <pr-url> <timeout-secs>
 # whole file exists to eliminate, on a captain-facing line. A lead may never
 # assert more than its caller's evidence, so a caller with a kind of evidence the
 # vocabulary cannot express gets a new token rather than the nearest one.
-fm_crew_evidence_lead() {  # <ci-evidence: verified|checks-green|unverified>
+fm_crew_evidence_lead() {  # <ci-evidence: verified|checks-green|reported|unverified>
   case "${1:-unverified}" in
     verified)     printf 'run passed' ;;
     checks-green) printf 'checks green' ;;
+    reported)     printf 'worker reported done' ;;
     *)            printf 'run completed' ;;
   esac
 }
 
 # What KIND of thing the forge said, as one word, because the three kinds license
 # different verdicts:
-#   answered    merged, closed or open - the forge stated where the PR is, so
-#               nothing about its fate is being guessed at.
-#   structural  unqueryable, unparseable or unrecorded - no forge client here for
-#               that provider, not a recognizable PR url, or no PR url in the run
-#               record to ask about at all. NO LATER READ OF THE SAME RECORD WILL
-#               EVER ANSWER, so withholding a verdict withholds it forever.
-#   transient   unverified - the client could not answer RIGHT NOW (timed out,
-#               unauthenticated, bounded out, skipped by FM_CREW_STATE_NO_FORGE).
-#               The next read can clear it.
+# THE TEST IS WHETHER ANYTHING COULD EVER ANSWER, not merely whether this read
+# answered. That is the whole distinction, and getting it wrong in either
+# direction costs something real.
 #
-# This is the distinction fm_crew_forge_pr_state already spells apart in its
-# words; this names it so verdict rules can branch on it instead of re-deriving
-# it. See fm_crew_terminal_verdict for the rule it carries.
+#   answered      merged, closed or open - the forge stated where the PR is, so
+#                 nothing about its fate is being guessed at.
+#   unanswerable  unqueryable or unparseable - this host has no forge client for
+#                 that provider, or the url is not a recognizable PR or MR. No
+#                 read will EVER answer, so withholding a verdict withholds it
+#                 forever, which is why these still settle `done` where the
+#                 run's own evidence earns it.
+#   no-pr         nothing anywhere names a PR for this task - not the run record,
+#                 not the task meta, not the status log. There is no landing to
+#                 confirm, so a `done` here is not a landing claim at all, and it
+#                 settles like `unanswerable`. This is a scout, or a task that
+#                 has not opened a PR yet.
+#   unconfirmed   unverified, or a url we could have queried and did not - the
+#                 answer EXISTS and we do not have it. Timed out, unauthenticated,
+#                 bounded out, skipped by FM_CREW_STATE_NO_FORGE. Never settles
+#                 `done`, because a close could be sitting behind the read that
+#                 failed.
+#
+# The three non-answers used to be two, split on "will a later read clear it".
+# That split put a task with NO PR in the same bucket as a host that cannot be
+# queried, which was right by accident, and it left "the url exists but this
+# reader did not look hard enough" there too, which was wrong: that is a gap this
+# reader can close, not a host it cannot query. bin/fm-crew-state.sh's
+# crew_forge_answer now looks in every place a PR url is recorded before it may
+# answer `no-pr`.
+#
+# See fm_crew_terminal_verdict and fm_crew_done_claim_verdict for the rules this
+# carries.
 fm_crew_forge_answer_class() {  # <forge-answer>
   case "${1%% *}" in
-    merged|closed|open)                  printf 'answered' ;;
-    unqueryable|unparseable|unrecorded)  printf 'structural' ;;
-    *)                                   printf 'transient' ;;
+    merged|closed|open)      printf 'answered' ;;
+    unqueryable|unparseable) printf 'unanswerable' ;;
+    no-pr)                   printf 'no-pr' ;;
+    *)                       printf 'unconfirmed' ;;
   esac
 }
 
@@ -819,7 +843,7 @@ fm_crew_terminal_verdict() {  # <ci-step-status> <forge-answer>
       return ;;
   esac
   if [ "$evidence" = verified ]; then
-    if [ "$(fm_crew_forge_answer_class "$answer")" = transient ]; then
+    if [ "$(fm_crew_forge_answer_class "$answer")" = unconfirmed ]; then
       printf 'unknown|%s' "$(fm_crew_unconfirmed_detail "$evidence" "$answer")"
       return
     fi
@@ -830,63 +854,108 @@ fm_crew_terminal_verdict() {  # <ci-step-status> <forge-answer>
     "$(fm_crew_no_ci_evidence_detail "$(fm_crew_ci_evidence_gap "$ci")" "$answer")"
 }
 
-# THE ranking for a run whose CHECKS are GREEN but which has not terminated -
-# `outcome: checks-passed`, and the ci-step log tail that reads green while the
-# run monitors the PR - as "<state>|<detail>". The <ready-detail> is the
-# ready-for-review signal that path exists to produce, and it survives untouched
-# on every answer but one.
+# THE ranking for a DONE CLAIM that does not come from a terminated run's own
+# outcome - green checks on a run still monitoring its PR, or a worker's own
+# `done:` status line - as "<state>|<detail>".
+#
+# ONE ranking with two named entry points below, because the two claims differ in
+# exactly one respect and it would be a mistake to let them differ in any other:
+# what the reader still knows when the forge cannot confirm. Everything else -
+# which answers settle done, which settles failed, which detail is rendered - is
+# identical and must stay identical.
+#
+# <unconfirmed-state> is that one respect: the word to report when the answer
+# EXISTS and this reader does not have it. A caller that has independent proof
+# the crew is alive passes a live word; a caller with no such proof passes
+# `unknown`. It is never `done`.
 #
 # TWO DIFFERENT QUESTIONS, and conflating them is exactly how this regresses:
-#   * What proves CI RAN? `checks-passed` is a statement about the CHECKS, so it
-#     is CI evidence IN ITS OWN RIGHT and needs no corroborating `ci,completed`
-#     row. That ruling stands entirely untouched. Where merge is left to the
+#   * What proves the WORK reached this state? Green checks, or the worker's own
+#     report. `checks-passed` is a statement about the CHECKS, so it is CI
+#     evidence IN ITS OWN RIGHT and needs no corroborating `ci,completed` row -
+#     that ruling stands entirely untouched, and where merge is left to the
 #     captain the ci step stays `running` for the whole monitor phase, so
 #     demanding a completed row would withhold the very signal a captain waits
 #     for.
-#   * What proves WHERE THE PR ENDED UP? Nothing in the run record does. Green
-#     checks say the work is ready to land. They say nothing about whether it
-#     landed, and nothing about whether the captain threw it away.
-# Green checks answer the first question and are silent on the second, so this
-# path is no longer EXEMPT from the forge read - it keeps its own CI evidence and
-# gains the forge's answer about the PR, because those are separate facts.
+#   * What proves WHERE THE PR ENDED UP? Neither of them. Green checks say the
+#     work is ready to land and say nothing about whether it landed; a worker's
+#     `done:` line is a SELF-REPORT, which is weaker evidence than a run record,
+#     not stronger. Only the forge answers this one.
 #
-# A forge-confirmed CLOSE settles FAILED here, on the same authority and for the
-# same reason as rule 1b of fm_crew_terminal_verdict: the work was abandoned and
-# will never land. This arm is the worse of the two to get wrong. `done - checks
-# green: PR ready for review` does not merely overstate an abandoned branch, it
-# actively invites the captain to go and review work that was already thrown
-# away, and bin/fm-inactive-reconcile.sh strips the detail before the captain
-# ever sees it. See this file's header for the standalone-honesty rule.
+# The source of the claim is never a reason to skip the forge, and that is worth
+# stating because it looks like one. bin/fm-inactive-reconcile.sh acts on the
+# WORD and drops everything else, so a `done` from a status log and a `done` from
+# a run record are indistinguishable by the time they reach the captain.
 #
-# A TRANSIENT non-answer does not reach `done` either, and that is what makes a
-# tight forge bound safe rather than merely fast: a read that timed out cannot
-# distinguish an open PR from a closed one, so the honest answer is `unknown` for
-# one heartbeat until the next read settles it. A STRUCTURAL non-answer is the
-# opposite case and keeps `done`, because no later read will ever clear it, and
-# withholding the ready-for-review signal FOREVER on every GitLab project and
-# every host without `gh` is a worse failure than the one it guards against. See
-# fm_crew_forge_answer_class, and fm_crew_terminal_verdict for the same rule on
-# the terminal path.
+# A forge-confirmed CLOSE settles FAILED, on the same authority and for the same
+# reason as rule 1b of fm_crew_terminal_verdict: the work was abandoned and will
+# never land. This is the worse of the two to get wrong. `done - checks green: PR
+# ready for review` does not merely overstate an abandoned branch, it actively
+# invites the captain to go and review work that was already thrown away.
 #
-# Every remaining answer keeps `done`. A confirmed merge names the merge, through
-# the same suffix owner every other detail line uses; an open PR leaves the
-# ready-for-review detail exactly as it was, because knowing the PR is open does
-# not contradict anything green checks proved.
-#
-# The `checks-green` evidence token is this function's own rather than a
-# parameter, and that is a claim about its callers: every route that reaches here
-# has green checks and NOTHING MORE - no terminal outcome, and typically a ci step
-# still `running`. Passing `verified` here once rendered the lead "run passed" for
-# exactly such a run. A caller that ever arrives with different evidence must pass
-# its own token rather than inherit this one.
-fm_crew_checks_green_verdict() {  # <forge-answer> <ready-detail>
-  case "${1%% *}" in
-    closed) printf 'failed|%s' "$(fm_crew_closed_detail "$1" checks-green)"; return ;;
-    merged) printf 'done|%s%s' "$2" "$(fm_crew_forge_suffix "$1")"; return ;;
+# An UNCONFIRMED answer never reaches `done`, which is what makes a tight forge
+# bound safe rather than merely fast: a read that timed out cannot distinguish an
+# open PR from a closed one. An UNANSWERABLE or NO-PR answer keeps `done` and
+# names the gap in its detail - no read will ever clear the first, and the second
+# has no landing to claim in the first place. fm_crew_forge_answer_class owns
+# that test.
+fm_crew_done_claim_verdict() {  # <forge-answer> <detail> <unconfirmed-state> <evidence>
+  local answer=$1 detail=$2 unconfirmed_state=$3 evidence=$4
+  case "${answer%% *}" in
+    closed) printf 'failed|%s' "$(fm_crew_closed_detail "$answer" "$evidence")"; return ;;
+    merged) printf 'done|%s%s' "$detail" "$(fm_crew_forge_suffix "$answer")"; return ;;
   esac
-  if [ "$(fm_crew_forge_answer_class "$1")" = transient ]; then
-    printf 'unknown|%s' "$(fm_crew_unconfirmed_detail checks-green "$1")"
-    return
-  fi
-  printf 'done|%s' "$2"
+  case "$(fm_crew_forge_answer_class "$answer")" in
+    unconfirmed)
+      printf '%s|%s%s' "$unconfirmed_state" "$detail" "$(fm_crew_forge_suffix "$answer")"
+      return ;;
+    unanswerable|no-pr)
+      printf 'done|%s%s' "$detail" "$(fm_crew_forge_suffix "$answer")"
+      return ;;
+  esac
+  printf 'done|%s' "$detail"
+}
+
+# The done-claim ranking for a run whose CHECKS are GREEN but which has not
+# terminated: `outcome: checks-passed`, the ci-step log tail that reads green
+# while the run monitors, and the crew's own ci-ready line while its run is still
+# working. The <ready-detail> is the ready-for-review signal those paths exist to
+# produce, and it survives on every answer but a confirmed close.
+#
+# WITHHOLDING A TERMINAL CLAIM AND REPORTING LIVENESS ARE DIFFERENT STATEMENTS,
+# and both can be true at once: "I cannot confirm this landed" does not imply "I
+# know nothing about this crew". An unconfirmed answer here therefore reports
+# `working` - the crew is monitoring its PR, which is exactly what it is doing -
+# with the merge state named in the detail.
+#
+# That correction is recorded because the mistake was in a DIRECTIVE, not in its
+# implementation. The instruction "an unverified answer must never read done" was
+# right; it was then allowed to reach further and turn a demonstrably live crew
+# into `unknown`, which is reproduced failure (3) of this whole change - "a
+# demonstrably live pipeline read unknown" - reintroduced by the fix for a
+# different failure, and a regression of accepted criterion 4.
+#
+# `working` is this function's own rather than a parameter, and that is a claim
+# about its callers: every route here is a run still monitoring its PR, so
+# liveness is a precondition of the path and not a property of the answer. A
+# caller without that proof must use fm_crew_reported_done_verdict instead, which
+# is the same ranking with `unknown` in that slot.
+#
+# The `checks-green` evidence token is this function's own for the same reason:
+# every route here has green checks and NOTHING MORE - no terminal outcome, and
+# typically a ci step still `running`. Passing `verified` here once rendered the
+# lead "run passed" for exactly such a run.
+fm_crew_checks_green_verdict() {  # <forge-answer> <ready-detail>
+  fm_crew_done_claim_verdict "$1" "$2" working checks-green
+}
+
+# The done-claim ranking for a crew with NO RUN at all, whose own status log's
+# last line claims `done:`. Same ranking, one difference: there is no run and so
+# no liveness to report, which is why an unconfirmed answer reads `unknown` here
+# where the green-checks entry point reads `working`.
+#
+# The `reported` evidence token names the weakest evidence in this file: a
+# self-report. It is not a reason to skip the forge - it is the reason not to.
+fm_crew_reported_done_verdict() {  # <forge-answer> <log-detail>
+  fm_crew_done_claim_verdict "$1" "$2" unknown reported
 }

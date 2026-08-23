@@ -94,12 +94,19 @@ SH
 # A per-id override FM_FAKE_CREW_STATE_<sanitized-id> wins; otherwise the shared
 # FM_FAKE_CREW_STATE; otherwise an unknown verdict (NOT provably working), the
 # safe default so a test that forgets to set one surfaces rather than absorbs.
+#
+# FM_FAKE_CREW_STATE_ENV_LOG, when set, appends the forge bound the caller handed
+# this reader. That bound is a real caller-side decision - a loop over crews must
+# narrow it, an interactive single read need not - so it is observable here
+# rather than only inside the reader.
 make_fake_crew_state() {  # <fakebin>
   local fakebin=$1
   cat > "$fakebin/fm-crew-state.sh" <<'SH'
 #!/usr/bin/env bash
 set -u
 id=${1:-}
+[ -z "${FM_FAKE_CREW_STATE_ENV_LOG:-}" ] ||
+  printf '%s\n' "${FM_CREW_STATE_FORGE_TIMEOUT:-}" >> "$FM_FAKE_CREW_STATE_ENV_LOG"
 key=$(printf '%s' "$id" | tr -c 'A-Za-z0-9' '_')
 var="FM_FAKE_CREW_STATE_$key"
 val=${!var:-${FM_FAKE_CREW_STATE:-}}

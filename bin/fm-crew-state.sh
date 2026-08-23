@@ -31,15 +31,17 @@
 #      parked (with gate findings), failed/cancelled -> failed, and
 #      checks-passed -> done, since that word is itself a statement about the
 #      checks - though green checks prove only that CI ran, so that arm still
-#      asks the forge where the PR ended up and a confirmed close reads failed
+#      asks the forge where the PR ended up: a confirmed close reads failed, and
+#      an unconfirmed answer reads working, since the crew is still monitoring
 #      (fm_crew_checks_green_verdict). `passed` is not even that much: it says
 #      only that the PIPELINE completed, so every
 #      terminated run goes through one ranking (fm_crew_terminal_verdict) - a
 #      forge-confirmed merge reads done whatever the ci step says, a
 #      forge-confirmed close reads failed because a closed-unmerged PR is the
-#      opposite of a landing, else this run's own `ci,completed` reads done, else
-#      unknown, because a terminated run whose validation cannot be established
-#      is exactly "I cannot tell", not a gate anyone can respond to. The coarse
+#      opposite of a landing, else this run's own `ci,completed` reads done
+#      unless the forge answer is unconfirmed, else unknown, because a terminated
+#      run whose validation cannot be established is exactly "I cannot tell", not
+#      a gate anyone can respond to. The coarse
 #      runs-list path carries no steps table at all, and passes that into the
 #      same ranking as missing evidence rather than ranking the evidence a
 #      second way. EXCEPT: while
@@ -55,7 +57,9 @@
 #   4. No run for this crew (pre-validation, or kind=scout): fall back to the
 #      recorded backend's pane busy state, then the status log's last line only
 #      when its verb maps to a recognized run-state. Decision-only events such as
-#      `resolved` never become current state or detail.
+#      `resolved` never become current state or detail. A `done:` verb there is a
+#      landing claim like any other, so it asks the forge too - the invariant
+#      below admits no exemption for the source of a claim.
 #   5. Missing meta or torn-down worktree: report unknown · none. If no run is
 #      attributed to this crew, a dead endpoint also reports unknown · none rather
 #      than trusting a stale status log.
@@ -63,24 +67,42 @@
 # Read-only: nothing here writes fleet state, and every command it runs is a
 # query. Not process-free, though - at most ONE outbound `gh pr view` per
 # invocation, bounded by FM_CREW_STATE_FORGE_TIMEOUT and skipped entirely when
-# FM_CREW_STATE_NO_FORGE is truthy, which reports the merge state as unverified
-# and never as a landing.
+# FM_CREW_STATE_NO_FORGE is truthy. Skipping does not merely weaken the detail:
+# an unread merge state is an UNCONFIRMED answer, and no path resolves one to
+# `done` (see the invariant below, and fm_crew_forge_answer_class for the split).
 #
 # THE FORGE-READ INVARIANT, owned here and pointed at from everywhere else that
-# needs it. It is a rule about PATHS, not about words:
+# needs it. It is a rule about the CALL, not about the ANSWER and not about the
+# word:
 #
-#   Every path that COULD emit `done` reads the forge first. No other path reads
-#   it at all.
+#   Every path that COULD emit `done` ASKS the forge first. No other path asks.
 #
-# The word finally emitted does not tell you whether the call happened, and
-# reading it that way is how the earlier wording of this paragraph came to be
-# false: a path that asked can still resolve to `failed` (the forge confirmed a
-# close) or to `unknown` (it did not answer, so a close cannot be ruled out).
-# Those words are PRODUCED by the call, not evidence that none was made. What is
-# true is the converse - a crew whose run never reaches a terminal or
-# green-checks shape never asks, so a routine heartbeat over a crew that is
-# validating, parked at a gate, or already failed on its own outcome makes no
+# Asking is not the same as being answered, and the invariant deliberately claims
+# only the asking. A path that asked can still emit `done` on an answer that
+# confirmed nothing - a provider with no client here, or a task with no PR at all
+# - because those are gaps no read will ever close, and refusing forever is the
+# worse failure. What such a path may NOT do is emit `done` while an answer
+# exists that it simply does not have.
+#
+# Nor does the word tell you whether the call happened, and reading it that way
+# is how an earlier wording of this paragraph came to be false: a path that asked
+# can resolve to `failed` (the forge confirmed a close), to `working` (it did not
+# answer, but the crew is demonstrably still monitoring) or to `unknown` (it did
+# not answer and nothing else is known). Those words are PRODUCED by the call,
+# not evidence that none was made. What is true is the converse - a crew whose
+# state could never be `done` never asks, so a routine heartbeat over a crew that
+# is validating, parked at a gate, or already failed on its own outcome makes no
 # forge call at all.
+#
+# The paths that can emit `done`, all eight of which ask:
+#   1. full path, `outcome: checks-passed`      -> fm_crew_checks_green_verdict
+#   2. full path, `outcome: passed`             -> fm_crew_terminal_verdict
+#   3. full path, `status: completed`           -> fm_crew_terminal_verdict
+#   4. full path, ci step running + green log   -> fm_crew_checks_green_verdict
+#   5. coarse runs-list `completed` row         -> fm_crew_terminal_verdict
+#   6. coarse path, ci-ready status log         -> fm_crew_checks_green_verdict
+#   7. full path, ci-ready status log           -> fm_crew_checks_green_verdict
+#   8. NO run, status log's own `done:` verb    -> fm_crew_reported_done_verdict
 #
 # Why the invariant is worth its cost: every `done` is a claim a consumer may act
 # on with the DETAIL STRIPPED - bin/fm-inactive-reconcile.sh presents the state
@@ -137,8 +159,9 @@ FM_CREW_STATE_RUNS_LIMIT=${FM_CREW_STATE_RUNS_LIMIT:-200}
 case "$FM_CREW_STATE_RUNS_LIMIT" in ''|*[!0-9]*) FM_CREW_STATE_RUNS_LIMIT=200 ;; esac
 # Bound on the ONE forge read this script ever makes: the merged/closed
 # confirmation taken before any `done` is emitted (fm_crew_forge_pr_state).
-# FM_CREW_STATE_NO_FORGE=1 skips it, which reports the merge state as
-# unverified rather than asserting a landing - never as a landing.
+# FM_CREW_STATE_NO_FORGE=1 skips it, and skipping is an UNCONFIRMED answer, which
+# no path resolves to `done` - see the forge-read invariant in this file's header
+# for what each kind of non-answer licenses.
 #
 # 10s here, and DELIBERATELY LOOSER than any budgeted caller uses. This default
 # serves the interactive single-task read, where the whole cost is one person
@@ -524,16 +547,41 @@ fi
 # fm-crew-run-verdict-lib.sh's header). Called on exactly the paths that can emit
 # `done` and nowhere else; this file's header owns that invariant and states why
 # the emitted word is not a way to tell whether the call happened.
+#
+# `no-pr` is the answer only once crew_pr_url has looked EVERYWHERE a PR url is
+# recorded, so it means "this task has no PR", not "this reader did not look".
+# The difference decides a verdict: a task with no PR has no landing to confirm,
+# so its `done` is not a landing claim, while a url this reader failed to find
+# would have hidden a close behind a word that never asked.
+
+# This task's PR url from every place one is recorded, in decreasing authority:
+# the run record's own `pr:` field, the coarse runs-list row, the task meta, then
+# the status log the worker writes.
+#
+# The last two are not redundancy, they are the fix for a real hole. The coarse
+# runs-list row NEVER carries a url, so a crew on that path used to reach the
+# forge with nothing to ask about and settle `done` unasked - while the very
+# status log this same invocation had already read named the PR, and
+# bin/fm-inactive-reconcile.sh's pr_for_task then dug that url out and showed it
+# to the captain beside the word. Reading it here is the same lookup that
+# consumer already performs, done before the verdict rather than after it.
+crew_pr_url() {
+  local url=""
+  [ "$RUN_SOURCE" = full ] && url=$(strip_quotes "$(nm_field pr)")
+  [ -n "$url" ] || url=$COARSE_PR
+  [ -n "$url" ] || url=$(meta_value pr)
+  [ -n "$url" ] || url=$(grep -Eo 'https?://[^[:space:])"]+/(pull|merge_requests)/[0-9]+' \
+    "$LOG" 2>/dev/null | tail -1 || true)
+  printf '%s' "$url"
+}
 crew_forge_answer() {
   local url
   case "$(printf '%s' "${FM_CREW_STATE_NO_FORGE:-}" | tr '[:upper:]' '[:lower:]')" in
     ''|0|false|no|off) : ;;
     *) printf 'unverified'; return ;;
   esac
-  url=""
-  [ "$RUN_SOURCE" = full ] && url=$(strip_quotes "$(nm_field pr)")
-  [ -n "$url" ] || url=$COARSE_PR
-  [ -n "$url" ] || { printf 'unrecorded'; return; }
+  url=$(crew_pr_url)
+  [ -n "$url" ] || { printf 'no-pr'; return; }
   fm_crew_forge_pr_state "$url" "$FM_CREW_STATE_FORGE_TIMEOUT"
 }
 
@@ -745,8 +793,21 @@ fi
 # `unknown` with the resolution note as `doing`. map_log_state is the single owner of
 # the verb->state mapping (including the configurable paused verb), so reusing its
 # `unknown` verdict as the "not a state" test needs no second verb list here.
+#
+# A `done:` verb is the one state word here that carries a landing claim, so it
+# alone consults the forge before it is emitted. The source is not a reason to
+# exempt it - it is the reason not to: this is the worker's SELF-REPORT, weaker
+# evidence than a run record, and bin/fm-inactive-reconcile.sh matches the WORD
+# regardless of source, so an abandoned PR would reach the captain as a success
+# by exactly the route a run-backed one no longer can. The call costs one bounded
+# read on a path that only fires when a `done:` line already exists.
 if [ -n "$LOG_VERB" ]; then
   LOG_STATE=$(map_log_state "$LOG_LINE")
+  if [ "$LOG_STATE" = "done" ]; then
+    log_verdict=$(fm_crew_reported_done_verdict "$(crew_forge_answer)" \
+      "$(status_line_note "$LOG_LINE")")
+    emit "${log_verdict%%|*}" status-log "${log_verdict#*|}"
+  fi
   if [ "$LOG_STATE" != unknown ]; then
     emit "$LOG_STATE" status-log "$(status_line_note "$LOG_LINE")"
   fi

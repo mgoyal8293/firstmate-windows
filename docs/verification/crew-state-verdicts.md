@@ -14,15 +14,17 @@ Branch: `fm/fm-crew-state-stale-run-masks-live`.
 
 ```
 $ bash tests/fm-crew-state.test.sh | grep -c '^ok'
-87
+91
 $ bash tests/fm-inactive-reconcile.test.sh 2>/dev/null | grep -c '^ok'
 17
 $ bash tests/fm-fleet-snapshot-view.test.sh 2>/dev/null | grep -c '^ok'
 16
+$ bash tests/fm-watch-triage.test.sh 2>/dev/null | grep -c '^ok'
+50
 ```
 
 The count is the evidence, not the exit status: a green step does not prove its assertions ran.
-The second and third suites are listed because three guards below belong to those callers and are pinned there: the bound the scan derives for this reader's forge read, and the fixed per-task bound the snapshot chooses.
+The later suites are listed because four guards below belong to those callers and are pinned there: the bound the scan derives for this reader's forge read, the fixed per-task bound the snapshot chooses, and the per-crew bound the watcher's triage chooses.
 
 ## Falsification matrix
 
@@ -66,17 +68,20 @@ Every row must fail, and must fail on the named assertion.
 | So does a ci-ready status log, which reaches done with a different source | emit `done` from `emit_checks_green` without consulting the owner | `test_forge_confirmed_close_defeats_a_ci_ready_status_log` | fails: `missing: 'state: failed'` |
 | A confirmed merge is named on the checks-green path | drop the merge suffix from `fm_crew_checks_green_verdict` | `test_checks_passed_keeps_ready_for_review_unless_the_pr_was_closed` | fails: `missing: 'PR merged'` |
 | The checks-green lead claims only green checks, never a pass | pass `verified` to the closed detail again, restoring the "run passed" lead | `test_forge_confirmed_close_defeats_a_green_ci_log` | fails: `missing: 'checks green: PR closed'` |
-| A TRANSIENT non-answer never reads done on the terminal path | drop the transient arm from `fm_crew_terminal_verdict` | `test_a_transient_forge_non_answer_never_reads_done` | fails: `unexpected: 'state: done'` |
-| Nor on the checks-green path | drop the transient arm from `fm_crew_checks_green_verdict` | the same case | fails: `unexpected: 'state: done'` |
-| A STRUCTURAL non-answer still reads done, because no read will ever clear it | class the structural words as transient | `test_a_structural_forge_non_answer_still_reads_done` | fails: `missing: 'state: done'` |
-| A run record with no PR url is a structural non-answer, not a transient one | report the absent url as `unverified` again | `test_coarse_run_does_not_probe_other_branch_ci_log_for_ready_status` | fails: `missing: 'state: done'` |
+| An UNCONFIRMED answer never reads done on the terminal path | drop the unconfirmed arm from `fm_crew_terminal_verdict` | `test_a_transient_forge_non_answer_never_reads_done` | fails: `unexpected: 'state: done'` |
+| Nor on the green-checks path, which reports the crew's proven liveness instead | return `unknown` from the unconfirmed arm of `fm_crew_done_claim_verdict` | `test_an_unconfirmed_answer_keeps_a_live_crew_working` | fails: `unexpected: 'state: unknown'` |
+| An UNANSWERABLE answer still reads done, because no read will ever clear it | class the unanswerable words as unconfirmed | `test_a_structural_forge_non_answer_still_reads_done` | fails: `missing: 'state: done'` |
+| A task with NO PR anywhere still reads done, having no landing to claim | class `no-pr` as unconfirmed | `test_a_task_with_no_pr_anywhere_still_reads_done` | fails: `missing: 'state: done'` |
+| A no-run status-log `done:` asks the forge like every other done claim | emit the log verb without consulting `fm_crew_reported_done_verdict` | `test_a_no_run_status_log_done_asks_the_forge` | fails: `missing: 'state: failed'` |
+| A PR url recorded only in the status log is still found and queried | drop the status-log arm of `crew_pr_url` | `test_a_pr_url_only_in_the_status_log_is_still_queried` | fails: `missing: 'state: failed'` |
+| The watch-triage caller narrows the per-crew forge bound | drop the `FM_CREW_STATE_FORGE_TIMEOUT` `crew_absorb_class` passes | `test_crew_absorb_class_narrows_the_forge_bound` (`tests/fm-watch-triage.test.sh`) | fails: `crew_absorb_class left the forge bound at the reader's own default` |
 | The fleet snapshot narrows the per-task forge bound rather than inheriting it | drop the `FM_CREW_STATE_FORGE_TIMEOUT` it passes | `test_snapshot_narrows_the_per_task_forge_bound` (`tests/fm-fleet-snapshot-view.test.sh`) | fails: `the snapshot must narrow the per-task forge bound to 3s, got '10'` |
 | Both terminal paths reach the same verdict on a forge-confirmed merge | restore the asymmetry, letting only the no-steps path use the landing | `test_both_paths_agree_on_a_forge_confirmed_merge` | fails: `the two paths disagree on one world state` |
 | And on an open PR with no ci evidence | give the no-steps path its own done arm whatever the forge said | `test_both_paths_agree_on_an_open_pr_with_no_ci_evidence` | fails: `missing: 'state: unknown'` |
 | The per-child forge bound is at most a third of the scan's remaining budget | pass the whole remaining budget as the bound | `test_forge_bound_is_derived_from_the_remaining_budget` (`tests/fm-inactive-reconcile.test.sh`) | fails: `forge bound exceeds a third of the full 10s budget: '10\|'` |
 | A budget too small to spare the read skips it instead of shrinking it | take the bound arm unconditionally (`if true`) | the same case | fails: `a 2s budget cannot spare a whole second of forge read: '0\|'` |
 
-44 of 44, re-derived in full on 2026-08-23 - twice, once per fix round.
+47 of 47, re-derived in full on 2026-08-23 - once per fix round since the decay was found.
 
 The first two rows share a case deliberately: both guards sit on the runs-list path, and the case needs both to hold - one stops the dead run being reached, the other makes the live run usable.
 Four later pairs share a mutation rather than a case, because one gate covers several distinct ways for the evidence to be absent and each way needs its own case to show it is covered.
@@ -180,27 +185,60 @@ The paths that can say `done` are mutually exclusive, so no single invocation ma
 Which paths call the forge is decided by the path, not by the word it produces: `bin/fm-crew-state.sh`'s header owns that invariant, and states why a `failed` or an `unknown` is often the RESULT of a call rather than evidence that none was made.
 That is the price of the invariant, and it is the right way round: the read is cheap and bounded, while presenting abandoned work to a captain as a success is not.
 
-## Ruled: a transient non-answer never reads done
+## Ruled: an unconfirmed non-answer never reads done
 
 Making the forge bound TIGHTER is only safe if failing to read the forge produces honesty rather than the false success this change removes.
 That is the precondition, not a separate nicety, so it is recorded next to the bound it licenses.
 
-A non-answer now splits two ways, and `fm_crew_forge_answer_class` owns the split.
+A non-answer splits on ONE test, and `fm_crew_forge_answer_class` owns it: could ANYTHING ever answer, not merely did this read answer.
 
-A TRANSIENT non-answer is `unverified`: the read timed out, `gh` was unauthenticated, or a budgeted caller skipped it with `FM_CREW_STATE_NO_FORGE`.
-It cannot tell an open PR from a closed one, so no path resolves it to `done` - the run's own `ci,completed` row and its green checks both degrade to `unknown` with a detail saying the checks are proven and a close cannot be ruled out.
+An UNCONFIRMED answer is `unverified`: the read timed out, `gh` was unauthenticated, or a budgeted caller skipped it with `FM_CREW_STATE_NO_FORGE`.
+The answer exists and this reader does not have it, so it cannot tell an open PR from a closed one and no path resolves it to `done`.
 The next read clears it, so the cost is one heartbeat.
 
-A STRUCTURAL non-answer is `unqueryable <provider>`, `unparseable`, or `unrecorded` when the run record carries no PR url at all.
-No later read of the same record will ever answer, so refusing `done` would refuse it forever: every GitLab project and every host without `gh` would permanently lose both the ready-for-review signal and any terminal receipt.
-That is a worse failure than the one the transient rule guards against - the same failure the amended criterion above already rejected once - so the run's own evidence still settles `done` there.
-A record with no PR is the clearest case of all: there is no PR whose fate could be hiding behind the unread answer.
+An UNANSWERABLE answer is `unqueryable <provider>` or `unparseable`: this host has no forge client for that provider, or the url is not a recognizable PR or MR.
+No read will ever answer, so refusing `done` would refuse it forever: every GitLab project and every host without `gh` would permanently lose both the ready-for-review signal and any terminal receipt.
+That is a worse failure than the one the unconfirmed rule guards against - the same failure the amended criterion above already rejected once - so the run's own evidence still settles `done` there, with the detail naming the missing confirmation.
 
-The two rules are one idea, which is why they share an owner: withhold a verdict exactly as long as waiting can change the answer, and no longer.
+`no-pr` is the third answer and it settles like `unanswerable`, but for a different reason worth keeping distinct: there is no PR at all, so there is no landing to confirm and a `done` here is not a landing claim.
+It is reached only after `crew_pr_url` has looked in the run record, the coarse row, the task meta and the status log, so it means "this task has no PR" rather than "this reader did not look".
+That distinction was previously blurred: a coarse runs-list row never carries a PR url, so a crew on that path answered "no PR to ask about" while the very status log the same invocation had already read named the PR, and `bin/fm-inactive-reconcile.sh` then dug that url out to show the captain beside the word.
+
+The rules are one idea, which is why they share an owner: withhold a verdict exactly as long as an answer could still arrive, and no longer.
 
 This also changed what the test fixtures must say.
 A case that means to assert `done` about ci evidence now has to answer the forge question explicitly, or it is really asserting the forge gate; `forge_answers_open` in `tests/fm-crew-state.test.sh` exists for that, and its comment records the coupling.
 That is the same lesson the ci-padding row taught, arriving from the other direction: a fixture that leaves a second input unpinned stops testing the input it names.
+
+## Ruled: withholding a landing claim is not the same as knowing nothing
+
+The rule above was right and was then allowed to reach too far, and the overshoot is recorded here because it was in the DIRECTIVE, not in its implementation.
+
+"An unverified answer must never read `done`" is correct.
+Applied without a second thought to a run that had not terminated, it turned a crew in merge monitoring - green checks, an actively running step, recent activity - into `state: unknown` on every heartbeat where `gh` could not answer.
+That is reproduced failure (3) of this whole change, "a demonstrably live pipeline read unknown", arriving by a new route, and a regression of accepted criterion 4.
+
+Withholding a terminal claim and reporting liveness are DIFFERENT STATEMENTS, and both can be true at once.
+"I cannot confirm this landed" does not imply "I know nothing about this crew".
+
+So an unconfirmed answer on the green-checks path reports `working`, with the merge state named in the detail: the crew is monitoring its PR, which is exactly what it is doing.
+`fm_crew_done_claim_verdict` takes that word as a parameter for precisely this reason, and the two entry points differ in nothing else - `fm_crew_checks_green_verdict` passes `working` because liveness is a precondition of every route into it, and `fm_crew_reported_done_verdict` passes `unknown` because there is no run there and so nothing to be live.
+
+## Ruled: the source of a done claim never exempts it from the forge
+
+The forge-read invariant was stated before it was true.
+A crew with no attributed run whose status log's last line reads `done:` emitted `state: done` with no forge read at all - reachable whenever the run was reaped, aged past `FM_CREW_STATE_RUNS_LIMIT`, or failed to bind.
+
+A worker's own `done:` line is not better evidence than a run record.
+It is WORSE, because it is a self-report, and criterion 3 confirms a landing claim before it is emitted regardless of who claimed it.
+The decisive argument is downstream: `bin/fm-inactive-reconcile.sh` matches the WORD and drops everything else, so `done` from a status log and `done` from a run record are indistinguishable by the time a captain sees them.
+The source can never be a reason to exempt a path.
+
+That path now asks, through `fm_crew_reported_done_verdict`.
+The cost is one bounded read on a path that only fires when a `done:` line already exists.
+
+All eight paths that can emit `done` are enumerated in `bin/fm-crew-state.sh`'s header beside the invariant, so the next reader checks a list rather than re-deriving one.
+The invariant itself is worded about the CALL and not the ANSWER, deliberately: `unanswerable` and `no-pr` still settle `done` without a confirmation, and a sentence that claimed otherwise would be the sixth false invariant this branch has had to correct.
 
 ## Forge-read bound
 

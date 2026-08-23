@@ -1113,6 +1113,7 @@ test_coarse_run_does_not_probe_other_branch_ci_log_for_ready_status() {
 EOF
 )"
   FM_FAKE_CI_LOGS="CI checks running, waiting for results..."
+  forge_answers_open
   local out; out=$(run_crew_state "$d" feat-coarseready)
   assert_contains "$out" "state: done" "coarse ready status -> done"
   assert_contains "$out" "source: status-log" "coarse ready status remains status-log sourced"
@@ -2521,14 +2522,127 @@ test_a_transient_forge_non_answer_never_reads_done() {
   assert_contains "$out" "state: unknown" "the honest word while the forge is unread"
   assert_contains "$out" "cannot rule out a close" "the detail says which half is missing"
   assert_contains "$out" "run passed" "the ci evidence it does have is still reported"
-  # The green-checks route reaches done by its own evidence, and is bounded the
-  # same way.
-  FM_FAKE_AXI_STATUS="$(run_checks_passed fm/feat-transient)"
-  out=$(run_crew_state "$d" transient)
-  assert_not_contains "$out" "state: done" "green checks cannot rule out a close either"
-  assert_contains "$out" "state: unknown" "the green-checks route degrades the same way"
-  assert_contains "$out" "checks green: cannot rule out a close" "and claims only its own evidence"
-  pass "a transient forge non-answer never reads done"
+  pass "an unconfirmed forge answer never reads done on a terminated run"
+}
+
+# WITHHOLDING A TERMINAL CLAIM AND REPORTING LIVENESS ARE DIFFERENT STATEMENTS.
+# This is the concrete sequence a directive overshot into: a crew in merge
+# monitoring with green checks, `gh` unauthenticated or the bound hit, the forge
+# answering nothing. "I cannot confirm this landed" was allowed to become "I know
+# nothing about this crew", which is reproduced failure (3) of this whole change
+# arriving by a new route, and a regression of accepted criterion 4.
+#
+# All three properties are asserted, because the useful ones are what must NOT be
+# there: the crew reads working, never done, and never unknown.
+test_an_unconfirmed_answer_keeps_a_live_crew_working() {
+  reset_fakes
+  local d run_head out
+  d=$(new_case unconfirmed-live)
+  make_repo_on_branch "$d/wt" fm/feat-unconfirmed
+  run_head=$(git -C "$d/wt" rev-parse HEAD)
+  make_fakebin "$d" >/dev/null
+  fm_write_meta "$d/state/unconf.meta" "window=fm:fm-unconf" "worktree=$d/wt" "kind=ship" "harness=claude"
+  FM_FAKE_GH_CALL_FAILS=1
+  # The checks-passed route: the run is monitoring, its ci step still running.
+  FM_FAKE_AXI_STATUS="$(run_checks_passed fm/feat-unconfirmed)"
+  out=$(run_crew_state "$d" unconf)
+  assert_contains "$out" "state: working" "a crew still monitoring its PR is working"
+  assert_not_contains "$out" "state: done" "an unread merge state cannot rule out a close"
+  assert_not_contains "$out" "state: unknown" "the forge said nothing about the CREW"
+  assert_contains "$out" "PR state unverified" "the detail names what is missing"
+  assert_contains "$out" "checks green: PR ready for review" "and keeps what is known"
+  # The ci-log-green route, on a run with a genuinely executing step.
+  FM_FAKE_AXI_STATUS="$(run_ci_monitoring fm/feat-unconfirmed)"
+  FM_FAKE_CI_LOGS="all CI checks passed - still monitoring until merged or closed"
+  out=$(run_crew_state "$d" unconf)
+  assert_contains "$out" "state: working" "so is one whose ci log went green"
+  assert_not_contains "$out" "state: done" "the same unread merge state, the same refusal"
+  assert_not_contains "$out" "state: unknown" "liveness is not erased by an unread forge"
+  pass "an unconfirmed forge answer keeps a live crew working"
+}
+
+# The forge-read invariant admits no exemption for the SOURCE of a done claim.
+# A worker's own `done:` line is a self-report - weaker evidence than a run
+# record, not stronger - and bin/fm-inactive-reconcile.sh matches the WORD
+# regardless of source, so an abandoned PR reached the captain as a success by
+# exactly this route while the run-backed routes were being closed one by one.
+test_a_no_run_status_log_done_asks_the_forge() {
+  reset_fakes
+  local d out
+  d=$(new_case log-done-forge)
+  make_repo_on_branch "$d/wt" fm/feat-logdone
+  make_fakebin "$d" >/dev/null
+  fm_write_meta "$d/state/logdone.meta" "window=fm:fm-logdone" "worktree=$d/wt" "kind=ship" "harness=claude"
+  printf 'done: PR https://github.com/o/r/pull/8 ready for review\n' > "$d/state/logdone.status"
+  # No run anywhere for this branch, so the status log is the only source.
+  FM_FAKE_AXI_STATUS="$(run_running fm/some-other)"
+  FM_FAKE_BUSY=0
+  arm_idle_record "$d/state" logdone
+  FM_FAKE_GH_PR='{"mergeStateStatus":"UNKNOWN","state":"CLOSED","url":"https://github.com/o/r/pull/8"}'
+  out=$(run_crew_state "$d" logdone)
+  assert_contains "$out" "state: failed" "an abandoned PR is not a success whoever reported it"
+  assert_not_contains "$out" "state: done" "the worker's own claim does not settle where the PR ended up"
+  assert_contains "$out" "PR closed without merging" "the detail names the close"
+  assert_contains "$out" "worker reported done" "and names the self-report it overrode"
+  # An unconfirmed answer withholds done too, and here there is no run and no
+  # liveness to fall back on, so unknown is all that is left.
+  FM_FAKE_GH_PR=""
+  FM_FAKE_GH_CALL_FAILS=1
+  out=$(run_crew_state "$d" logdone)
+  assert_contains "$out" "state: unknown" "with no run and no answer, nothing is settled"
+  assert_not_contains "$out" "state: done" "an unread merge state cannot rule out a close here either"
+  pass "a no-run status-log done asks the forge"
+}
+
+# The url the reader must not miss. A coarse runs-list row never carries a PR, and
+# the run record may not either, but the worker's own status log names it - and
+# bin/fm-inactive-reconcile.sh digs that same url out to show the captain beside
+# the state word. Looking only at the run record meant answering "no PR to ask
+# about" while holding the url in hand.
+test_a_pr_url_only_in_the_status_log_is_still_queried() {
+  reset_fakes
+  local d short out
+  d=$(new_case log-only-pr)
+  make_repo_on_branch "$d/wt" fm/feat-logpr
+  short=$(git -C "$d/wt" rev-parse --short=7 HEAD)
+  make_fakebin "$d" >/dev/null
+  fm_write_meta "$d/state/logpr.meta" "window=fm:fm-logpr" "worktree=$d/wt" "kind=ship" "harness=claude"
+  printf 'done: PR https://github.com/o/r/pull/9 checks green\n' > "$d/state/logpr.status"
+  FM_FAKE_AXI_STATUS="$(run_running fm/other-crew)"
+  FM_FAKE_RUNS_LIST="$(cat <<EOF
+  running    fm/other-crew aaaaaaa  2026-08-23 15:30
+  running    fm/feat-logpr ${short}  2026-08-23 15:05
+EOF
+)"
+  FM_FAKE_CI_LOGS="all CI checks passed - still monitoring until merged or closed"
+  FM_FAKE_GH_PR='{"mergeStateStatus":"UNKNOWN","state":"CLOSED","url":"https://github.com/o/r/pull/9"}'
+  out=$(run_crew_state "$d" logpr)
+  assert_contains "$out" "state: failed" "the url in the log is queried, and it says closed"
+  assert_not_contains "$out" "state: done" "a row with no PR column is not a task with no PR"
+  assert_contains "$out" "PR closed without merging" "the detail names the close"
+  pass "a PR url only in the status log is still queried"
+}
+
+# The other side of that lookup, and why `no-pr` may still read done. A scout has
+# no PR anywhere - not in a run record, not in its meta, not in its log - so its
+# `done:` is a statement that the work finished, not a landing claim, and there is
+# nothing the forge could have been asked.
+test_a_task_with_no_pr_anywhere_still_reads_done() {
+  reset_fakes
+  local d out
+  d=$(new_case no-pr-anywhere)
+  make_repo_on_branch "$d/wt" fm/feat-nopr
+  make_fakebin "$d" >/dev/null
+  fm_write_meta "$d/state/nopr.meta" "window=fm:fm-nopr" "worktree=$d/wt" "kind=scout" "harness=claude"
+  printf 'done: report ready in data/nopr/report.md\n' > "$d/state/nopr.status"
+  FM_FAKE_BUSY=0
+  arm_idle_record "$d/state" nopr
+  FM_FAKE_GH_CALL_FAILS=1
+  out=$(run_crew_state "$d" nopr)
+  assert_contains "$out" "state: done" "a task with no PR has no landing to confirm"
+  assert_contains "$out" "source: status-log" "the log is the only source a scout has"
+  assert_not_contains "$out" "state: unknown" "an absent PR is not an unread one"
+  pass "a task with no PR anywhere still reads done"
 }
 
 # The other half of that rule, and the reason it is a SPLIT rather than a blanket
@@ -2699,6 +2813,10 @@ test_checks_passed_keeps_ready_for_review_unless_the_pr_was_closed
 test_forge_confirmed_close_defeats_a_green_ci_log
 test_forge_confirmed_close_defeats_a_ci_ready_status_log
 test_a_transient_forge_non_answer_never_reads_done
+test_an_unconfirmed_answer_keeps_a_live_crew_working
+test_a_no_run_status_log_done_asks_the_forge
+test_a_pr_url_only_in_the_status_log_is_still_queried
+test_a_task_with_no_pr_anywhere_still_reads_done
 test_a_structural_forge_non_answer_still_reads_done
 test_absent_forge_client_is_structural_not_transient
 test_both_paths_agree_on_a_forge_confirmed_merge

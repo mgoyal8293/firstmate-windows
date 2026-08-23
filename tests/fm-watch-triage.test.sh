@@ -325,6 +325,29 @@ test_crew_absorb_class_classifier() {
   pass "crew_absorb_class: working/paused/none from one read; crew_is_paused and crew_is_provably_working agree"
 }
 
+# The watcher reaches crew_absorb_class once per crew, in a loop, with no
+# fm_run_timed wrapper and no aggregate budget above it. bin/fm-crew-state.sh's
+# own default bound is deliberately loose for the interactive single-task read,
+# so this caller must narrow it or one unreachable `gh` stalls the whole poll by
+# that default per crew - which got worse when the forge read widened to the
+# merge-waiting steady state rather than rare terminal moments.
+test_crew_absorb_class_narrows_the_forge_bound() {
+  local dir fakebin log bound
+  dir=$(make_case absorb-forge-bound); fakebin="$dir/fakebin"
+  log="$dir/forge-bound.log"; : > "$log"
+  export FM_CREW_STATE_BIN="$fakebin/fm-crew-state.sh"
+  export FM_FAKE_CREW_STATE_ENV_LOG="$log"
+  export FM_FAKE_CREW_STATE='state: working · source: run-step · validating (running)'
+  crew_absorb_class a >/dev/null
+  bound=$(head -1 "$log")
+  [ -n "$bound" ] \
+    || fail "crew_absorb_class left the forge bound at the reader's own default"
+  [ "$bound" = 3 ] \
+    || fail "crew_absorb_class must narrow the per-crew forge bound to 3s, got '$bound'"
+  unset FM_FAKE_CREW_STATE FM_FAKE_CREW_STATE_ENV_LOG FM_CREW_STATE_BIN
+  pass "crew_absorb_class narrows the per-crew forge bound"
+}
+
 # signal_crew_provably_working: a no-verb "signal:" wake is benign ONLY when EVERY
 # task it references is provably working; if any crew has stopped, or no task can be
 # resolved, it surfaces. Files map to ids by stripping .status / .turn-ended.
@@ -1932,6 +1955,7 @@ test_classifier_primitives
 test_crew_is_provably_working_classifier
 test_status_is_paused_classifier
 test_crew_absorb_class_classifier
+test_crew_absorb_class_narrows_the_forge_bound
 test_signal_crew_provably_working_classifier
 test_secondmate_status_signal_never_absorbed_classifier
 test_provably_working_signal_absorbed

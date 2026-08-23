@@ -49,10 +49,10 @@
 # That read is bounded by a share of the aggregate budget this scan still has
 # left (crew_state_forge_bound, at most a third of it) and is skipped entirely
 # when what remains cannot spare it. Skipping is safe because an unread merge
-# state is TRANSIENTLY unverified, and a transient non-answer never reads `done`
-# at all, let alone as a landing - so skipping costs this pass its receipt for
-# that child and nothing else, while a hung call would cost every remaining child
-# its scan.
+# state is an UNCONFIRMED answer, which no path resolves to `done` at all, let
+# alone to a landing - bin/fm-crew-state.sh's header owns that rule. So skipping
+# costs this pass its receipt for that child and nothing else, while a hung call
+# would cost every remaining child its scan.
 set -u
 export LC_ALL=C
 
