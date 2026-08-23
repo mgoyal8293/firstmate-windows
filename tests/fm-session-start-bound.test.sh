@@ -27,6 +27,59 @@ set -u
 # shellcheck source=/dev/null
 . "$ROOT/bin/fm-session-start-bound-lib.sh"
 
+BASE_PATH=${FM_TEST_BASE_PATH:-/usr/bin:/bin:/usr/sbin:/sbin}
+BOUND_TMP_ROOT=$(fm_test_tmproot fm-session-start-bound-tests)
+fm_git_identity fmtest fmtest@example.invalid
+
+# --- hermetic world for the end-to-end cases ---------------------------------
+#
+# The two cases in section 5 run the REAL bin/fm-session-start.sh, so they need
+# the same isolation the rest of the session-start suite uses
+# (tests/fm-session-start.test.sh): FM_ROOT_OVERRIDE pointed at a throwaway repo
+# and a stubbed PATH. Without both, FM_ROOT falls through to the live checkout,
+# so the worktree-tangle and default-branch checks inspect the branch under test,
+# and the deferred network stage - which a fresh home reaches, because it
+# acquires the lock - detaches a worker making real git and gh calls that outlive
+# the case. Only the environment is stubbed; the script itself runs end to end.
+
+# new_world <name>: a real, throwaway git repo on `main` to use as
+# FM_ROOT_OVERRIDE, plus an empty FM_HOME and a fakebin.
+# Echoes "<root-dir>|<home-dir>|<fakebin>".
+new_world() {
+  local name=$1 w root home fakebin
+  w="$BOUND_TMP_ROOT/$name"
+  root="$w/root"
+  home="$w/home"
+  fakebin="$w/fakebin"
+  mkdir -p "$home/state" "$home/data" "$home/config" "$home/projects" "$fakebin"
+  git init -q -b main "$root" || return 1
+  git -C "$root" commit -q --allow-empty -m init || return 1
+  printf '%s|%s|%s\n' "$root" "$home" "$fakebin"
+}
+
+# make_fake_toolchain <fakebin>: every tool the startup detects, present and
+# answering, so nothing in the digest depends on what this host happens to have
+# installed. Mirrors fm-session-start.test.sh's fixture.
+make_fake_toolchain() {
+  local fakebin=$1
+  fm_fake_exit0 "$fakebin" tmux node chrome-devtools-axi gh treehouse
+  fm_fake_version_tool "$fakebin" lavish-axi FM_FAKE_LAVISH_AXI_VERSION 0.1.46
+  fm_fake_version_tool "$fakebin" gh-axi FM_FAKE_GH_AXI_VERSION 0.1.29
+  fm_fake_version_tool "$fakebin" no-mistakes FM_FAKE_NO_MISTAKES_VERSION \
+    'no-mistakes version v1.31.2 (fake) 2026-06-27T00:02:18Z'
+}
+
+# run_session_start <home> <root> <fakebin> - drops every harness env marker so a
+# local claude/pi/grok session cannot leak into the fixture, exactly as
+# tests/fm-session-start.test.sh does.
+run_session_start() {
+  local home=$1 root=$2 fakebin=$3
+  shift 3
+  env -u CLAUDECODE -u PI_CODING_AGENT -u FM_PI_HARNESS -u GROK_AGENT \
+    FM_HOME="$home" FM_ROOT_OVERRIDE="$root" PATH="$fakebin:$BASE_PATH" \
+    "$@" bash "$ROOT/bin/fm-session-start.sh" 2>&1
+}
+
 # --- 1. the platform arm on the default bound --------------------------------
 
 test_windows_platforms_raise_the_default_bound() {
@@ -188,14 +241,14 @@ test_render_is_quiet_when_it_has_nothing_to_say() {
 # --- 5. end to end: the real script, really truncated -----------------------
 
 test_truncated_startup_names_the_stage_and_attributes_its_time() {
-  local tmp home out
-  tmp=$(fm_test_tmproot) || fail "could not create a temp root"
-  home="$tmp/home"
-  mkdir -p "$home/data" "$home/state" "$home/config" "$home/projects"
+  local world root home fakebin out
+  world=$(new_world truncated) || fail "could not build a world"
+  root=${world%%|*}; world=${world#*|}
+  home=${world%%|*}; fakebin=${world#*|}
+  make_fake_toolchain "$fakebin"
   # A 1s bound truncates any real digest, so this exercises the actual banner
   # path rather than a reconstruction of it.
-  out=$(FM_HOME="$home" FM_SESSION_START_TIMEOUT=1 \
-    bash "$ROOT/bin/fm-session-start.sh" 2>&1) \
+  out=$(run_session_start "$home" "$root" "$fakebin" FM_SESSION_START_TIMEOUT=1) \
     || fail "session start must still exit 0 when it truncates"
   assert_contains "$out" 'STARTUP TRUNCATED' 'a startup over its bound must say so loudly'
   assert_contains "$out" 'HIT ITS 1s RUNTIME BOUND' 'the banner must report the bound that was actually in force'
@@ -210,25 +263,42 @@ test_truncated_startup_names_the_stage_and_attributes_its_time() {
   # tasks-axi probe - is four subprocesses and every library prologue, and it
   # used to sit outside every stage, so a truncation inside it could only report
   # "unknown" and list no lost stages. That window is milliseconds on Linux and
-  # seconds under MSYS, which is exactly where it had to be named.
-  assert_contains "$out" 'startup' 'the pre-lock setup window must be attributable, not reported as unknown'
+  # seconds under MSYS, which is exactly where it had to be named. Asserted as a
+  # rendered row with its own offset and elapsed figure, not as the bare word:
+  # "startup" appears in the stage list the banner prints either way, so a
+  # substring match would pass against a window that is still unattributed.
+  printf '%s\n' "$out" | grep -qE 'startup +start=\+[0-9]+ +elapsed=[0-9]+' \
+    || fail "the pre-lock setup window must be attributed with its own elapsed time, got: $out"
   pass "fm-session-start.sh: a truncated startup names the stage it died in AND attributes its elapsed time per stage"
 }
 
 test_every_stage_prints_its_header_before_the_stage_runs() {
-  local tmp home out sect
-  tmp=$(fm_test_tmproot) || fail "could not create a temp root"
-  home="$tmp/home"
-  mkdir -p "$home/data" "$home/state" "$home/config" "$home/projects"
-  out=$(FM_HOME="$home" bash "$ROOT/bin/fm-session-start.sh" 2>&1) \
+  local world root home fakebin out sect
+  world=$(new_world headers) || fail "could not build a world"
+  root=${world%%|*}; world=${world#*|}
+  home=${world%%|*}; fakebin=${world#*|}
+  make_fake_toolchain "$fakebin"
+  # The bound is pinned rather than inherited so a loaded runner cannot turn
+  # this case into a truncation reported as a missing header. 300s is the same
+  # number the Windows arm resolves to, and this hermetic world finishes in
+  # seconds, so it is headroom and not a wait.
+  out=$(run_session_start "$home" "$root" "$fakebin" FM_SESSION_START_TIMEOUT=300) \
     || fail "session start must exit 0"
+  # Matched on the banner's own line rather than the words "STARTUP TRUNCATED",
+  # which the READ-ONCE CONTRACT section quotes in prose on a completed run.
+  printf '%s\n' "$out" | grep -q 'HIT ITS .* RUNTIME BOUND' \
+    && fail "the digest truncated, so a missing header below would be a truncation and not a defect"
   # A stage that runs without first printing its header is a silent wait that
-  # reads as a wedge, and leaves a truncation with no printed context.
+  # reads as a wedge, and leaves a truncation with no printed context. Every
+  # header the digest owns is listed: LOCK through NEXT STEP is the whole
+  # printed contract, and the tenth stage - `startup` - is the pre-lock window
+  # that by construction runs before any header can be printed, so it is
+  # asserted by the truncation case above instead.
   for sect in 'LOCK' 'BOOTSTRAP' 'WAKE QUEUE' 'SUPERVISION INSTRUCTIONS' \
               'READ-ONCE CONTRACT' 'FLEET STATE' 'NETWORK CHECKS' 'CONTEXT' 'NEXT STEP'; do
     assert_contains "$out" "$sect" "stage header '$sect' must be printed"
   done
-  pass "fm-session-start.sh: every one of the nine stages prints a header, so a long stage is attributable rather than silent"
+  pass "fm-session-start.sh: every one of the nine printed stages emits a header, so a long stage is attributable rather than silent"
 }
 
 test_windows_platforms_raise_the_default_bound

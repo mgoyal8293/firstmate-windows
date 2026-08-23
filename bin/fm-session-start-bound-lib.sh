@@ -118,12 +118,15 @@ fm_session_stage_mark() {  # <file> <stage>
 # The most recent stage recorded in <file>, or nothing when there is none. This
 # is what the truncation banner names as the stage the digest died in.
 fm_session_stage_last() {  # <file>
-  local file=${1:-} line=
+  local file=${1:-} last=
   [ -n "$file" ] && [ -r "$file" ] || return 0
-  while IFS= read -r line || [ -n "$line" ]; do
-    case "$line" in '') continue ;; esac
-    printf '%s\n' "${line%%	*}"
-  done < "$file" | tail -n 1
+  # `tail` answers this directly, and a command substitution around it handles a
+  # final line with no trailing newline. Reading the file in a shell loop and
+  # piping it to `tail` would fork a subshell on top of the same `tail` exec, on
+  # the one path whose cost is its subprocess count.
+  last=$(tail -n 1 "$file" 2>/dev/null) || return 0
+  [ -n "$last" ] || return 0
+  printf '%s\n' "${last%%	*}"
 }
 
 # Per-stage elapsed times for a truncated run. <budget> bounds the final stage,

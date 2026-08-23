@@ -268,12 +268,28 @@ stage() {  # <stage-name>: breadcrumb for the parent's truncation banner
   fm_session_stage_mark "$FM_SESSION_START_STAGE_FILE" "$1"
 }
 
+# Sourced first, ahead of every other library, because `stage startup` below
+# calls fm_session_stage_mark from this file and the mark has to precede the
+# rest of the prologue for the window to be covered at all. Nothing forces it
+# later: this library depends on no other fm library.
+# shellcheck source=bin/fm-session-start-bound-lib.sh
+. "$SCRIPT_DIR/fm-session-start-bound-lib.sh"
+
+# Marked BEFORE the harness probe, the eight library sources and the tasks-axi
+# compatibility probe below, because that window is real work - four subprocesses
+# and every library prologue - and it used to sit outside every stage. A
+# truncation inside it could only report the stage as "unknown" and list no lost
+# stages at all, which is precisely the case where the banner explains least. It
+# is invisible on Linux, where the window is milliseconds, and seconds long under
+# MSYS. The parent reaches this line too, where it is a no-op: stage() returns
+# early while FM_SESSION_START_STAGE_FILE is unset, which is what distinguishes
+# the parent from the bounded child.
+stage startup
+
 # shellcheck source=bin/fm-timeout-lib.sh
 . "$SCRIPT_DIR/fm-timeout-lib.sh"
 # shellcheck source=bin/fm-session-lock-lib.sh
 . "$SCRIPT_DIR/fm-session-lock-lib.sh"
-# shellcheck source=bin/fm-session-start-bound-lib.sh
-. "$SCRIPT_DIR/fm-session-start-bound-lib.sh"
 
 if [ -z "${FM_SESSION_START_STAGE_FILE:-}" ]; then
   # An explicit FM_SESSION_START_TIMEOUT wins; otherwise the default is per
@@ -331,15 +347,6 @@ if [ -z "${FM_SESSION_START_STAGE_FILE:-}" ]; then
   rm -f "$SESSION_START_STAGE_FILE" 2>/dev/null || true
   exit 0
 fi
-
-# Marked BEFORE the harness probe, the seven library sources and the tasks-axi
-# compatibility probe below, because that window is real work - four subprocesses
-# and every library prologue - and it used to sit outside every stage. A
-# truncation inside it could only report the stage as "unknown" and list no lost
-# stages at all, which is precisely the case where the banner explains least. It
-# is invisible on Linux, where the window is milliseconds, and seconds long under
-# MSYS.
-stage startup
 
 PRIMARY_HARNESS=$("$SCRIPT_DIR/fm-harness.sh" 2>/dev/null || printf unknown)
 
