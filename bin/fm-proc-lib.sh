@@ -25,6 +25,29 @@
 # LC_ALL pinning elsewhere in bin/, never a write to fleet state.
 
 # ---------------------------------------------------------------------------
+# Source guard
+# ---------------------------------------------------------------------------
+# This file is sourced from inside FUNCTIONS on poll paths - bin/fm-wake-lib.sh,
+# bin/fm-cursor-lib.sh and bin/fm-session-lock-lib.sh each re-source it per
+# record - so one session start sourced it 42 times and paid this prologue's
+# `uname` fork every time. Every top-level statement below is idempotent: two
+# platform strings and fm_platform_enable_native_symlinks, which returns early
+# when the mode is already set. A repeat source in the SAME process is therefore
+# pure cost, and on MSYS that cost is about 42 ms each.
+#
+# The key is the platform SEAM, not a bare "already loaded" flag. A test that
+# changes FM_PLATFORM_UNAME_OVERRIDE has to get a fresh resolution or the seam
+# stops working and the Windows arms silently go untested - which would trade a
+# fork for a vacuous test suite. bin/fm-path-lib.sh already guards its own source
+# of this file on the same key.
+if [ "${FM_PROC_LIB_SEAM+set}" = set ] \
+  && [ "$FM_PROC_LIB_SEAM" = "${FM_PLATFORM_UNAME_OVERRIDE-}" ] \
+  && command -v fm_proc_field >/dev/null 2>&1; then
+  return 0
+fi
+FM_PROC_LIB_SEAM=${FM_PLATFORM_UNAME_OVERRIDE-}
+
+# ---------------------------------------------------------------------------
 # Platform identity
 # ---------------------------------------------------------------------------
 
@@ -45,9 +68,9 @@ FM_PROC_UNAME_S="${FM_PLATFORM_UNAME_OVERRIDE:-$(uname -s 2>/dev/null || echo un
 # file exists to prevent.
 # Only the seam being set can make the two differ, and that happens in tests
 # alone, so the second `uname` is forked only there: with the seam unset the line
-# above already holds the real host value. This file has no source guard and
-# bin/fm-wake-lib.sh re-sources it from inside functions on a poll path, so a
-# second unconditional fork here would be paid per record per poll.
+# above already holds the real host value. Keeping it conditional still matters
+# with the source guard above in place, because the guard is what makes this
+# prologue run once per PROCESS - and a session start runs a dozen processes.
 if [ -n "${FM_PLATFORM_UNAME_OVERRIDE:-}" ]; then
   FM_PROC_HOST_UNAME_S="$(uname -s 2>/dev/null || echo unknown)"
 else

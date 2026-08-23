@@ -76,7 +76,11 @@ FM_HARNESS_IS_CLAUDE=0
 fm_harness_process_matches() {  # <comm> <args>
   local comm=$1 args=$2 base argv0 name
   FM_HARNESS_IS_CLAUDE=0
-  base=$(basename -- "$comm")
+  # `${comm##*/}` rather than `$(basename -- ...)`: this is called once per
+  # process while walking the ancestry, which a session start does repeatedly. A
+  # process `comm` never carries a trailing slash, the only input where the two
+  # forms differ.
+  base=${comm##*/}
   if printf '%s' "$base" | grep -qE "$FM_HARNESS_RE"; then
     case "$base" in *claude*) FM_HARNESS_IS_CLAUDE=1 ;; esac
     return 0
@@ -134,7 +138,10 @@ fm_harness_ancestry_pids() {
     elif [ "$extending" -eq 1 ]; then
       break
     fi
-    pid=$(fm_proc_field "$pid" ppid | tr -d ' ')
+    # The pipe to `tr` cost a subshell AND a `tr` exec on every step of every
+    # ancestry walk; stripping whitespace is a parameter expansion.
+    pid=$(fm_proc_field "$pid" ppid)
+    pid=${pid//[[:space:]]/}
     [ -n "$pid" ] && [ "$pid" -gt 1 ] || break
   done
   [ "$printed" -eq 1 ]

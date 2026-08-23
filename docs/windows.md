@@ -69,6 +69,24 @@ Those marks are shell builtins reading `EPOCHREALTIME` and spawn nothing: the pa
 The script's own setup is now a named stage too, because it was outside every stage before and a truncation inside it could only report `unknown` and list no lost stages; on Windows that window is 9.9 s against 312 ms on Linux, which is the first thing the attribution turned up.
 `tests/fm-session-start-bound.test.sh` drives the Windows arm from a POSIX runner through `FM_PLATFORM_UNAME_OVERRIDE`, the same seam `bin/fm-proc-lib.sh` uses, which is the only way that arm is covered by CI at all.
 
+## Subprocess count is the Windows cost, so the session-start path spawns fewer
+
+Raising the bound bought margin; it did not make the work cheaper.
+A session start on an empty home - no tasks, no projects, an absent backlog - created 1012 subprocesses on the blocking path, which at the 42 ms a fork costs under MSYS is most of that 72 s floor.
+[`verification/session-start-fork-profile.md`](verification/session-start-fork-profile.md) records the method, the ranked profile and the before/after counts; the reductions bring that to 817, a 19.6% cut, with 127 more removed from the concurrent network stage that shares the same libraries.
+
+The profile's own finding is that there was no single hot loop.
+The dominant cost was **libraries re-sourced from inside functions on poll paths**, each re-running its prologue: 158 library source events per session start, with `bin/fm-proc-lib.sh` alone sourced 42 times and paying its `uname` every time.
+That file now carries a source guard keyed on `FM_PLATFORM_UNAME_OVERRIDE` rather than on a bare "already loaded" flag, because everything at its top level is idempotent but the platform seam must still re-resolve - a guard that skipped a seam change would silently make every Windows arm in `../tests/fm-windows-portability.test.sh` test the host platform instead and still report ok.
+The remaining reductions replace exec'd helpers with the parameter expansions that answer the same question - `${p%/*}` and `${p##*/}` for `dirname` and `basename`, `[ -r f ] && x=$(<f)` for `$(cat f)` - which is the form [`../bin/fm-path-lib.sh`](../bin/fm-path-lib.sh) already used and documented for this exact reason.
+
+Two counted facts shape how those are written, because both are easy to get backwards.
+A command substitution forks even around a shell builtin, so `$(...)` is never free and wrapping a helper in one gives the fork back.
+And `$(<f)` is free only without a redirection attached: `$(<f 2>/dev/null)` costs two forks per call rather than zero, because the redirection defeats bash's special case, and it does not even suppress the error - so an unreadable file is handled by testing `[ -r f ]` first.
+
+This is a Windows-motivated fix to portable code, so the count is measured on Linux and the platform only changes what a fork costs.
+A Linux timing run would show nothing.
+
 ## Security note: the private-file mode assertion
 
 `fm_pr_private_file_valid` normally asserts an artifact's exact mode, so a

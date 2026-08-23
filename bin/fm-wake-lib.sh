@@ -1,7 +1,12 @@
 #!/usr/bin/env bash
 # Shared durable wake queue and portable lock helpers.
 
-FM_WAKE_LIB_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# `${BASH_SOURCE[0]%/*}` rather than `$(dirname ...)`: this prologue runs on
+# every source of this file, and a session start sources it thirteen times.
+# bin/fm-path-lib.sh uses the same form for the same reason.
+FM_WAKE_LIB_DIR=${BASH_SOURCE[0]%/*}
+[ "$FM_WAKE_LIB_DIR" = "${BASH_SOURCE[0]}" ] && FM_WAKE_LIB_DIR=.
+FM_WAKE_LIB_DIR="$(cd "$FM_WAKE_LIB_DIR" && pwd)"
 # Sourced FIRST: fm_lock_try_create below builds every lock in the fleet with a
 # bare `ln -s`, and on default Git for Windows that resolves to a recursive COPY
 # which readlink can never validate, so every lock spins forever behind
@@ -13,7 +18,10 @@ FM_WAKE_LIB_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 . "$FM_WAKE_LIB_DIR/fm-proc-lib.sh"
 # shellcheck source=bin/fm-path-lib.sh
 . "$FM_WAKE_LIB_DIR/fm-path-lib.sh"
-FM_WAKE_DEFAULT_ROOT="$(cd "$FM_WAKE_LIB_DIR/.." && pwd)"
+# FM_WAKE_LIB_DIR is already absolute and normalised by the `pwd` above, so its
+# parent is a string operation rather than another subshell.
+FM_WAKE_DEFAULT_ROOT=${FM_WAKE_LIB_DIR%/*}
+[ -n "$FM_WAKE_DEFAULT_ROOT" ] || FM_WAKE_DEFAULT_ROOT=/
 FM_ROOT="${FM_ROOT_OVERRIDE:-${FM_ROOT:-$FM_WAKE_DEFAULT_ROOT}}"
 FM_HOME="${FM_HOME:-${FM_ROOT_OVERRIDE:-$FM_ROOT}}"
 STATE="${FM_STATE_OVERRIDE:-${STATE:-$FM_HOME/state}}"
@@ -23,8 +31,13 @@ FM_LOCK_STALE_AFTER="${FM_LOCK_STALE_AFTER:-2}"
 # Resolved once at source time: fm_path_mtime runs inside 0.2s confirm and 0.5s
 # attach polls, and forking uname per call is a measurable cost on the platform
 # (Git Bash/MSYS) that already pays the highest fork price.
-_FM_UNAME=$(uname 2>/dev/null || echo unknown)
-mkdir -p "$STATE"
+# bin/fm-proc-lib.sh, sourced above, already read this. FM_PROC_HOST_UNAME_S is
+# the REAL host value that deliberately ignores the platform test seam, which is
+# what this variable held before, so the Darwin arms below are unchanged.
+_FM_UNAME=${FM_PROC_HOST_UNAME_S:-unknown}
+# Tested first because this runs on every source, and after the first one the
+# directory always exists.
+[ -d "$STATE" ] || mkdir -p "$STATE"
 
 fm_current_pid() {
   printf '%s\n' "${BASHPID:-$$}"
@@ -290,8 +303,14 @@ fm_lock_role() {
 
 fm_lock_abs_path() {
   local path=$1 dir base
-  dir=$(dirname "$path")
-  base=$(basename "$path")
+  # Every lock acquisition calls this, and a session start acquires fourteen, so
+  # the two exec'd helpers here were paid twenty-eight times. The `cd`+`pwd -P`
+  # subshell stays: it is what resolves symlinked parents, which no string
+  # operation can do.
+  dir=${path%/*}
+  [ "$dir" = "$path" ] && dir=.
+  [ -n "$dir" ] || dir=/
+  base=${path##*/}
   dir=$(cd "$dir" 2>/dev/null && pwd -P) || return 1
   printf '%s/%s\n' "$dir" "$base"
 }
@@ -306,7 +325,13 @@ fm_lock_prepare_owner() {
   local ownerdir=$1 mypid back
   mypid=${BASHPID:-$$}
   printf '%s\n' "$mypid" > "$ownerdir/pid" 2>/dev/null || return 1
-  back=$(cat "$ownerdir/pid" 2>/dev/null || true)
+  # `[ -r ] && $(<f)` rather than `$(cat f)`: bash reads the file itself for the
+  # `$(<f)` form with no subprocess at all, but only WITHOUT a redirection on it,
+  # so the unreadable case is handled by the test instead of by `2>/dev/null`.
+  # Every lock acquisition reads this file back, and a session start acquires
+  # fourteen locks.
+  back=
+  [ -r "$ownerdir/pid" ] && back=$(<"$ownerdir/pid")
   [ "$back" = "$mypid" ]
 }
 
@@ -378,7 +403,8 @@ fm_lock_claim() {
     fm_lock_discard_owner "$ownerdir"
     return 1
   fi
-  back=$(cat "$ownerdir/pid" 2>/dev/null || true)
+  back=
+  [ -r "$ownerdir/pid" ] && back=$(<"$ownerdir/pid")
   if [ "$back" != "$mypid" ]; then
     fm_lock_discard_owner "$ownerdir"
     return 1
@@ -831,7 +857,8 @@ fm_lock_release() {
   if [ -L "$lockdir" ]; then
     ownerdir=$(fm_lock_link_owner "$lockdir" 2>/dev/null || true)
     [ -n "$ownerdir" ] || return 0
-    pid=$(cat "$ownerdir/pid" 2>/dev/null || true)
+    pid=
+    [ -r "$ownerdir/pid" ] && pid=$(<"$ownerdir/pid")
     [ "$pid" = "$current" ] || return 0
     fm_lock_points_to_owner "$lockdir" "$ownerdir" || return 0
     rm -f "$lockdir" 2>/dev/null || return 0

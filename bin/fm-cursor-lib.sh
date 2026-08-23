@@ -39,8 +39,12 @@
 # adapter-local composer normalizer would be the second copy that owner exists
 # to prevent.
 
+# `${BASH_SOURCE[0]%/*}` rather than `$(dirname ...)`: this file is re-sourced
+# per record on a poll path, so the prologue's cost is paid per record.
+_FM_CURSOR_LIB_DIR=${BASH_SOURCE[0]%/*}
+[ "$_FM_CURSOR_LIB_DIR" = "${BASH_SOURCE[0]}" ] && _FM_CURSOR_LIB_DIR=.
 # shellcheck source=bin/fm-proc-lib.sh
-. "$(dirname -- "${BASH_SOURCE[0]}")/fm-proc-lib.sh"
+. "$_FM_CURSOR_LIB_DIR/fm-proc-lib.sh"
 
 # Bounded probe budget in seconds. Cursor's --help is local and returns
 # immediately; the bound exists so a hung or interactive impostor cannot wedge
@@ -227,7 +231,11 @@ fm_cursor_process_matches() {  # <comm> <args> [argv0]
   local comm=$1 argv0=${3:-} base
   [ -n "$comm" ] || [ -n "$argv0" ] || return 1
   argv0=${argv0:-$comm}
-  base=$(basename -- "$comm")
+  # `${comm##*/}` rather than `$(basename -- ...)`: this runs once per candidate
+  # process on a poll path. A process `comm` is a command name or an executable
+  # path and never carries a trailing slash, which is the only input where the
+  # two forms disagree.
+  base=${comm##*/}
   base=${base#-}
   case "$base" in
     cursor-agent) return 0 ;;
