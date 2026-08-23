@@ -14,7 +14,7 @@ Branch: `fm/fm-crew-state-stale-run-masks-live`.
 
 ```
 $ bash tests/fm-crew-state.test.sh | grep -c '^ok'
-91
+96
 $ bash tests/fm-inactive-reconcile.test.sh 2>/dev/null | grep -c '^ok'
 17
 $ bash tests/fm-fleet-snapshot-view.test.sh 2>/dev/null | grep -c '^ok'
@@ -71,7 +71,7 @@ Every row must fail, and must fail on the named assertion.
 | An UNCONFIRMED answer never reads done on the terminal path | drop the unconfirmed arm from `fm_crew_terminal_verdict` | `test_a_transient_forge_non_answer_never_reads_done` | fails: `unexpected: 'state: done'` |
 | Nor on the green-checks path, which reports the crew's proven liveness instead | return `unknown` from the unconfirmed arm of `fm_crew_done_claim_verdict` | `test_an_unconfirmed_answer_keeps_a_live_crew_working` | fails: `unexpected: 'state: unknown'` |
 | An UNANSWERABLE answer still reads done, because no read will ever clear it | class the unanswerable words as unconfirmed | `test_a_structural_forge_non_answer_still_reads_done` | fails: `missing: 'state: done'` |
-| A task with NO PR anywhere still reads done, having no landing to claim | class `no-pr` as unconfirmed | `test_a_task_with_no_pr_anywhere_still_reads_done` | fails: `missing: 'state: done'` |
+| A SCOUT with no PR anywhere still reads done, having no landing to claim by construction | class `no-pr` as unconfirmed | `test_a_task_with_no_pr_anywhere_still_reads_done` | fails: `missing: 'state: done'` |
 | A no-run status-log `done:` asks the forge like every other done claim | emit the log verb without consulting `fm_crew_reported_done_verdict` | `test_a_no_run_status_log_done_asks_the_forge` | fails: `missing: 'state: failed'` |
 | A PR url recorded only in the status log is still found and queried | drop the status-log arm of `crew_pr_url` | `test_a_pr_url_only_in_the_status_log_is_still_queried` | fails: `missing: 'state: failed'` |
 | The watch-triage caller narrows the per-crew forge bound | drop the `FM_CREW_STATE_FORGE_TIMEOUT` `crew_absorb_class` passes | `test_crew_absorb_class_narrows_the_forge_bound` (`tests/fm-watch-triage.test.sh`) | fails: `crew_absorb_class left the forge bound at the reader's own default` |
@@ -80,8 +80,23 @@ Every row must fail, and must fail on the named assertion.
 | And on an open PR with no ci evidence | give the no-steps path its own done arm whatever the forge said | `test_both_paths_agree_on_an_open_pr_with_no_ci_evidence` | fails: `missing: 'state: unknown'` |
 | The per-child forge bound is at most a third of the scan's remaining budget | pass the whole remaining budget as the bound | `test_forge_bound_is_derived_from_the_remaining_budget` (`tests/fm-inactive-reconcile.test.sh`) | fails: `forge bound exceeds a third of the full 10s budget: '10\|'` |
 | A budget too small to spare the read skips it instead of shrinking it | take the bound arm unconditionally (`if true`) | the same case | fails: `a 2s budget cannot spare a whole second of forge read: '0\|'` |
+| A failed branch attribution discards the run record, so a SIBLING task's PR url can never settle this crew | restore `RUN_SOURCE=full` at initialisation and drop the `RUN_OUT`/`RUN_OBJECT` clearing in the mismatch arm | `test_a_sibling_runs_pr_url_never_settles_this_crew` | fails: `unexpected: 'PR merged'`, on the line `state: done · source: status-log · implemented, ready to validate, PR merged` |
+| A SHIP task with no PR anywhere is never done, because a ship task exists to land a branch | settle every kind the scout way, returning `no-pr` from every arm of `fm_crew_no_pr_class` | `test_a_ship_task_with_no_pr_anywhere_is_not_done` | fails: `unexpected: 'state: done'` |
+| A TERMINATED checks-passed run does not borrow the live crew's unconfirmed answer | hardcode `working` in `fm_crew_checks_green_verdict` again, ignoring `<liveness>` | `test_a_terminated_checks_passed_run_does_not_borrow_a_live_crews_answer` | fails: `unexpected: 'state: working'` |
+| One invocation makes at most one outbound forge read | drop the memo, letting `crew_ask_forge` re-read on every call | `test_one_invocation_makes_at_most_one_forge_read` | fails: `one invocation made 2 forge reads, and every caller's bound assumes 1` |
+| The merge state the forge read already paid for is reported on the green-checks path | return the done arm of `fm_crew_done_claim_verdict` without its forge suffix | `test_an_open_pr_names_its_merge_state_on_the_checks_green_path` | fails: `missing: 'PR still open'` |
 
-47 of 47, re-derived in full on 2026-08-23 - once per fix round since the decay was found.
+52 of 52, re-derived in full on 2026-08-23 - once per fix round since the decay was found.
+
+The last five rows were added by the round that closed the sibling-PR leak, the kind-blind `no-pr` settlement, the borrowed liveness claim and the duplicated forge read.
+Three of them are paired with a case that must STAY GREEN under the same mutation, and that pairing is the point rather than a courtesy: each fix narrows a rule that a previous ruling had deliberately widened, so a mutation that only shows the new case failing cannot show the old ruling survived.
+Under the kind-blind mutation `test_a_task_with_no_pr_anywhere_still_reads_done` still passes, so the SCOUT exemption is intact and only the ship case moved.
+Under the hardcoded-`working` mutation `test_an_unconfirmed_answer_keeps_a_live_crew_working` still passes, so a demonstrably live crew still reads `working` on an unconfirmed answer - reproduced failure (3) is not reintroduced, and what was removed is only the TERMINATED run's ability to borrow that answer.
+
+The one-forge-read row is the only row in this table that asserts a COST rather than a verdict, and it needs a different kind of assertion for a reason worth recording.
+Every other guard here changes what the reader says; this one changes only how many times it asks, and the answer is byte-identical either way.
+No assertion on the output line can see it, which is precisely how the duplicate survived: the suite's fake `gh` answered the same on every call, so the second call was invisible.
+The case counts invocations through `FM_FAKE_GH_CALL_LOG` instead, and its fixture is built to REACH the overlap - a checks-passed run whose unconfirmed read leaves it `working`, plus a ci-ready status log - because a fixture that takes only one done-capable path would pass without the memo and prove nothing.
 
 The first two rows share a case deliberately: both guards sit on the runs-list path, and the case needs both to hold - one stops the dead run being reached, the other makes the live run usable.
 Four later pairs share a mutation rather than a case, because one gate covers several distinct ways for the evidence to be absent and each way needs its own case to show it is covered.
@@ -181,7 +196,9 @@ A confirmed close settles `failed`; every other answer keeps the ready-for-revie
 
 The cost changed and is recorded honestly.
 The forge read used to happen only on a terminal pass, so a crew monitoring a green PR made no forge call; it now costs one bounded `gh pr view` per heartbeat while that crew waits.
-The paths that can say `done` are mutually exclusive, so no single invocation makes two calls.
+No single invocation makes two calls, and the reason is now the MEMO rather than the paths.
+They were claimed to be mutually exclusive and are not: a `checks-passed` run whose read comes back unconfirmed stays `working`, and a `working` run with a ci-ready status log then falls into `emit_checks_green`, which asked a second time.
+That doubled every bound derived from this figure - the snapshot's recorded worst case of 3 tasks x 3s became 18s - so `crew_ask_forge` caches the answer and the bound is structural instead of an emergent property of control flow nobody re-checks.
 Which paths call the forge is decided by the path, not by the word it produces: `bin/fm-crew-state.sh`'s header owns that invariant, and states why a `failed` or an `unknown` is often the RESULT of a call rather than evidence that none was made.
 That is the price of the invariant, and it is the right way round: the read is cheap and bounded, while presenting abandoned work to a captain as a success is not.
 
@@ -200,9 +217,18 @@ An UNANSWERABLE answer is `unqueryable <provider>` or `unparseable`: this host h
 No read will ever answer, so refusing `done` would refuse it forever: every GitLab project and every host without `gh` would permanently lose both the ready-for-review signal and any terminal receipt.
 That is a worse failure than the one the unconfirmed rule guards against - the same failure the amended criterion above already rejected once - so the run's own evidence still settles `done` there, with the detail naming the missing confirmation.
 
-`no-pr` is the third answer and it settles like `unanswerable`, but for a different reason worth keeping distinct: there is no PR at all, so there is no landing to confirm and a `done` here is not a landing claim.
-It is reached only after `crew_pr_url` has looked in the run record, the coarse row, the task meta and the status log, so it means "this task has no PR" rather than "this reader did not look".
+`no-pr` is the third answer, and it is reached only after `crew_pr_url` has looked in the run record, the coarse row, the task meta and the status log, so it means "this task has no PR" rather than "this reader did not look".
 That distinction was previously blurred: a coarse runs-list row never carries a PR url, so a crew on that path answered "no PR to ask about" while the very status log the same invocation had already read named the PR, and `bin/fm-inactive-reconcile.sh` then dug that url out to show the captain beside the word.
+
+What an absent PR LICENSES is a second question, and it is settled by the RECORDED TASK KIND rather than by the absent url.
+The url is missing in every case, so it cannot possibly tell those cases apart, and only the kind states whether a PR was ever owed.
+A SCOUT settles like `unanswerable`: it has no landing to claim by construction, its deliverable is a report, and a `done` there is not a landing claim at all.
+A SHIP task does not, because a ship task exists to land a branch, so "no PR" is not an exemption from the landing question - it is that question answered badly, and it is the single place a `done` is most certainly wrong.
+`fm_crew_no_pr_class` owns the split and spells out every recorded kind, with the unrecognized arm refusing `done` rather than falling through to the permissive one: a kind this reader has never heard of is not evidence that no landing was expected.
+
+That hole was one sentence wide and had been written down.
+`fm_crew_forge_answer_class` said the case "is a scout, or a task that has not opened a PR yet" - two situations named in one breath and then given one answer - so a ship crew rode the scout's exemption in code and in prose.
+The rendering carried the same conflation: `no-pr` fell through to the transient arm of both detail helpers and printed "PR state unverified", which tells a reader to wait for a state that will never arrive, while the `unrecorded` arms those helpers carried were reachable from nowhere.
 
 The rules are one idea, which is why they share an owner: withhold a verdict exactly as long as an answer could still arrive, and no longer.
 
@@ -222,7 +248,28 @@ Withholding a terminal claim and reporting liveness are DIFFERENT STATEMENTS, an
 "I cannot confirm this landed" does not imply "I know nothing about this crew".
 
 So an unconfirmed answer on the green-checks path reports `working`, with the merge state named in the detail: the crew is monitoring its PR, which is exactly what it is doing.
-`fm_crew_done_claim_verdict` takes that word as a parameter for precisely this reason, and the two entry points differ in nothing else - `fm_crew_checks_green_verdict` passes `working` because liveness is a precondition of every route into it, and `fm_crew_reported_done_verdict` passes `unknown` because there is no run there and so nothing to be live.
+`fm_crew_done_claim_verdict` takes that word as a parameter for precisely this reason, and the two entry points differ in nothing else - `fm_crew_reported_done_verdict` passes `unknown` because there is no run there and so nothing to be live.
+
+`fm_crew_checks_green_verdict` was written to pass `working` unconditionally, on the claim that "liveness is a precondition of every route into it".
+That claim was true of two routes and false of the third.
+The ci-log-green override and `emit_checks_green` both sit inside `[ "$RUN_STATE" = working ]`, but the `outcome: checks-passed` arm fires on the outcome word alone - and `fm_crew_terminality` classifies ANY non-empty outcome as terminal - so a run that had genuinely FINISHED reported `state: working` on every unconfirmed read, with no active step and no non-terminal status behind the claim.
+Liveness is now an argument rather than an assumption, and `crew_liveness` in `bin/fm-crew-state.sh` establishes it from the evidence the record carries: the daemon's own `active_steps` table first, then a non-terminal `status:` word, with an ABSENT status counting as no evidence rather than as non-terminal.
+
+The correction above is NOT withdrawn by that, and the falsification row is paired with a case that proves it: under the mutation that hardcodes `working` again, `test_an_unconfirmed_answer_keeps_a_live_crew_working` still passes.
+A demonstrably live crew still reads `working` on an unconfirmed answer.
+What was removed is only the terminated run's ability to borrow that answer, and where it lands is `unknown` - the governing preference wherever the evidence does not settle it.
+
+## Ruled: a failed attribution discards the run record
+
+The forge read on the status-log `done:` path is an accepted ruling, and it had a cost that was not visible until it was paid, so it is recorded here rather than quietly patched.
+
+`axi status` is REPO-scoped, and the model already says a `branch:` mismatch means THIS TASK HAS NO RUN, never "use that one".
+The record was nonetheless left in place after a failed attribution: `RUN_SOURCE` was initialised to `full` BEFORE any ownership test ran, so a mismatch left it saying `full` over another task's record, and `crew_pr_url` read that sibling's `pr:` field.
+A merged sibling PR then made this crew emit a landing claim for a PR that was never its own - the exact false-landing shape this whole change exists to remove, arriving by a route the change itself opened.
+
+Before the ruling, a runless crew reading its own status log never consulted the run record at all, so a stale sibling record had no way to reach a verdict; routing that path through the forge gave it one.
+The ruling stands - a self-reported `done` is the weakest evidence here and needs the forge most - and the price of it is that every read of the run record now has to prove ownership first.
+The fix discards `RUN_OUT` and `RUN_OBJECT` at the point attribution fails, rather than testing ownership at each reader, because the next reader added would have to remember the test.
 
 ## Ruled: the source of a done claim never exempts it from the forge
 
@@ -238,7 +285,7 @@ That path now asks, through `fm_crew_reported_done_verdict`.
 The cost is one bounded read on a path that only fires when a `done:` line already exists.
 
 All eight paths that can emit `done` are enumerated in `bin/fm-crew-state.sh`'s header beside the invariant, so the next reader checks a list rather than re-deriving one.
-The invariant itself is worded about the CALL and not the ANSWER, deliberately: `unanswerable` and `no-pr` still settle `done` without a confirmation, and a sentence that claimed otherwise would be the sixth false invariant this branch has had to correct.
+The invariant itself is worded about the CALL and not the ANSWER, deliberately: `unanswerable` and a kind-permitted `no-pr` still settle `done` without a confirmation, and a sentence that claimed otherwise would be the sixth false invariant this branch has had to correct.
 
 ## Forge-read bound
 
@@ -279,6 +326,14 @@ The remaining fixtures are synthetic minimal shapes rather than recordings, and 
 No `outcome: checks-passed` run has been recorded on this fork, so the ci-step status that actually accompanies one is unobserved here, and the fixture's `ci,running` row is a plausible shape rather than an observed one.
 That is exactly why the verdict does not read the ci-step word for this outcome: `checks-passed` is itself a statement about the checks, so the answer holds whatever the accompanying row turns out to say, and the guard above is falsified against that independence rather than against a guessed value.
 Record the real pairing here the first time a `checks-passed` run is observed, and treat any surprise in it as information about the fixture, not about the rule.
+
+The same unobserved shape is why `run_checks_passed_terminated` exists beside it rather than replacing it.
+`run_checks_passed` pins `status: running`, which is what a monitoring run looks like, and that single fixture was what made the borrowed liveness claim look safe: no case in the suite held a checks-passed run that had TERMINATED, so nothing could see the verdict that shape produced.
+The second fixture pins `status: completed` with no active step, and the two are kept together because the verdict now differs between them and one fixture cannot show a difference.
+Neither is a claim about which shape a real `checks-passed` run has - the rule is falsified against BOTH, so whichever one turns out to be real, the answer for it is already pinned.
+
+`run_running_other_task_with_pr` is synthetic and is the one fixture whose whole content is a foreign task's: a live run on another branch carrying a real PR url.
+Every earlier fallback fixture carried an empty `pr:`, which is precisely why the sibling-PR leak was invisible to the suite for as long as it was.
 
 `make_pipeline_ahead_topology` builds the geometry those cases need for real - a task worktree plus a separate clone standing in for the pipeline's own - so the run head under test is a genuine commit the checkout cannot resolve rather than a made-up sha.
 

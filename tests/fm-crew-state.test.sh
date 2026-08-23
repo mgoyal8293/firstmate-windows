@@ -140,9 +140,15 @@ SH
   # a client that is absent is a different fact from a client that failed, this
   # suite exists to keep those two apart, and only make_path_with_no_gh_binary
   # below can make the binary genuinely absent.
+  #
+  # FM_FAKE_GH_CALL_LOG records one line per invocation, so the reader's bound on
+  # OUTBOUND CALLS is observable rather than assumed. A fake that answers
+  # identically every time cannot show a second call happening, which is exactly
+  # why a duplicated read went unnoticed while the header promised there was none.
   cat > "$fb/gh" <<'SH'
 #!/usr/bin/env bash
 set -u
+[ -n "${FM_FAKE_GH_CALL_LOG:-}" ] && printf '%s\n' "$*" >> "$FM_FAKE_GH_CALL_LOG"
 [ "${FM_FAKE_GH_CALL_FAILS:-0}" = 1 ] && exit 1
 [ -n "${FM_FAKE_GH_PR:-}" ] || exit 1
 printf '%s\n' "$FM_FAKE_GH_PR"
@@ -293,9 +299,10 @@ reset_fakes() {
   FM_FAKE_CI_LOGS=""
   FM_FAKE_GH_PR=""
   FM_FAKE_GH_CALL_FAILS=0
+  FM_FAKE_GH_CALL_LOG=""
   export FM_FAKE_AXI_STATUS FM_FAKE_AXI_STATUS_RUN FM_FAKE_RUNS_LIST FM_FAKE_BUSY FM_FAKE_BUSY_TEXT FM_FAKE_TMUX_MISSING
   export FM_FAKE_HERDR_BUSY FM_FAKE_HERDR_MISSING FM_FAKE_HERDR_AGENT_STATUS FM_FAKE_CI_LOGS
-  export FM_FAKE_GH_PR FM_FAKE_GH_CALL_FAILS
+  export FM_FAKE_GH_PR FM_FAKE_GH_CALL_FAILS FM_FAKE_GH_CALL_LOG
 }
 
 # A forge answer that settles the PR's fate as OPEN and says nothing else.
@@ -442,6 +449,47 @@ run:
     push,completed,0,0
     ci,running,0,0
 outcome: checks-passed
+EOF
+}
+
+# The same outcome word on a run that has TERMINATED: `status: completed`, no
+# active step, nothing anywhere in the record still executing. The fixture above
+# pins `status: running`, which is the shape a monitoring run has, and its own
+# comment records that the real ci/status shape of a checks-passed run is
+# unobserved on this fork - so the two shapes are BOTH kept, because the verdict
+# has to differ between them and a single fixture cannot show that.
+run_checks_passed_terminated() {  # <branch>
+  cat <<EOF
+run:
+  id: "01RUN"
+  branch: $1
+  status: completed
+  head: "${FM_FAKE_RUN_HEAD:-abc1234}"
+  pr: "https://github.com/o/r/pull/5"
+  findings: none
+  steps[3]{step,status,findings,duration_ms}:
+    intent,completed,0,0
+    push,completed,0,0
+    ci,running,0,0
+outcome: checks-passed
+EOF
+}
+
+# ANOTHER task's live run, carrying a real PR url of its own. `axi status` is
+# REPO-scoped, so this is what a crew with no run of its own is answered with,
+# and the url in it belongs to a crew that is not the one being read.
+run_running_other_task_with_pr() {  # <branch> <pr-url>
+  cat <<EOF
+run:
+  id: "01SIBLING"
+  branch: $1
+  status: running
+  head: "0000000"
+  pr: "$2"
+  findings: none
+  steps[2]{step,status,findings,duration_ms}:
+    intent,completed,0,0
+    review,running,0,0
 EOF
 }
 
@@ -1128,8 +1176,15 @@ test_other_branch_run_ignored() {
   local d; d=$(new_case otherbranch)
   make_repo_on_branch "$d/wt" fm/feat-g
   make_fakebin "$d" >/dev/null
-  fm_write_meta "$d/state/feat-g.meta" "window=fm:fm-feat-g" "worktree=$d/wt" "kind=ship" "harness=claude"
+  # The recorded PR is what keeps this case about ATTRIBUTION. Its subject is
+  # that another branch's run is not misattributed and the status log answers
+  # instead, and the log verb it asserts is `done` - which a SHIP task may only
+  # reach once a PR exists for the forge to rule on (fm_crew_no_pr_class). Left
+  # PR-less, the case would silently start asserting that rule instead of its own.
+  fm_write_meta "$d/state/feat-g.meta" "window=fm:fm-feat-g" "worktree=$d/wt" "kind=ship" "harness=claude" \
+    "pr=https://github.com/o/r/pull/3"
   printf 'done: implemented, ready to validate\n' > "$d/state/feat-g.status"
+  forge_answers_open
   FM_FAKE_AXI_STATUS="$(run_running fm/some-other)"
   FM_FAKE_RUNS_LIST="$(cat <<'EOF'
   running    fm/some-other aaaaaaa  2026-07-02 22:10
@@ -2739,6 +2794,158 @@ EOF
   pass "both paths agree on an open PR with no ci evidence"
 }
 
+# A FOREIGN task's PR url must never settle this crew. `axi status` is
+# REPO-scoped, so a crew with no run of its own is routinely answered with
+# another task's record; the reader's own model says a `branch:` mismatch means
+# THIS TASK HAS NO RUN, never "use that one". The record was nonetheless left in
+# place after a failed attribution, and the PR-url lookup read it, so a sibling's
+# MERGED PR made this crew emit a landing claim for a PR that was never its own.
+#
+# The fixture is the shape that hole needs and no earlier fixture had: a foreign
+# run object carrying a REAL merged PR url, while the task under test has none
+# anywhere - not in a run of its own, not in its meta, not in its status log.
+test_a_sibling_runs_pr_url_never_settles_this_crew() {
+  reset_fakes
+  local d out
+  d=$(new_case sibling-pr-leak)
+  make_repo_on_branch "$d/wt" fm/feat-sibling
+  make_fakebin "$d" >/dev/null
+  fm_write_meta "$d/state/sibling.meta" "window=fm:fm-sibling" "worktree=$d/wt" "kind=ship" "harness=claude"
+  printf 'done: implemented, ready to validate\n' > "$d/state/sibling.status"
+  FM_FAKE_AXI_STATUS="$(run_running_other_task_with_pr fm/other-crew https://github.com/o/r/pull/77)"
+  # This branch has no row of its own, so attribution fails outright.
+  FM_FAKE_RUNS_LIST="$(cat <<'EOF'
+  running    fm/other-crew aaaaaaa  2026-08-23 15:30
+EOF
+)"
+  FM_FAKE_BUSY=0
+  arm_idle_record "$d/state" sibling
+  FM_FAKE_GH_PR='{"mergeStateStatus":"UNKNOWN","state":"MERGED","url":"https://github.com/o/r/pull/77"}'
+  out=$(run_crew_state "$d" sibling)
+  assert_not_contains "$out" "PR merged" "a sibling's merged PR is not this crew's landing"
+  assert_not_contains "$out" "state: done" "and it cannot carry this crew to done"
+  assert_not_contains "$out" "source: run-step" "another branch's run is not this crew's run"
+  assert_contains "$out" "state: unknown" "a ship task with no PR of its own settles nothing"
+  pass "a sibling run's PR url never settles this crew"
+}
+
+# RULING: the `no-pr` class comes from the RECORDED TASK KIND, not from the
+# absent url. A SCOUT permits `done` with no PR, because it has no landing to
+# claim by construction and its deliverable is a report - that is
+# test_a_task_with_no_pr_anywhere_still_reads_done, and it stands. A SHIP task
+# with no PR does NOT, because a ship task exists to land a branch and that is
+# precisely where a `done` would be wrong. The two used to be settled the same
+# way, so a ship crew rode the scout's exemption.
+#
+# The detail is asserted too, not just the word: the reader must name WHICH case
+# it is rather than implying an unread or unverifiable PR, which is what the
+# transient wording it used to borrow implied.
+test_a_ship_task_with_no_pr_anywhere_is_not_done() {
+  reset_fakes
+  local d out
+  d=$(new_case ship-no-pr)
+  make_repo_on_branch "$d/wt" fm/feat-shipnopr
+  make_fakebin "$d" >/dev/null
+  fm_write_meta "$d/state/shipnopr.meta" "window=fm:fm-shipnopr" "worktree=$d/wt" "kind=ship" "harness=claude"
+  printf 'done: implemented, ready to validate\n' > "$d/state/shipnopr.status"
+  FM_FAKE_BUSY=0
+  arm_idle_record "$d/state" shipnopr
+  out=$(run_crew_state "$d" shipnopr)
+  assert_not_contains "$out" "state: done" "a ship task that never opened a PR has landed nothing"
+  assert_contains "$out" "state: unknown" "and unknown is the honest word for it"
+  assert_contains "$out" "a ship task exists to land one" "the detail names which case this is"
+  assert_not_contains "$out" "PR state unverified" "nothing here is unread, so nothing is pending"
+  pass "a ship task with no PR anywhere is not done"
+}
+
+# The `outcome: checks-passed` route claimed liveness it had not established. The
+# other two green-checks routes sit inside `[ "$RUN_STATE" = working ]`, but this
+# one fires on the outcome word alone - and an outcome word is what makes a run
+# TERMINAL - so a run that had genuinely finished reported `state: working` on
+# every unconfirmed forge read, with no active step and no non-terminal status
+# behind the claim.
+#
+# The live half of the rule is asserted in the same case, because the fix must
+# not withdraw it: turning a demonstrably live crew into `unknown` is reproduced
+# failure (3) of this change, and the correction that prevents it stands. Only
+# the TERMINATED run is stopped from borrowing that live crew's answer.
+test_a_terminated_checks_passed_run_does_not_borrow_a_live_crews_answer() {
+  reset_fakes
+  local d out
+  d=$(new_case checks-passed-terminated)
+  make_repo_on_branch "$d/wt" fm/feat-cpterm
+  make_fakebin "$d" >/dev/null
+  fm_write_meta "$d/state/cpterm.meta" "window=fm:fm-cpterm" "worktree=$d/wt" "kind=ship" "harness=claude"
+  FM_FAKE_GH_CALL_FAILS=1
+  FM_FAKE_AXI_STATUS="$(run_checks_passed_terminated fm/feat-cpterm)"
+  out=$(run_crew_state "$d" cpterm)
+  assert_not_contains "$out" "state: working" "a terminated run is not a crew still monitoring"
+  assert_not_contains "$out" "state: done" "and an unread merge state still cannot rule out a close"
+  assert_contains "$out" "state: unknown" "neither the landing nor the liveness is established"
+  # The same answer, the same route, a run the record shows still executing.
+  FM_FAKE_AXI_STATUS="$(run_checks_passed fm/feat-cpterm)"
+  out=$(run_crew_state "$d" cpterm)
+  assert_contains "$out" "state: working" "a live crew still reports its own liveness"
+  assert_not_contains "$out" "state: unknown" "which the fix for the terminated case must not withdraw"
+  pass "a terminated checks-passed run does not borrow a live crew's answer"
+}
+
+# The reader's own header promises "at most ONE outbound `gh pr view` per
+# invocation", and every budgeted caller sizes its bound on that promise:
+# bin/fm-fleet-snapshot.sh records 3s per task and a worst case of 3 tasks x 3s.
+# The promise rested on the done-capable paths being mutually exclusive, which
+# they are not - a checks-passed run whose read came back unconfirmed stays
+# `working`, and a `working` run with a ci-ready status log asks again, so the
+# recorded worst case was silently double.
+#
+# Asserted by COUNTING the calls, because no assertion on the verdict can see
+# this: the answer is identical either way, and only the cost differs.
+test_one_invocation_makes_at_most_one_forge_read() {
+  reset_fakes
+  local d out calls
+  d=$(new_case one-forge-read)
+  make_repo_on_branch "$d/wt" fm/feat-oneread
+  make_fakebin "$d" >/dev/null
+  fm_write_meta "$d/state/oneread.meta" "window=fm:fm-oneread" "worktree=$d/wt" "kind=ship" "harness=claude"
+  # The exact overlap: a checks-passed run on a LIVE crew, whose forge read does
+  # not answer, so it stays `working` and falls into the ci-ready status-log
+  # block below - which is a second done-capable path in the same invocation.
+  printf 'done: PR https://github.com/o/r/pull/5 checks green\n' > "$d/state/oneread.status"
+  FM_FAKE_AXI_STATUS="$(run_checks_passed fm/feat-oneread)"
+  FM_FAKE_CI_LOGS="all CI checks passed - still monitoring until merged or closed"
+  FM_FAKE_GH_CALL_FAILS=1
+  FM_FAKE_GH_CALL_LOG="$d/gh-calls.log"
+  : > "$FM_FAKE_GH_CALL_LOG"
+  out=$(run_crew_state "$d" oneread)
+  assert_contains "$out" "state: working" "the fixture must reach the second done-capable path"
+  calls=$(grep -c . "$FM_FAKE_GH_CALL_LOG" 2>/dev/null || printf '0')
+  [ "$calls" = 1 ] ||
+    fail "one invocation made $calls forge reads, and every caller's bound assumes 1"$'\n'"--- output ---"$'\n'"$out"
+  pass "one invocation makes at most one forge read"
+}
+
+# The mergeStateStatus this path has already paid a bounded forge read to fetch
+# must not be discarded. The green-checks ranking dropped it for an `open`
+# answer, so an OPEN, DIRTY PR - reproduced failure (2) of this change - read as
+# an unqualified readiness claim, while the terminal ranking rendered the same
+# forge answer as "PR open, not merged (DIRTY)". One answer, two renderings, and
+# the captain-facing one was the silent one.
+test_an_open_pr_names_its_merge_state_on_the_checks_green_path() {
+  reset_fakes
+  local d out
+  d=$(new_case checks-green-open-dirty)
+  make_repo_on_branch "$d/wt" fm/feat-opendirty
+  make_fakebin "$d" >/dev/null
+  fm_write_meta "$d/state/opendirty.meta" "window=fm:fm-opendirty" "worktree=$d/wt" "kind=ship" "harness=claude"
+  FM_FAKE_AXI_STATUS="$(run_checks_passed fm/feat-opendirty)"
+  FM_FAKE_GH_PR='{"mergeStateStatus":"DIRTY","state":"OPEN","url":"https://github.com/o/r/pull/5"}'
+  out=$(run_crew_state "$d" opendirty)
+  assert_contains "$out" "state: done" "green checks on an open PR are still ready for review"
+  assert_contains "$out" "PR still open" "the forge answer this path paid for is reported"
+  assert_contains "$out" "(DIRTY)" "including the merge state that says it cannot land as it is"
+  pass "an open PR names its merge state on the checks-green path"
+}
+
 test_active_run_is_authoritative
 test_stale_needs_decision_superseded
 test_stale_blocked_superseded
@@ -2830,5 +3037,10 @@ test_branch_sync_head_does_not_satisfy_a_missing_run_head
 test_merged_claim_requires_forge_confirmation
 test_open_pr_is_never_reported_as_merged
 test_unanswered_forge_never_claims_a_landing
+test_a_sibling_runs_pr_url_never_settles_this_crew
+test_a_ship_task_with_no_pr_anywhere_is_not_done
+test_a_terminated_checks_passed_run_does_not_borrow_a_live_crews_answer
+test_one_invocation_makes_at_most_one_forge_read
+test_an_open_pr_names_its_merge_state_on_the_checks_green_path
 
 echo "all fm-crew-state tests passed"

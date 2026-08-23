@@ -88,7 +88,10 @@
 #     withhold the very signal a captain waits for. It is NOT exempt from the
 #     forge read, though: green checks prove CI ran and say nothing about where
 #     the PR ended up, so a forge-confirmed CLOSE settles failed here too, and a
-#     TRANSIENT non-answer settles unknown rather than done.
+#     TRANSIENT non-answer never settles done - it reports the crew's own proven
+#     liveness instead, `working` for a run the record shows still executing and
+#     `unknown` for one that has terminated. Liveness is passed in, never assumed
+#     from the route.
 #   * a run that TERMINATED - outcome passed, status completed with no outcome
 #     word, or a coarse runs-list `completed` row - goes through ONE ranking,
 #     fm_crew_terminal_verdict, which both paths call so they cannot rank the same
@@ -486,9 +489,10 @@ fm_crew_runs_newest_row_for_branch() {  # <runs-output> <branch>
 #                            URL at all.
 #
 # The caller adds one more word in the same vocabulary, for the case this function
-# never sees because there is nothing to pass it: `unrecorded`, when the run
-# record carries no PR url. That is structural too - a record with no PR has no
-# PR whose fate could be hiding behind an unread answer.
+# never sees because there is nothing to pass it: `no-pr <task-kind>`, when
+# nothing anywhere records a PR url for this task. It carries the RECORDED TASK
+# KIND because an absent PR means opposite things for different kinds, and
+# fm_crew_no_pr_class owns that split.
 #
 # A host with no `gh` is as permanent as an unsupported provider - both are "no
 # forge client here for <provider>", and the only difference is which side of the
@@ -591,11 +595,16 @@ fm_crew_evidence_lead() {  # <ci-evidence: verified|checks-green|reported|unveri
 #                 read will EVER answer, so withholding a verdict withholds it
 #                 forever, which is why these still settle `done` where the
 #                 run's own evidence earns it.
-#   no-pr         nothing anywhere names a PR for this task - not the run record,
-#                 not the task meta, not the status log. There is no landing to
-#                 confirm, so a `done` here is not a landing claim at all, and it
-#                 settles like `unanswerable`. This is a scout, or a task that
-#                 has not opened a PR yet.
+#   no-pr         nothing anywhere names a PR for this task, and the task's
+#                 RECORDED KIND says none was ever expected - a scout delivers a
+#                 report and a secondmate delivers no branch at all. There is no
+#                 landing to confirm, so a `done` here is not a landing claim,
+#                 and it settles like `unanswerable`.
+#   no-landing    nothing anywhere names a PR for this task, and its recorded
+#                 kind says there SHOULD be one. A ship task exists to land a
+#                 branch, so "no PR" is not an exemption from the landing
+#                 question, it is that question answered badly. Never settles
+#                 `done`.
 #   unconfirmed   unverified, or a url we could have queried and did not - the
 #                 answer EXISTS and we do not have it. Timed out, unauthenticated,
 #                 bounded out, skipped by FM_CREW_STATE_NO_FORGE. Never settles
@@ -607,17 +616,61 @@ fm_crew_evidence_lead() {  # <ci-evidence: verified|checks-green|reported|unveri
 # queried, which was right by accident, and it left "the url exists but this
 # reader did not look hard enough" there too, which was wrong: that is a gap this
 # reader can close, not a host it cannot query. bin/fm-crew-state.sh's
-# crew_forge_answer now looks in every place a PR url is recorded before it may
+# crew_forge_read now looks in every place a PR url is recorded before it may
 # answer `no-pr`.
+#
+# Splitting `no-pr` again, into no-pr and no-landing, closes the last hole in
+# that vocabulary. An absent PR was settled the same way for every task, on the
+# stated ground that it "is a scout, or a task that has not opened a PR yet" -
+# two situations named in one breath and then given one answer, so a SHIP task
+# with no PR silently rode the scout's exemption. That is the one place a `done`
+# claim is most certainly wrong: a ship task exists to land a branch, and no
+# branch has landed.
 #
 # See fm_crew_terminal_verdict and fm_crew_done_claim_verdict for the rules this
 # carries.
 fm_crew_forge_answer_class() {  # <forge-answer>
+  local rest=""
+  case "$1" in *' '*) rest=${1#* } ;; esac
   case "${1%% *}" in
     merged|closed|open)      printf 'answered' ;;
     unqueryable|unparseable) printf 'unanswerable' ;;
-    no-pr)                   printf 'no-pr' ;;
+    no-pr)                   fm_crew_no_pr_class "$rest" ;;
     *)                       printf 'unconfirmed' ;;
+  esac
+}
+
+# Which class an absent PR falls in, decided by the task's RECORDED KIND and by
+# nothing else. Inferring it from the absent url is what conflated the two: the
+# url is missing in both cases, so it cannot possibly tell them apart, and only
+# the kind states whether a PR was ever owed.
+#
+# EVERY recorded kind is spelled out, and the unrecognized arm refuses `done`
+# rather than falling through to the permissive one. A kind this reader has never
+# heard of is not evidence that no landing was expected, so the conservative
+# answer is the only honest default - and it is a named arm, not a silent one.
+fm_crew_no_pr_class() {  # <task-kind>
+  case "$1" in
+    scout)      printf 'no-pr' ;;
+    secondmate) printf 'no-pr' ;;
+    ship)       printf 'no-landing' ;;
+    *)          printf 'no-landing' ;;
+  esac
+}
+
+# How an absent PR reads in a detail line, in the words the RECORDED KIND
+# justifies. ONE owner, because the suffix and the done detail must describe the
+# same fact the same way, and because the wording is the whole point of the
+# split: a reader told "PR state unverified" waits for a state that will never
+# arrive, and a ship crew told "no PR to land" is being handed the scout's
+# exemption in prose.
+fm_crew_no_pr_phrase() {  # <task-kind>
+  case "$1" in
+    scout)      printf 'no PR to land, a scout delivers a report' ;;
+    secondmate) printf 'no PR to land, a secondmate owns no branch' ;;
+    ship)       printf 'no PR recorded anywhere, and a ship task exists to land one' ;;
+    '')         printf 'no PR recorded anywhere, and no task kind recorded either' ;;
+    *)          printf 'no PR recorded anywhere for a task of kind %s' "$1" ;;
   esac
 }
 
@@ -644,8 +697,8 @@ fm_crew_done_detail() {  # <forge-answer> <ci-evidence>
       printf '%s: merge state unreadable here, no forge client for %s' "$lead" "$rest" ;;
     unparseable)
       printf '%s: merge state unreadable, PR url not recognized' "$lead" ;;
-    unrecorded)
-      printf '%s: no PR recorded to check' "$lead" ;;
+    no-pr)
+      printf '%s: %s' "$lead" "$(fm_crew_no_pr_phrase "$rest")" ;;
     *)      printf '%s: merge state unverified' "$lead" ;;
   esac
 }
@@ -685,8 +738,8 @@ fm_crew_forge_suffix() {  # <forge-answer>
     unparseable)
       printf ', PR url not recognized as a PR or MR'
       return 0 ;;
-    unrecorded)
-      printf ', no PR recorded to check'
+    no-pr)
+      printf ', %s' "$(fm_crew_no_pr_phrase "$rest")"
       return 0 ;;
     *)      printf ', PR state unverified' ;;
   esac
@@ -732,6 +785,15 @@ fm_crew_unconfirmed_detail() {  # <ci-evidence> <forge-answer>
   fm_crew_forge_suffix "$2"
 }
 
+# Verdict detail for a path whose own evidence would have earned `done` but whose
+# task kind says a PR was owed and none exists anywhere. Distinct from both
+# details above, because nothing is unread here and nothing will arrive later:
+# the landing question has an answer, and the answer is that no landing exists.
+fm_crew_no_landing_detail() {  # <ci-evidence> <forge-answer>
+  printf '%s: nothing to land' "$(fm_crew_evidence_lead "$1")"
+  fm_crew_forge_suffix "$2"
+}
+
 # Sentinel <ci-step-status> for a path that carries NO steps table at all, so it
 # cannot answer the ci question either way. The coarse runs-list path passes this;
 # no TOON status word can collide with it.
@@ -768,7 +830,10 @@ FM_CREW_CI_NO_STEP_DETAIL='(no steps table)'
 #      next read clears it. A structural one keeps DONE, because no read will ever
 #      clear it and withholding forever is the worse failure. This is what makes a
 #      tight forge bound safe: shortening the wait degrades to honesty, never to a
-#      false success. fm_crew_forge_answer_class owns the split.
+#      false success. A NO-LANDING answer - a ship task with no PR recorded
+#      anywhere - is refused too, for the opposite reason to the transient one:
+#      not because the landing is unread, but because there demonstrably is none.
+#      fm_crew_forge_answer_class owns the split.
 #   3. Otherwise UNKNOWN, naming what is missing. `passed` says only that the
 #      PIPELINE completed, so it can hide a skipped ci step - the destructive
 #      direction - and a skipped step, an absent `ci` row, a record with no steps
@@ -843,10 +908,14 @@ fm_crew_terminal_verdict() {  # <ci-step-status> <forge-answer>
       return ;;
   esac
   if [ "$evidence" = verified ]; then
-    if [ "$(fm_crew_forge_answer_class "$answer")" = unconfirmed ]; then
-      printf 'unknown|%s' "$(fm_crew_unconfirmed_detail "$evidence" "$answer")"
-      return
-    fi
+    case "$(fm_crew_forge_answer_class "$answer")" in
+      unconfirmed)
+        printf 'unknown|%s' "$(fm_crew_unconfirmed_detail "$evidence" "$answer")"
+        return ;;
+      no-landing)
+        printf 'unknown|%s' "$(fm_crew_no_landing_detail "$evidence" "$answer")"
+        return ;;
+    esac
     printf 'done|%s' "$(fm_crew_done_detail "$answer" "$evidence")"
     return
   fi
@@ -895,25 +964,31 @@ fm_crew_terminal_verdict() {  # <ci-step-status> <forge-answer>
 #
 # An UNCONFIRMED answer never reaches `done`, which is what makes a tight forge
 # bound safe rather than merely fast: a read that timed out cannot distinguish an
-# open PR from a closed one. An UNANSWERABLE or NO-PR answer keeps `done` and
+# open PR from a closed one. A NO-LANDING answer never reaches it either - a ship
+# task with no PR anywhere has nothing that could have landed - and it takes the
+# same <unconfirmed-state> slot, because what it withholds is the terminal claim
+# and not the crew's liveness. An UNANSWERABLE or NO-PR answer keeps `done` and
 # names the gap in its detail - no read will ever clear the first, and the second
-# has no landing to claim in the first place. fm_crew_forge_answer_class owns
-# that test.
+# is a kind of task that was never going to open a PR.
+# fm_crew_forge_answer_class owns that test.
+#
+# THE FORGE'S OWN ANSWER IS APPENDED ON EVERY ARM, and that is deliberate rather
+# than incidental. The `open` answer once fell through with no suffix, so the
+# mergeStateStatus this path had just paid a bounded forge read to fetch was
+# discarded exactly where it mattered: an OPEN, DIRTY PR - reproduced failure (2)
+# of this change - read as an unqualified readiness claim, while the terminal
+# ranking rendered the same fact as "PR open, not merged (DIRTY)". Two rankings
+# describing one forge answer differently is the same defect this file exists to
+# remove, one layer down.
 fm_crew_done_claim_verdict() {  # <forge-answer> <detail> <unconfirmed-state> <evidence>
-  local answer=$1 detail=$2 unconfirmed_state=$3 evidence=$4
+  local answer=$1 detail=$2 unconfirmed_state=$3 evidence=$4 state='done'
   case "${answer%% *}" in
     closed) printf 'failed|%s' "$(fm_crew_closed_detail "$answer" "$evidence")"; return ;;
-    merged) printf 'done|%s%s' "$detail" "$(fm_crew_forge_suffix "$answer")"; return ;;
   esac
   case "$(fm_crew_forge_answer_class "$answer")" in
-    unconfirmed)
-      printf '%s|%s%s' "$unconfirmed_state" "$detail" "$(fm_crew_forge_suffix "$answer")"
-      return ;;
-    unanswerable|no-pr)
-      printf 'done|%s%s' "$detail" "$(fm_crew_forge_suffix "$answer")"
-      return ;;
+    unconfirmed|no-landing) state=$unconfirmed_state ;;
   esac
-  printf 'done|%s' "$detail"
+  printf '%s|%s%s' "$state" "$detail" "$(fm_crew_forge_suffix "$answer")"
 }
 
 # The done-claim ranking for a run whose CHECKS are GREEN but which has not
@@ -935,18 +1010,32 @@ fm_crew_done_claim_verdict() {  # <forge-answer> <detail> <unconfirmed-state> <e
 # demonstrably live pipeline read unknown" - reintroduced by the fix for a
 # different failure, and a regression of accepted criterion 4.
 #
-# `working` is this function's own rather than a parameter, and that is a claim
-# about its callers: every route here is a run still monitoring its PR, so
-# liveness is a precondition of the path and not a property of the answer. A
-# caller without that proof must use fm_crew_reported_done_verdict instead, which
-# is the same ranking with `unknown` in that slot.
+# `working` used to be this function's own rather than a parameter, on the stated
+# claim that "every route here is a run still monitoring its PR, so liveness is a
+# precondition of the path". Two of the three routes really did enforce that -
+# they sit inside `[ "$RUN_STATE" = working ]` - but the `outcome: checks-passed`
+# route fires on the outcome word alone, and fm_crew_terminality classifies ANY
+# non-empty outcome as terminal. So a run that had genuinely FINISHED at
+# checks-passed borrowed the live crew's answer and reported `working` on every
+# unconfirmed read, with no active step and no non-terminal status behind it.
 #
-# The `checks-green` evidence token is this function's own for the same reason:
-# every route here has green checks and NOTHING MORE - no terminal outcome, and
-# typically a ci step still `running`. Passing `verified` here once rendered the
-# lead "run passed" for exactly such a run.
-fm_crew_checks_green_verdict() {  # <forge-answer> <ready-detail>
-  fm_crew_done_claim_verdict "$1" "$2" working checks-green
+# <liveness> makes that precondition an argument instead of an assumption, so a
+# caller must state which it has rather than inheriting the other's. The
+# correction this preserves is not withdrawn and must not be: a DEMONSTRABLY LIVE
+# crew still reads `working` on an unconfirmed answer, because turning a live crew
+# into `unknown` is reproduced failure (3) of this whole change. What changed is
+# only that a terminated run may no longer borrow that answer, and it falls to
+# `unknown` - the governing preference wherever the evidence does not settle it.
+#
+# The `checks-green` evidence token IS still this function's own, and for a reason
+# that survives the split: every route here has green checks and NOTHING MORE - no
+# terminal outcome word about the run's own validation, and typically a ci step
+# still `running`. Passing `verified` here once rendered the lead "run passed" for
+# exactly such a run.
+fm_crew_checks_green_verdict() {  # <forge-answer> <ready-detail> <liveness: live|terminated>
+  local unconfirmed_state=unknown
+  [ "${3:-}" = live ] && unconfirmed_state=working
+  fm_crew_done_claim_verdict "$1" "$2" "$unconfirmed_state" checks-green
 }
 
 # The done-claim ranking for a crew with NO RUN at all, whose own status log's
