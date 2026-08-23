@@ -602,15 +602,27 @@ fi
 # to the captain beside the word. Reading it here asks the forge about that url
 # before the verdict rather than after it.
 #
-# The two readers must agree on WHICH url, or the state word and the PR shown
-# beside it describe different pull requests: a first PR closed and a
-# replacement opened leaves two urls in one log, and a `done` confirmed against
-# the replacement presented beside the abandoned PR is the false landing this
-# whole change exists to stop. The shared rule is the NEWEST url the log names,
-# pull request or merge request alike, because the newest is the one that
-# answers "which PR is this crew's current one". pr_for_task was aligned to this
-# rule rather than the reverse; it previously took the FIRST url and matched
-# pull requests only.
+# The two readers OUGHT to agree on WHICH url, because the state word and the PR
+# shown beside it describing different pull requests is the same self-contradiction
+# this reader exists to remove. They agree on ONE TIER so far, and the rest is
+# bounded and accepted rather than closed - do not read the paragraph above as an
+# invariant.
+#
+# The chains are different lengths. This function resolves FOUR tiers: the run
+# record's `pr:` when RUN_SOURCE is full, then COARSE_PR, then meta `pr=`, then
+# the status log's newest matching url. pr_for_task resolves TWO: meta `pr=`,
+# then the status log's newest matching url. Only the LOG tier was aligned, on
+# the NEWEST matching url, pull request or merge request alike, because the
+# newest is the one that answers "which PR is this crew's current one";
+# pr_for_task previously took the FIRST url and matched pull requests only.
+#
+# So the two can still name DIFFERENT PRs for one task whenever meta carries no
+# `pr=` while the run record or the coarse row carries a url - the tiers this
+# function has and that reader does not. bin/fm-pr-check.sh is the only writer of
+# meta `pr=`, so that window is open until firstmate acts on a replacement url.
+# Closing it means removing the second selection rule rather than aligning
+# another tier - the reader that produced the word supplying the url it asked
+# about - and that is deferred as its own follow-up.
 crew_pr_url() {
   local url=""
   [ "$RUN_SOURCE" = full ] && url=$(strip_quotes "$(nm_field pr)")

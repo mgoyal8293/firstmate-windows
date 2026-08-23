@@ -26,7 +26,7 @@ $ bash tests/fm-watch-triage.test.sh 2>/dev/null | grep -c '^ok'
 The count is the evidence, not the exit status: a green step does not prove its assertions ran.
 The later suites are listed because six guards below belong to those callers and are pinned there.
 Four are forge-read bounds: the bound the scan derives for this reader's forge read, the fixed per-task bound the snapshot chooses, and the per-crew bound the watcher's triage chooses.
-The other two are the scan's PR-url selection, which has to agree with the url this reader asked the forge about or the captain sees a state word beside the wrong pull request.
+The other two are the scan's status-log PR-url selection, the one tier on which it was aligned with this reader, since a state word presented beside the wrong pull request is this change's own failure reassembled at the captain's boundary.
 
 ## Falsification matrix
 
@@ -91,14 +91,19 @@ Every row must fail, and must fail on the named assertion.
 | That crew stays `unknown` rather than `working` | pass `working` as `fm_crew_reported_done_verdict`'s unconfirmed state | the same case | fails: `missing: 'state: unknown'` |
 | And `crew_absorb_class` does not absorb it, which is what makes `unknown` safe | let the absorb whitelist admit `unknown` alongside `working` | the same case | fails: `a pre-validation crew must not be absorbed as provably working` |
 | Liveness on the full-path ci-ready route is DERIVED from the record, not asserted | pass the literal `live` from that call site again | `test_a_record_with_no_status_word_does_not_assert_liveness` | fails: `unexpected: 'state: working'` |
-| The url presented beside a terminal state word is the NEWEST one the status log names, matching the url this reader asked the forge about | restore `head -1` in `pr_for_task` | `test_presented_pr_is_the_newest_url_the_status_log_names` (`tests/fm-inactive-reconcile.test.sh`) | fails: `the presented PR is not the newest url the status log names: 'https://example.test/owner/repo/pull/1'` |
+| When `pr_for_task` falls through to the status log, the url it presents is the NEWEST one the log names | restore `head -1` in `pr_for_task` | `test_presented_pr_is_the_newest_url_the_status_log_names` (`tests/fm-inactive-reconcile.test.sh`) | fails: `the presented PR is not the newest url the status log names: 'https://example.test/owner/repo/pull/1'` |
 | And a merge request counts as that url, since this reader settles a GitLab crew's state from one | narrow `pr_for_task` back to `/pull/` only | the same case | fails: `a merge request is not presented beside the state word it settled: ''` |
 
 56 of 56 re-derived in full on 2026-08-23 - once per fix round since the decay was found - and the two rows added after that date were derived when they were written, for 58 of 58.
 
-The last two rows were added by the round that aligned the scan's PR-url selection with this reader's.
-They are the only rows here that guard a CONSUMER's presentation rather than this reader's own answer, and they belong in this table because the two halves are one claim: a `done` this reader confirmed against a replacement PR, printed beside the PR it replaced, is the false landing this change exists to stop, reassembled at the boundary.
+The last two rows were added by the round that aligned the scan's status-log PR-url selection with this reader's.
+They are the only rows here that guard a CONSUMER's presentation rather than this reader's own answer, and they belong in this table because a `done` this reader confirmed against a replacement PR, printed beside the PR it replaced, is the false landing this change exists to stop, reassembled at the boundary.
 Each half needs its own mutation because `pr_for_task` diverged from `crew_pr_url` in two independent ways at once, and a case exercising only a pull-request log cannot see the merge-request half.
+
+What those two rows do NOT establish has to be stated here, because the Guard column is narrower than the problem and a reader could take the pair for a closed invariant.
+The two selection chains are different lengths: `crew_pr_url` resolves the run record's `pr:`, then the coarse row, then meta `pr=`, then the log, while `pr_for_task` resolves meta `pr=` then the log.
+Only the LOG tier is aligned, so when meta carries no `pr=` and the run record or coarse row carries a url, the two readers can still name different PRs for one task and no case here can see it - the guard's own case stubs `fm-crew-state.sh` with a canned answer, so it pins `pr_for_task`'s selection alone and never compares it to what `crew_pr_url` chose.
+That gap is bounded and ACCEPTED for this change rather than closed, and the closing work is a follow-up recorded at `crew_pr_url` in `bin/fm-crew-state.sh`: have the reader that produced the state word supply the url it asked about, which removes the second selection rule instead of aligning a third tier.
 
 The four rows before those were added by the round that separated the two ship-with-no-PR moments and stopped the ci-ready route asserting liveness it had not established.
 

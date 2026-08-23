@@ -290,12 +290,18 @@ meta_incarnation() { # <meta>
 
 # The PR url presented to the captain beside a task's terminal state word.
 #
-# The status-log fallback must select the SAME url crew_pr_url in
-# bin/fm-crew-state.sh selects, because that reader is what produced the state
-# word: the NEWEST url the log names, pull request or merge request alike. A
-# first PR closed and a replacement opened leaves two urls in one log, and
-# picking the older one here would present a `done` the forge confirmed against
-# the replacement beside the abandoned PR.
+# This chain has TWO tiers, meta `pr=` then the status log. crew_pr_url in
+# bin/fm-crew-state.sh - the reader that produced the state word - has FOUR: the
+# run record's `pr:`, the coarse runs-list row, meta `pr=`, then the log. Only
+# the LOG tier is aligned between them, on the NEWEST matching url, pull request
+# or merge request alike; picking an older one here would present a `done` the
+# forge confirmed against a replacement beside the PR it replaced.
+#
+# Above that tier the two can still name different PRs for one task: when meta
+# carries no `pr=` and the run record or coarse row carries a url, that reader
+# asks the forge about a url this one never sees. That gap is bounded and
+# accepted for now, and closing it belongs to the follow-up recorded at
+# crew_pr_url, not to a third tier bolted on here.
 pr_for_task() { # <meta> <status>
   local pr=$1 status=$2 value
   value=$(meta_field "$pr" pr)

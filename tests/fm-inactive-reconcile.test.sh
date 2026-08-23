@@ -127,14 +127,14 @@ prime_seen() { # <state> <status>
 
 reap() { kill "$1" 2>/dev/null || true; wait "$1" 2>/dev/null || true; }
 
-# The main retains a terminal presentation receipt until the corresponding wake
-# is handled and acknowledged.
 # Two readers name a crew's PR: fm-crew-state.sh's crew_pr_url asks the forge
 # about it and so produces the state word, and pr_for_task puts a url beside that
-# word for the captain. When the task meta carries no `pr=` both fall back to the
-# status log, and they must pick the SAME url - the newest one. A first PR closed
-# and a replacement opened leaves two urls in one log, and presenting `done`
-# beside the abandoned PR is the false landing this change exists to stop.
+# word for the captain. Their selection chains differ above the status log, but
+# where both reach the log they must pick the SAME url - the newest one. A first
+# PR closed and a replacement opened leaves two urls in one log, and presenting
+# `done` beside the abandoned PR is the false landing this change exists to stop.
+# This pins pr_for_task's own selection; the higher tiers are the accepted gap
+# recorded at crew_pr_url.
 #
 # `pr=` in the fm-terminal-outcome.v1 record is the persisted contract this
 # asserts on; it is the same value report_to_parent puts on the wire.
@@ -179,6 +179,8 @@ EOF
   pass "the presented PR is the newest url the status log names"
 }
 
+# The main retains a terminal presentation receipt until the corresponding wake
+# is handled and acknowledged.
 test_main_direct_terminal_presentation_receipt() {
   local err seq generation
   make_world main-direct; write_child "$MAIN" child 'done: PR https://example.test/owner/repo/pull/1 checks green'

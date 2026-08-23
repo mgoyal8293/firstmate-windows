@@ -463,7 +463,7 @@ fm_crew_run_admits() {  # <worktree> <run-output> <run-head>
   # is the ONLY barrier for exactly that set of runs. The guard is
   # test_a_terminated_checks_passed_run_does_not_borrow_a_live_crews_answer,
   # the defect is described under "Ruled: withholding a landing claim is not
-  # the same as knowing nothing" at docs/verification/crew-state-verdicts.md:307,
+  # the same as knowing nothing" at docs/verification/crew-state-verdicts.md:312,
   # and the ruling to keep this shut is that file's "Ruled: the liveness
   # override stays shut to a run bearing an outcome word".
   #
