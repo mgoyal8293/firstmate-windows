@@ -278,8 +278,31 @@ function decideAgentState(ev) {
   return { state: 'ambiguous', why: 'no harness and not shell-only' };
 }
 
+// stateReport: the single owner of what `fmpty state` reports, so the arm taken
+// when the console process list cannot be read cannot drift from the full one.
+// Two hand-built objects for one contract is how the prompt-mark fields went
+// missing from the unreadable arm: they are fed by the pty byte stream and never
+// touch the process list, so they are reported whether or not that list answered,
+// and a reader that treats an absent count as a failure rather than a retry does
+// not lose a whole real-host run to one transient unreadable poll.
+function stateReport(f) {
+  const src = f || {};
+  const verdict = src.verdict || {};
+  const out = {
+    state: verdict.state,
+    why: verdict.why,
+    procs: Array.isArray(src.procs) ? src.procs : [],
+    prompt: src.prompt,
+    promptMark: src.promptMark,
+    promptMarks: src.promptMarks,
+  };
+  if (typeof src.screen === 'string') out.screen = src.screen;
+  return out;
+}
+
 module.exports = {
   FM_MARK_TAG: FM_MARK_TAG,
+  stateReport: stateReport,
   SCREEN_TAIL_ROWS: SCREEN_TAIL_ROWS,
   classifyScreenRows: classifyScreenRows,
   PROMPT_RUNNING: PROMPT_RUNNING,

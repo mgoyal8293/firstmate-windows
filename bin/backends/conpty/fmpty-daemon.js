@@ -704,8 +704,12 @@ function agentState() {
   const list = procCache.list;
   const prompt = promptTracker.state();
   if (!list) {
-    const un = liveness.decideAgentState({ listAvailable: false, listSource: procCache.source });
-    return { state: un.state, why: un.why, procs: [], prompt: prompt };
+    return liveness.stateReport({
+      verdict: liveness.decideAgentState({ listAvailable: false, listSource: procCache.source }),
+      prompt: prompt,
+      promptMark: promptTracker.lastMark(),
+      promptMarks: promptTracker.marks(),
+    });
   }
   let sawShell = false, sawOther = false, agentProc = null;
   for (const p of list) {
@@ -726,11 +730,10 @@ function agentState() {
     prompt: prompt,
     screen: screen,
   });
-  const out = {
-    state: verdict.state, why: verdict.why,
-    procs: list, screen: screen,
+  const out = liveness.stateReport({
+    verdict: verdict, procs: list, screen: screen,
     prompt: prompt, promptMark: promptTracker.lastMark(), promptMarks: promptTracker.marks(),
-  };
+  });
   if (agentProc) out.identityValidated = agentProc.identityValidated;
   return out;
 }

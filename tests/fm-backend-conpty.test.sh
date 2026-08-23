@@ -721,6 +721,29 @@ line two'
   out=$(screen '["some output with no prompt and no composer"]')
   [ "$out" = unknown ] || fail "an unrecognisable screen should read unknown, got $out"
   pass "conpty liveness: the fallback screen reading survives a sparse viewport and a prompt left in scrollback"
+
+  # THE PROMPT-MARK COUNTER MUST SURVIVE AN UNREADABLE PROCESS LIST. The counter
+  # is fed by the pty byte stream and never touches the console list, which the
+  # daemon can fail to read on a cold, timed-out or fork-failed poll. The opt-in
+  # live guard recovers the count from `fmpty state` and treats an absent value as
+  # a hard failure rather than a retry, so dropping it on that arm aborts an
+  # otherwise healthy real-host run - the one kind that cannot be cheaply
+  # repeated. Both arms are assembled by the same function for that reason, so
+  # this asserts the reported KEYS as well as the count.
+  report() {  # <json-facts> -> "<sorted keys>|<promptMarks>"
+    node -e '
+      const l = require(process.argv[1]);
+      const r = l.stateReport(JSON.parse(process.argv[2]));
+      process.stdout.write(Object.keys(r).sort().join(",") + "|" + String(r.promptMarks));
+    ' "$LIVENESS" "$1"
+  }
+  unreadable=$(report '{"verdict":{"state":"ambiguous","why":"process list unreadable"},"prompt":"at-prompt","promptMark":"D","promptMarks":7}')
+  [ "$unreadable" = 'procs,prompt,promptMark,promptMarks,state,why|7' ] \
+    || fail "the unreadable-list arm reported '$unreadable'; it must still carry the prompt-mark fields, which do not come from the process list"
+  readable=$(report '{"verdict":{"state":"dead","why":"only shells attached"},"procs":[{"name":"bash.exe"}],"screen":"unread","prompt":"at-prompt","promptMark":"D","promptMarks":7}')
+  [ "$readable" = 'procs,prompt,promptMark,promptMarks,screen,state,why|7' ] \
+    || fail "the readable-list arm reported '$readable'; it must carry the same fields plus the screen reading"
+  pass "conpty liveness: a session whose process list cannot be read still reports its prompt-mark chain, so a transient poll failure is a retry rather than a dead end"
 ) || exit 1
 
 # --- shell integration: the marks, and the nested shell that must inherit them -

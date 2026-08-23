@@ -287,8 +287,16 @@ if command -v treehouse >/dev/null 2>&1 && command -v git >/dev/null 2>&1; then
   [ "$held" = "$LEASE_MINE" ] \
     || fail "a freshly leased slot recorded holder '$held', not this task's '$LEASE_MINE'"
 
+  # THE EXIT STATUS IS PART OF THE CONTRACT, not noise to discard. The abort path
+  # in conpty_release_spawn_lease reads exit 0 as a confirmed release and goes
+  # silent on it, so a guard that no-ops the ACTION but still exits 0 would make
+  # it report nothing at all for a slot that is still leased. Assert the signal,
+  # not just the absence of damage.
+  wrong_holder_status=0
   ( cd "$LEASE_REPO" && treehouse return --force --if-lease-holder "$LEASE_THEIRS" "$LEASE_SLOT" ) \
-    >/dev/null 2>&1 || true
+    >/dev/null 2>&1 || wrong_holder_status=$?
+  [ "$wrong_holder_status" -ne 0 ] \
+    || fail "a return naming a holder that does not own the lease exited 0; the abort path reads that as a confirmed release and would stay silent about a slot that is still leased"
   held=$(lease_holder_of "$LEASE_SLOT")
   [ "$held" = "$LEASE_MINE" ] \
     || fail "a return naming a holder that does not own the lease still changed it to '$held'; an aborting spawn could take a live task's slot"

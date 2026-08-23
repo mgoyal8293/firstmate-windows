@@ -731,9 +731,15 @@ parse_orca_worktree_result() {
 # still be running, and the commonest abort cannot tell that from a lease that
 # FAILED, because a failure leaves the substitution empty and `cd ""` is a no-op,
 # so both leave the shell in the project and both time out the cwd poll
-# identically. Since `--if-lease-holder` already makes the return a no-op when
+# identically. Since `--if-lease-holder` already makes the return harmless when
 # this holder holds nothing, attempting it unconditionally costs nothing and
-# removes the whole question.
+# removes the whole question. Harmless is not the same as silent, and the
+# difference is load-bearing below: treehouse no-ops the ACTION but still reports
+# it by EXITING NON-ZERO, measured against real treehouse 2.1.1 in a throwaway
+# pool (exit 1 with `lease_holder` intact for a wrong holder, exit 0 and cleared
+# for the right one) and asserted by tests/fm-conpty-liveness-live-e2e.test.sh.
+# Reading that word as "exits 0" is what would turn the silent arm into a claim
+# that a release happened when it did not.
 #
 # So the three outcomes are all about wording. A confirmed release is silent. A
 # release that failed where the pool read cleanly and held no row for this holder

@@ -719,6 +719,7 @@ The portable classifier regression is `tests/fm-backend-cmux.test.sh`.
 The compatibility floor is Windows 10 1809 (ConPTY's own floor) with Node 20.
 Active live evidence is a manual pass recorded on 2026-08-18 against Windows 10.0.26200, Node v22.18.0, node-pty 1.1.0, @xterm/headless 6.0.0, and a real Claude Code 2.1.220, extended on 2026-08-20 by the foreground-liveness and control-plane pass below (same host, Git for Windows 2.50.1 with bash 5.2.37, treehouse 2.1.1).
 It was re-run in full on 2026-08-23 on the same host, against the rebased code, because the control plane was rewritten underneath the earlier pass and evidence taken before that rewrite no longer covers what ships; the readings below are from that re-run except where a block is explicitly dated otherwise.
+**That re-run predates the session shell's startup-path change made later in review** (the explicit `. /etc/bash.bashrc` was dropped from `bin/backends/conpty/fm-shell-integration.bash`), so it does not cover that path and must not be read as covering it; the startup path is covered instead by the targeted measurement in "The system rc is bash's to run, not this rcfile's" below.
 The 2026-08-19 block that precedes it is retained as history and is **superseded**: it was measured on a spawn topology that no longer exists.
 The Windows CI lane in `.github/workflows/windows-ci.yml` carries only the portable regression `tests/fm-backend-conpty.test.sh` - which now covers the adapter with a faked session client, the liveness decision table with real node, and the mark chain with real bash - so this live evidence stays a recorded manual pass rather than a gate that reruns on every change.
 The backend capability matrix is covered portably by `tests/fm-control.test.sh`, and the real-harness half of the liveness proof is the opt-in `tests/fm-conpty-liveness-live-e2e.test.sh`.
@@ -851,6 +852,17 @@ Sampled as fast as one client call allows, the `exit` transition shows the diver
 The middle sample is the whole point of the mark source: the shell has returned to its prompt while `claude.exe` is still in the console list, so a console-list-only classifier reads `alive` there.
 
 An unplanned confirmation of the abort path came from the same session: a spawn that aborted after leasing left `treehouse status` reading `in-use` under the aborted session's own shell rather than durably leased, and `available` once that window closed.
+
+**A holder-scoped return signals refusal by its exit status, not only by leaving the lease alone.** Measured on 2026-08-23 against real treehouse 2.1.1 in an isolated throwaway pool, never the live one: `treehouse return --force --if-lease-holder <wrong-holder> <path>` exits **1** and leaves `lease_holder` intact, while the same call naming the holder that does hold the lease exits **0** and clears it.
+This is the property `conpty_release_spawn_lease` keys its whole message contract on - it reads exit 0 as a confirmed release and stays silent on it - so a guard that no-opped the action but still exited 0 would make an aborting spawn report nothing at all for a slot that is still leased.
+It is now asserted rather than assumed: `tests/fm-conpty-liveness-live-e2e.test.sh` captures that exit status on a real pool with a holder that provably does not own the lease.
+
+**The system rc is bash's to run, not this rcfile's.** Measured on 2026-08-23 on the same Windows host, to settle whether Git for Windows' bash defines `SYS_BASHRC` before dropping the explicit `. /etc/bash.bashrc` from the session rcfile.
+The command shape is Git for Windows' own `usr/bin/bash.exe`, interactive, with an **empty** `--rcfile`: `PS1` came back as `\[\033]0;$TITLEPREFIX:$PWD\007\]...` - the `git-prompt.sh` prompt carrying the OSC 0 title the daemon parses into `paneCwd` - and `__git_ps1` reported as defined, with `login_shell` off.
+Neither the prompt nor the function can come from an empty rcfile, so both arrived through `SYS_BASHRC` -> `/etc/bash.bashrc` (`shopt -q login_shell || . /etc/profile.d/git-prompt.sh`).
+The real binary also carries `/etc/bash.bashrc` as a compiled-in string; the small `bin/bash.exe` launcher does not.
+The empty rcfile is the control that makes this decisive: a reading taken with the explicit source still in place is consistent with either hypothesis and cannot discriminate them, which is exactly what the earlier measurement of Git for Windows' non-login `PS1` chain could not do.
+So bash runs the system rc unconditionally on the target as it does on Linux, the pre-review code double-ran the operator's system rc there too, and the OSC 0 title carrier survives the removal.
 
 **Does the mark source remove the dependency on the harness's process name?** Partly, and in the direction that matters.
 The at-prompt reading is taken before any name matching, so a harness the name table does not recognise can never read `dead` merely for being unrecognised - the unsafe direction, which is what a false `dead` on a live agent would be.
