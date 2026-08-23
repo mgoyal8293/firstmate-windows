@@ -153,27 +153,23 @@ if command -v treehouse >/dev/null 2>&1 && command -v git >/dev/null 2>&1; then
   # in-progress work to the branch under test, under the fixture's identity.
   #
   # So nothing here relies on `cd` for isolation and nothing lets git choose its
-  # own target: the path is validated before use, every git call is pinned with
-  # `-C`, and the identity is written to the fixture repo's own config only.
+  # own target: the path is validated before use, and the repo is seeded through
+  # tests/lib.sh's shared `fm_git_init_commit`, whose every git call is pinned
+  # with `-C` and whose identity is passed inline rather than written to any
+  # config. That helper is the suite's one owner of fixture commits, so no test
+  # hand-rolls a mutating git command that could pick its own target.
   [ -n "$LEASE_REPO" ] && [ "$LEASE_REPO" != /repo ] \
     || fail "the lease fixture got no usable temp path, so it refused to run git rather than risk the checkout under test"
   case "$LEASE_LAB" in
     "$ROOT"|"$ROOT"/*)
       fail "the lease fixture resolved inside the checkout under test ($LEASE_LAB), so it refused to run" ;;
   esac
-  mkdir -p "$LEASE_REPO" || fail "could not create the disposable pool repo at $LEASE_REPO"
-  [ -d "$LEASE_REPO" ] || fail "the disposable pool repo is missing at $LEASE_REPO"
-  git -C "$LEASE_REPO" init -q . || fail "could not init the disposable pool repo"
-  # An unroutable .invalid identity, scoped to the fixture repo, so it can never
-  # be mistaken for a real author and can never apply to another repository.
-  git -C "$LEASE_REPO" config user.email fixture@conpty-lease.invalid \
-    || fail "could not set the fixture repo's own commit email"
-  git -C "$LEASE_REPO" config user.name 'conpty lease fixture' \
-    || fail "could not set the fixture repo's own commit name"
-  printf 'seed\n' > "$LEASE_REPO/seed.txt" || fail "could not seed the fixture repo"
-  git -C "$LEASE_REPO" add -A || fail "could not stage the fixture seed"
-  git -C "$LEASE_REPO" commit -qm 'seed the disposable treehouse pool' \
-    || fail "could not commit the fixture seed"
+  fm_git_init_commit "$LEASE_REPO" >/dev/null 2>&1 \
+    || fail "could not seed the disposable pool repo at $LEASE_REPO"
+  # Assert the outcome rather than each step: treehouse can only lease a slot
+  # from a repo that already has a commit.
+  git -C "$LEASE_REPO" rev-parse --verify -q HEAD >/dev/null \
+    || fail "the disposable pool repo at $LEASE_REPO has no commit, so treehouse could not lease from it"
   # A TOML literal string, so a Windows root needs no backslash escaping.
   printf "max_trees = 1\nroot = '%s'\n" "$(winpath "$LEASE_LAB")" \
     > "$LEASE_REPO/treehouse.toml" || fail "could not write the fixture pool config"
