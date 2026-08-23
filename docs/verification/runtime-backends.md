@@ -1033,7 +1033,10 @@ This is the measurement behind the narrowed claim above: `dead` arrives only onc
 
 **(2f) The opt-in guard on the real host.**
 `FM_CONPTY_LIVENESS_LIVE=1 tests/fm-conpty-liveness-live-e2e.test.sh` exits 0 with 3 ok and 0 not ok, claude checked, and no OSC 133 mark of its own - tagged or untagged - while it held the foreground.
-Six consecutive runs on 2026-08-23.
+Six consecutive runs on 2026-08-23, and no orphaned session daemon left behind - the guard reaps its own on the way out, including when an assertion aborts it.
+
+One cosmetic leftover remains, recorded rather than hidden: Windows releases the killed daemon's handles asynchronously, so the guard's temp directory occasionally outlasts the 20s wait for it and the shared reaper then prints "Device or resource busy".
+It is intermittent, it happens after every assertion has run, and it does not affect the exit status; the guard prints a line explaining it when it happens.
 
 That count is six because the first re-run failed, and the cause was in the guard rather than the backend.
 It passed about one run in three: its waits were satisfied before the state they named existed, so the backgrounded case passed on an empty session and the nested case lost its only synchronisation, and the harness line was then typed into a shell that had not started - where the still-backgrounded harness ate it before exiting.

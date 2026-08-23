@@ -92,15 +92,26 @@ mkdir -p "$STATE"
 # could do nothing about, on every run including the passing ones. Retry briefly
 # first, then hand back to the shared reaper. This is the extra-teardown hook
 # tests/lib.sh documents for exactly this case.
+FM_LIVE_SESSIONS=""
 fm_conpty_live_cleanup() {
-  local dir i
+  local dir i sid
+  # Reap this run's own daemons first. A failing assertion exits immediately,
+  # so without this an aborted run leaves its session daemon behind holding the
+  # very directory the reaper is about to try to remove.
+  for sid in $FM_LIVE_SESSIONS; do
+    fmpty kill --id "$sid" >/dev/null 2>&1 || true
+  done
   for dir in "$LAB" "${LEASE_LAB:-}"; do
     [ -n "$dir" ] && [ -d "$dir" ] || continue
     i=0
-    while [ "$i" -lt 15 ]; do
+    while [ "$i" -lt 20 ]; do
       rm -rf "$dir" 2>/dev/null && break
       i=$((i + 1)); sleep 1
     done
+    # Windows releases the handles asynchronously, so this occasionally outlasts
+    # the wait. Say why, so the shared reaper's raw "Device or resource busy"
+    # that follows reads as a known leftover rather than a failed assertion.
+    [ -d "$dir" ] && echo "note: $dir was still held after 20s and is left for the shared reaper; it affects nothing this guard asserted"
   done
   fm_test_cleanup
 }
@@ -185,6 +196,7 @@ wait_shell_owns_input() {  # <id> <secs>
   return 1
 }
 start_session() {  # <id>
+  FM_LIVE_SESSIONS="$FM_LIVE_SESSIONS $1"
   fmpty kill --id "$1" >/dev/null 2>&1 || true
   fmpty spawn --id "$1" --cwd "$(winpath "$LAB")" \
     --cmd "$SESSION_SHELL" --arg --rcfile --arg "$(winpath "$RCFILE")" --arg -i \
