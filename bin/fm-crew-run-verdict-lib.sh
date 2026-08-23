@@ -66,11 +66,15 @@
 #   * an active step running or fixing            -> working, with its activity
 #   * a gate awaiting a response                  -> parked at that gate
 #   * outcome failed or cancelled                 -> failed
-#   * outcome checks-passed                       -> done, checks green, PR ready
-#     for review. That word is a statement about the CHECKS, so it is CI evidence
-#     in its own right and needs no corroborating ci-step row. Where merge is
-#     left to the captain the ci step stays `running` for the whole monitor
-#     phase, so requiring one would withhold the very signal a captain waits for.
+#   * outcome checks-passed, or a ci-step log tail reading green while the run
+#     monitors                                    -> done, checks green, PR ready
+#     for review, through fm_crew_checks_green_verdict. That word is a statement
+#     about the CHECKS, so it is CI evidence in its own right and needs no
+#     corroborating ci-step row. Where merge is left to the captain the ci step
+#     stays `running` for the whole monitor phase, so requiring one would
+#     withhold the very signal a captain waits for. It is NOT exempt from the
+#     forge read, though: green checks prove CI ran and say nothing about where
+#     the PR ended up, so a forge-confirmed CLOSE settles failed here too.
 #   * a run that TERMINATED - outcome passed, status completed with no outcome
 #     word, or a coarse runs-list `completed` row - goes through ONE ranking,
 #     fm_crew_terminal_verdict, which both paths call so they cannot rank the same
@@ -140,6 +144,16 @@
 #      A closed-unmerged PR is the OPPOSITE of a landing - the work will never
 #      land - and stripped of its "PR closed" detail it presented ABANDONED work
 #      to the captain as a success. Ruled: `failed`.
+#
+# Ruling 3 was first applied only to fm_crew_terminal_verdict, and the same false
+# success promptly turned up one route over: `outcome: checks-passed` reached
+# `done` without ever asking the forge. That is the shape of this failure - a word
+# is made honest on the path it was caught on, while a sibling path still emits
+# it - so the rule is now enforced as a property of the READER rather than of one
+# ranking: bin/fm-crew-state.sh never emits `done` without asking the forge where
+# the PR ended up, and fm_crew_checks_green_verdict answers for every route that
+# reaches `done` with green checks. When you add a path that can say `done`, that
+# is the invariant to satisfy.
 #
 # Everywhere the evidence does not settle the question, the answer is the
 # conservative one. A tool that says "I do not know" costs a handling turn; a
@@ -714,4 +728,44 @@ fm_crew_terminal_verdict() {  # <ci-step-status> <forge-answer>
   fi
   printf 'unknown|%s' \
     "$(fm_crew_no_ci_evidence_detail "$(fm_crew_ci_evidence_gap "$ci")" "$answer")"
+}
+
+# THE ranking for a run whose CHECKS are GREEN but which has not terminated -
+# `outcome: checks-passed`, and the ci-step log tail that reads green while the
+# run monitors the PR - as "<state>|<detail>". The <ready-detail> is the
+# ready-for-review signal that path exists to produce, and it survives untouched
+# on every answer but one.
+#
+# TWO DIFFERENT QUESTIONS, and conflating them is exactly how this regresses:
+#   * What proves CI RAN? `checks-passed` is a statement about the CHECKS, so it
+#     is CI evidence IN ITS OWN RIGHT and needs no corroborating `ci,completed`
+#     row. That ruling stands entirely untouched. Where merge is left to the
+#     captain the ci step stays `running` for the whole monitor phase, so
+#     demanding a completed row would withhold the very signal a captain waits
+#     for.
+#   * What proves WHERE THE PR ENDED UP? Nothing in the run record does. Green
+#     checks say the work is ready to land. They say nothing about whether it
+#     landed, and nothing about whether the captain threw it away.
+# Green checks answer the first question and are silent on the second, so this
+# path is no longer EXEMPT from the forge read - it keeps its own CI evidence and
+# gains the forge's answer about the PR, because those are separate facts.
+#
+# A forge-confirmed CLOSE settles FAILED here, on the same authority and for the
+# same reason as rule 1b of fm_crew_terminal_verdict: the work was abandoned and
+# will never land. This arm is the worse of the two to get wrong. `done - checks
+# green: PR ready for review` does not merely overstate an abandoned branch, it
+# actively invites the captain to go and review work that was already thrown
+# away, and bin/fm-inactive-reconcile.sh strips the detail before the captain
+# ever sees it. See this file's header for the standalone-honesty rule.
+#
+# Every other answer keeps `done`. A confirmed merge names the merge, through the
+# same suffix owner every other detail line uses; an open PR or any non-answer
+# leaves the ready-for-review detail exactly as it was, because none of them
+# contradicts what green checks proved.
+fm_crew_checks_green_verdict() {  # <forge-answer> <ready-detail>
+  case "${1%% *}" in
+    closed) printf 'failed|%s' "$(fm_crew_closed_detail "$1" verified)" ;;
+    merged) printf 'done|%s%s' "$2" "$(fm_crew_forge_suffix "$1")" ;;
+    *)      printf 'done|%s' "$2" ;;
+  esac
 }

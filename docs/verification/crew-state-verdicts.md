@@ -14,7 +14,7 @@ Branch: `fm/fm-crew-state-stale-run-masks-live`.
 
 ```
 $ bash tests/fm-crew-state.test.sh | grep -c '^ok'
-81
+85
 $ bash tests/fm-inactive-reconcile.test.sh 2>/dev/null | grep -c '^ok'
 17
 ```
@@ -43,7 +43,7 @@ Every row must fail, and must fail on the named assertion.
 | Ownership requires `local.head` to be this checkout | drop that equality | `test_branch_sync_for_another_checkout_does_not_prove_ownership` | fails: `unexpected: 'source: run-step'` |
 | An absent `ci` row is the same absence of evidence a skipped one is | revert that arm to the old skipped-only blacklist (`[ "$ci" != skipped ]`) | `test_terminal_pass_with_no_steps_table_and_no_landing_is_not_done` | fails: `unexpected: 'state: done'` |
 | An `outcome: checks-passed` run is done without a corroborating `ci,completed` row | send checks-passed back through the terminal ranking | `test_checks_passed_outcome_is_done_without_a_completed_ci_row` | fails: `missing: 'state: done'` |
-| So is any other `ci` status word | the same mutation | `test_terminal_pass_with_a_pending_ci_step_and_no_landing_is_not_done` | fails: `unexpected: 'state: done'` |
+| So is any other `ci` status word | the same skipped-only blacklist mutation as the row above it | `test_terminal_pass_with_a_pending_ci_step_and_no_landing_is_not_done` | fails: `unexpected: 'state: done'` |
 | A coarse runs-list `completed` row is not a pass without a forge-confirmed landing | let every forge answer take the done arm | `test_coarse_completed_row_without_a_merge_is_not_done` | fails: `unexpected: 'state: done'` |
 | Nor when the forge did not answer at all | the same mutation | `test_coarse_completed_row_with_an_unanswered_forge_is_not_done` | fails: `unexpected: 'state: done'` |
 | Run-record scalar reads exclude the `branch_sync:` block | make `fm_crew_run_scalars` a passthrough | `test_branch_sync_head_does_not_satisfy_a_missing_run_head` | fails: `unexpected: 'source: run-step'` |
@@ -59,12 +59,16 @@ Every row must fail, and must fail on the named assertion.
 | A forge-confirmed MERGE settles a terminated run done whatever the ci step says | drop the merge arm from the ranking | `test_forge_confirmed_merge_settles_a_ci_skipped_run` | fails: `missing: 'state: done'` |
 | A forge-confirmed CLOSE settles it failed, because a closed-unmerged PR is not a landing | rank `closed` with `merged` on the done arm again | `test_forge_confirmed_close_is_failed_not_done` | fails: `missing: 'state: failed'` |
 | A host with no `gh` is a structural non-answer, not a transient one | report an absent client as `unverified` again | `test_absent_forge_client_is_structural_not_transient` | fails: `missing: 'no forge client for github'` |
+| An `outcome: checks-passed` run asks the forge where the PR ended up | restore the short-circuit, emitting `done` with no forge read | `test_forge_confirmed_close_defeats_a_checks_passed_run` | fails: `missing: 'state: failed'` |
+| So does the ci-log-green override, which reaches done by a different route | the same short-circuit on that arm | `test_forge_confirmed_close_defeats_a_green_ci_log` | fails: `missing: 'state: failed'` |
+| So does a ci-ready status log, which reaches done with a different source | emit `done` from `emit_checks_green` without consulting the owner | `test_forge_confirmed_close_defeats_a_ci_ready_status_log` | fails: `missing: 'state: failed'` |
+| A confirmed merge is named on the checks-green path | drop the merge suffix from `fm_crew_checks_green_verdict` | `test_checks_passed_keeps_ready_for_review_unless_the_pr_was_closed` | fails: `missing: 'PR merged'` |
 | Both terminal paths reach the same verdict on a forge-confirmed merge | restore the asymmetry, letting only the no-steps path use the landing | `test_both_paths_agree_on_a_forge_confirmed_merge` | fails: `the two paths disagree on one world state` |
 | And on an open PR with no ci evidence | give the no-steps path its own done arm whatever the forge said | `test_both_paths_agree_on_an_open_pr_with_no_ci_evidence` | fails: `missing: 'state: unknown'` |
 | The per-child forge bound is at most a third of the scan's remaining budget | pass the whole remaining budget as the bound | `test_forge_bound_is_derived_from_the_remaining_budget` (`tests/fm-inactive-reconcile.test.sh`) | fails: `forge bound exceeds a third of the 6s budget: '3\|'` |
 | A budget too small to spare the read skips it instead of shrinking it | take the bound arm unconditionally (`if true`) | the same case | fails: `a 2s budget cannot spare a whole second of forge read: '0\|'` |
 
-34 of 34.
+38 of 38, re-derived in full on 2026-08-23.
 
 The first two rows share a case deliberately: both guards sit on the runs-list path, and the case needs both to hold - one stops the dead run being reached, the other makes the live run usable.
 Four later pairs share a mutation rather than a case, because one gate covers several distinct ways for the evidence to be absent and each way needs its own case to show it is covered.
@@ -74,6 +78,25 @@ The look-alike-host case above pins that reuse behaviourally, since a loosened p
 The unknown-not-parked row is pointed at the case that shows the HARM, not just the word: with `parked` restored, the answered `needs-decision:` line stops being reconciled as superseded, which is what let a resolved decision resurface as a captain demand.
 The 7-character floor in `fm_crew_sha_matches` is deliberately absent from the table: it is defensive against a degenerate abbreviation and has no observed trigger, so there is no honest case to pin it with.
 The last two rows live in `tests/fm-inactive-reconcile.test.sh` because the budget belongs to that caller, and they are listed here because the bound it derives is what keeps this file's forge read affordable.
+
+### Matrix decay, and the re-audit that found it
+
+Every row above was re-derived from scratch on 2026-08-23, one mutation at a time, because a row was found that had silently stopped falsifying anything.
+That is worse than having no matrix, since a decayed row launders confidence: it reads as evidence while proving nothing.
+
+Two rows needed repair, and they failed in two different ways worth telling apart.
+
+The ci-padding row DECAYED.
+It was genuinely falsifiable when written, and a LATER ruling invalidated it without touching it: once a forge-confirmed merge settled `done` whatever the ci step said, the case's MERGED fixture carried the verdict on its own, so dropping the column trim changed nothing any assertion could see.
+The repair is in the case, not the row: its PR is now OPEN, so the padded ci read is the only thing that can reach `done`, and the recorded mutation fails on the recorded assertion again.
+The general hazard is worth naming, because it will recur: a case that asserts an OUTCOME reachable by more than one route stops testing the route it was written for the moment another route can carry it alone.
+
+The pending-ci row was MIS-RECORDED from the start, not decayed.
+Its mutation column said "the same mutation", and the row it sits under had changed, so the phrase picked up the wrong antecedent - the checks-passed mutation, which cannot affect an `outcome: passed` run at all.
+The guard itself was always real and the recorded assertion was always right; only the pointer was wrong, and it now names its mutation outright rather than inheriting one.
+Rows that inherit a neighbour's mutation are the ones to distrust first on the next re-audit.
+
+The remaining rows all still falsify on their named assertion, including every row this change added.
 
 ## Reproducing the matrix
 
@@ -123,6 +146,29 @@ This is the third instance of one rule, now stated in `bin/fm-crew-run-verdict-l
 The three are `parked` reused for a terminated run, `done` for a terminated run with no CI evidence, and `done` for a forge-confirmed close.
 When a word carries a false implication once its detail is stripped, the fix is to make the word honest, never to teach one more consumer to read the fine print.
 
+## Ruled: green checks do not answer where the PR ended up
+
+The close ruling above landed on `fm_crew_terminal_verdict` and left a sibling path untouched, so the same false success survived one route over.
+An `outcome: checks-passed` run short-circuited before the forge was ever asked and emitted `done - checks green: PR ready for review`.
+A captain who closes that PR without merging, on a crewmate that then goes inactive, was presented with the abandoned work as a success, because `bin/fm-inactive-reconcile.sh` builds its payload from the state word and the PR alone.
+
+That route is the worse of the two to get wrong.
+A stale `done` merely overstates the work; `done - PR ready for review` actively invites the captain to go and review something already thrown away.
+
+TWO DIFFERENT QUESTIONS, and the fix keeps them apart rather than merging them.
+What proves CI RAN: `checks-passed` is a statement about the CHECKS, so it is CI evidence in its own right and still needs no corroborating `ci,completed` row, exactly as ruled before.
+What proves WHERE THE PR ENDED UP: nothing in the run record, on any path.
+Green checks answer the first question and are silent on the second, so `checks-passed` keeps its own CI evidence and is simply no longer EXEMPT from the forge read.
+`fm_crew_checks_green_verdict` owns the second question for every route that reaches `done` this way: the `checks-passed` outcome, the ci-log-green override, and the ci-ready status log.
+
+The resulting invariant is stated once in `bin/fm-crew-state.sh`'s header rather than as a list of arms: this reader never emits `done` without having asked the forge where the PR ended up.
+A confirmed close settles `failed`; every other answer keeps the ready-for-review detail, which is the signal those paths exist to produce, and a confirmed merge names the merge.
+
+The cost changed and is recorded honestly.
+The forge read used to happen only on a terminal pass, so a crew monitoring a green PR made no forge call; it now costs one bounded `gh pr view` per heartbeat while that crew waits.
+The paths that can say `done` are mutually exclusive, so no single invocation makes two calls, and a crew reported working, parked, failed or unknown still makes none.
+That is the price of the invariant, and it is the right way round: the read is cheap and bounded, while presenting abandoned work to a captain as a success is not.
+
 ## Forge-read bound
 
 `fm_crew_forge_pr_state` is the only outbound call this reader makes, and `FM_CREW_STATE_FORGE_TIMEOUT` bounds it.
@@ -169,8 +215,9 @@ Both were verified on 2026-08-22 against `no-mistakes` v1.48.0, because run sele
 
 Selection uses the second because finding the branch's run at all outranks richer detail about it.
 The first would allow a follow-up `axi status --run <id>` and so give that path the same full step, activity and `branch_sync` evidence the `axi status` path gets, which a coarse row cannot carry; that upgrade is named in `bin/fm-crew-state.sh` as follow-up work rather than done here.
-Until it lands, a coarse `completed` row can offer no ci-step evidence at all, so the forge's own answer is the only terminal fact that path has: merged or closed reads done, and open or unanswered reads unknown.
+Until it lands, a coarse `completed` row can offer no ci-step evidence at all, so the forge's own answer is the only terminal fact that path has: merged reads done, closed reads failed, and open or unanswered reads unknown.
 That is the same ranking the full path uses, reached with one input missing rather than by a second rule.
+The closed arm is the ruling recorded three sections above, and it holds on BOTH paths, because `fm_crew_terminal_verdict` is the one owner they both call.
 
 ## branch_sync availability
 

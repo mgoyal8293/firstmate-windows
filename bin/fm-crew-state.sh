@@ -30,7 +30,10 @@
 #      running/fixing -> working, ci -> working, awaiting_approval/fix_review ->
 #      parked (with gate findings), failed/cancelled -> failed, and
 #      checks-passed -> done, since that word is itself a statement about the
-#      checks. `passed` is not: it says only that the PIPELINE completed, so every
+#      checks - though green checks prove only that CI ran, so that arm still
+#      asks the forge where the PR ended up and a confirmed close reads failed
+#      (fm_crew_checks_green_verdict). `passed` is not even that much: it says
+#      only that the PIPELINE completed, so every
 #      terminated run goes through one ranking (fm_crew_terminal_verdict) - a
 #      forge-confirmed merge reads done whatever the ci step says, a
 #      forge-confirmed close reads failed because a closed-unmerged PR is the
@@ -43,7 +46,8 @@
 #      the active step is ci, `axi status` alone cannot tell "still waiting on
 #      checks" from "checks green, waiting on merge" (see nm_ci_checks_state) -
 #      a ci-step log-tail check overrides working -> done once checks read
-#      green, so a green PR is never silently read as still-validating.
+#      green, so a green PR is never silently read as still-validating. That
+#      override answers to the same owner, so a closed PR reads failed there too.
 #   3. Reconcile the status log: if its last line says needs-decision/blocked but
 #      the run-step shows the run moved on, the log is deterministically stale and
 #      is flagged superseded. A genuinely parked run plus a needs-decision log
@@ -57,14 +61,23 @@
 #      than trusting a stale status log.
 #
 # Read-only: nothing here writes fleet state, and every command it runs is a
-# query. Not process-free, though - a terminal pass makes one outbound `gh pr
-# view` to confirm a merged-or-closed claim, bounded by FM_CREW_STATE_FORGE_TIMEOUT
-# and skipped entirely when FM_CREW_STATE_NO_FORGE is truthy, which reports the
-# merge state as unverified and never as a landing. A working crew makes no forge
-# call at all, and a caller running this script inside a budget of its own
-# (bin/fm-inactive-reconcile.sh) narrows that bound to a share of what it has
-# left, or skips the read, through those same two knobs. Always exits 0 on a
-# successful read regardless of state; exit 2 only on a usage error (no id).
+# query. Not process-free, though - at most ONE outbound `gh pr view` per
+# invocation, bounded by FM_CREW_STATE_FORGE_TIMEOUT and skipped entirely when
+# FM_CREW_STATE_NO_FORGE is truthy, which reports the merge state as unverified
+# and never as a landing.
+#
+# WHERE that read happens is the invariant, and it is worth stating as one rule
+# rather than a list of arms: this reader never emits `done` without having asked
+# the forge where the PR ended up. Every `done` is a claim a consumer may act on
+# with the DETAIL STRIPPED - bin/fm-inactive-reconcile.sh presents the state word
+# and the PR alone - so a `done` that never asked is how abandoned work reaches a
+# captain as a success. A crew reported working, parked, failed or unknown makes
+# no forge call at all; the paths that can say done are mutually exclusive, so
+# one invocation never makes two calls. A caller running this script inside a
+# budget of its own (bin/fm-inactive-reconcile.sh) narrows that bound to a share
+# of what it has left, or skips the read, through those same two knobs. Always
+# exits 0 on a successful read regardless of state; exit 2 only on a usage error
+# (no id).
 set -u
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -108,7 +121,7 @@ case "$NM_TIMEOUT" in ''|*[!0-9]*) NM_TIMEOUT=10 ;; esac
 FM_CREW_STATE_RUNS_LIMIT=${FM_CREW_STATE_RUNS_LIMIT:-200}
 case "$FM_CREW_STATE_RUNS_LIMIT" in ''|*[!0-9]*) FM_CREW_STATE_RUNS_LIMIT=200 ;; esac
 # Bound on the ONE forge read this script ever makes: the merged/closed
-# confirmation for a run that reached a terminal pass (fm_crew_forge_pr_state).
+# confirmation taken before any `done` is emitted (fm_crew_forge_pr_state).
 # FM_CREW_STATE_NO_FORGE=1 skips it, which reports the merge state as
 # unverified rather than asserting a landing - never as a landing.
 #
@@ -482,8 +495,9 @@ fi
 # Run state cannot supply it: a run reached
 # `outcome: passed` on a PR that was open, conflicted and carried zero checks,
 # and the old "PR merged/closed" reason was pure invention (see
-# fm-crew-run-verdict-lib.sh's header). Called only on a terminal pass, so a
-# routine heartbeat over working crews makes no forge call at all.
+# fm-crew-run-verdict-lib.sh's header). Called on exactly the paths that can emit
+# `done` and nowhere else, so a routine heartbeat over working, parked or failed
+# crews makes no forge call at all, and no single invocation makes two.
 crew_forge_answer() {
   local url
   case "$(printf '%s' "${FM_CREW_STATE_NO_FORGE:-}" | tr '[:upper:]' '[:lower:]')" in
@@ -540,12 +554,21 @@ if [ "$HAVE_RUN" = 1 ]; then
     if [ -n "$outcome" ]; then
       case "$outcome" in
         checks-passed)
-          # A statement about the CHECKS, so it is CI evidence in its own right
-          # and needs no corroborating ci-step row. Where merge is left to the
+          # TWO DIFFERENT QUESTIONS, kept apart here because conflating them is
+          # how this regresses. What proves CI RAN: `checks-passed` is a statement
+          # about the CHECKS, so it is CI evidence IN ITS OWN RIGHT and still
+          # needs no corroborating ci-step row - where merge is left to the
           # captain the ci step stays `running` for the whole monitor phase (see
           # nm_ci_checks_state), so demanding one would withhold exactly the
-          # ready-for-review signal the captain is waiting on.
-          RUN_STATE="done"; RUN_DETAIL="checks green: PR ready for review"
+          # ready-for-review signal the captain is waiting on. That ruling stands
+          # untouched. What proves WHERE THE PR ENDED UP: nothing in the run
+          # record, which is why this arm is no longer EXEMPT from the forge read.
+          # fm_crew_checks_green_verdict owns that second question, and keeps the
+          # ready-for-review detail on every answer but a confirmed close.
+          green_verdict=$(fm_crew_checks_green_verdict "$(crew_forge_answer)" \
+            "checks green: PR ready for review")
+          RUN_STATE=${green_verdict%%|*}
+          RUN_DETAIL=${green_verdict#*|}
           ;;
         passed)
           # `outcome: passed` means the PIPELINE completed, not that CI passed, so
@@ -603,8 +626,10 @@ if [ "$HAVE_RUN" = 1 ]; then
           running)
             CI_LOG_STATE=$(nm_ci_checks_state)
             if [ "$CI_LOG_STATE" = green ]; then
-              RUN_STATE="done"
-              RUN_DETAIL="checks green: PR ready for review (still monitoring for merge/close)"
+              green_verdict=$(fm_crew_checks_green_verdict "$(crew_forge_answer)" \
+                "checks green: PR ready for review (still monitoring for merge/close)")
+              RUN_STATE=${green_verdict%%|*}
+              RUN_DETAIL=${green_verdict#*|}
             fi
             ;;
           fixing)
@@ -615,9 +640,21 @@ if [ "$HAVE_RUN" = 1 ]; then
     fi
   fi
 
+  # The crew's own log says its checks went green while the run monitors. Same
+  # two questions as the checks-passed arm above, so the same owner answers the
+  # second one: the log proves the checks, and only the forge can say where the
+  # PR ended up. Routing this through it is what makes the invariant complete -
+  # this reader never emits `done` without having asked - and it costs no extra
+  # call, because these paths and the two above are mutually exclusive.
+  emit_checks_green() {  # <source> <detail>
+    local verdict
+    verdict=$(fm_crew_checks_green_verdict "$(crew_forge_answer)" "$2")
+    emit "${verdict%%|*}" "$1" "${verdict#*|}"
+  }
+
   if [ "$RUN_STATE" = working ] && log_reports_ci_ready; then
     if [ "$RUN_SOURCE" = coarse ]; then
-      emit "done" status-log "$(status_line_note "$LOG_LINE")${SEP}run still monitoring PR"
+      emit_checks_green status-log "$(status_line_note "$LOG_LINE")${SEP}run still monitoring PR"
     fi
     [ -n "$CI_STEP_STATUS" ] || CI_STEP_STATUS=$(nm_effective_ci_step_status)
     if [ "$RUN_STATUS" = fixing ]; then
@@ -628,7 +665,7 @@ if [ "$HAVE_RUN" = 1 ]; then
       CI_LOG_STATE=not-ready
     fi
     if [ "$CI_LOG_STATE" != not-ready ]; then
-      emit "done" status-log "$(status_line_note "$LOG_LINE")${SEP}run still monitoring PR"
+      emit_checks_green status-log "$(status_line_note "$LOG_LINE")${SEP}run still monitoring PR"
     fi
   fi
 

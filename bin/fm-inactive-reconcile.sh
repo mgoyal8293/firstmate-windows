@@ -41,8 +41,11 @@
 # never invokes gh-axi, curl, fm-pr-check.sh, fm-pr-poll.sh, or a state
 # *.check.sh, and makes no forge call of its own.
 # It is NOT forge-free, though, because fm-crew-state.sh is not: a child whose
-# run reached a terminal pass costs one bounded `gh pr view`, which is the only
-# thing that may confirm a merged-or-closed claim rather than inferring one.
+# state could read `done` costs one bounded `gh pr view`, which is the only thing
+# that may confirm a merged-or-closed claim rather than inferring one. That is
+# every terminal pass and every green-checks path, because this scan presents the
+# state word and the PR alone, so an unasked `done` is exactly how abandoned work
+# would reach the captain as a success.
 # That read is bounded by a share of the aggregate budget this scan still has
 # left (crew_state_forge_bound, at most a third of it) and is skipped entirely
 # when what remains cannot spare it, because an unverified merge state is only

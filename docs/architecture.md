@@ -27,7 +27,8 @@ Fresh stale panes use the same current-state read before trusting the status log
 No-change heartbeats are also benign.
 Separately from heartbeat backoff and wedge handling, the watcher poll runs `bin/fm-inactive-reconcile.sh` on its own bounded cadence, while locked session start performs the same bounded scan immediately.
 In each home the scan considers only that home's long-inactive direct ordinary crewmates, excludes captain-held work, and accepts only `done` or `failed` from `bin/fm-crew-state.sh`.
-The scan itself reads local state, but it is not network-free: a child whose run reached a terminal pass costs one bounded forge read inside `bin/fm-crew-state.sh`, which is the only source a merged-or-closed claim may come from.
+The scan itself reads local state, but it is not network-free: a child whose state could read `done` costs one bounded forge read inside `bin/fm-crew-state.sh`, which is the only source a merged-or-closed claim may come from.
+That covers every terminal pass and every green-checks path, because `bin/fm-crew-state.sh` never emits `done` without first asking the forge where the PR ended up, and this scan drops the detail line before the captain sees it.
 That read is bounded by at most a third of the aggregate budget the scan still has left and is skipped when what remains cannot spare it, because an unverified merge state is reported as unverified and never as a landing.
 A secondmate retains a durable receipt for its idempotent report through the established parent route, and main-home captain presentation retains a separate receipt; neither receipt path performs a forge or PR check of its own.
 Absorbed wakes advance their suppression markers, log to `state/.watch-triage.log`, and keep the watcher blocking without a queue record or LLM turn.
@@ -44,15 +45,16 @@ This home's answerer close, pending-reply escalation close, and captain-held tra
 A turn-ended-only queue row omits its historical status annotation when that status file exactly matches the same seen marker.
 Any direct or remaining historical annotation prints every status line unread at the presentation cursor instead of replaying only the latest line.
 `bin/fm-crew-state.sh <id>` is the cheap current-state read for an actionable heartbeat review: it attributes only that branch's newest no-mistakes run, active or terminal, then keeps that run-step authoritative even if the pane has closed.
-`bin/fm-crew-run-verdict-lib.sh`'s header owns the verdict model: how that one candidate is selected, what each code-identity relation is allowed to support, and what evidence a terminal pass needs before it reads as done.
+`bin/fm-crew-run-verdict-lib.sh`'s header owns the verdict model: how that one candidate is selected, what each code-identity relation is allowed to support, and what evidence a terminal pass or a green-checks run needs before it reads as done.
 During no-mistakes' `ci` monitor phase, it also reads the ci step log tail because `axi status` reports both "still waiting on checks" and "checks green, waiting on merge" as `ci,running`.
+Every route that reaches `done` with green checks - the `checks-passed` outcome, that ci-log-green override, and a ci-ready status log - asks the forge where the PR ended up first, so a PR closed without merging reads `failed` rather than inviting the captain to review abandoned work.
 The most recent recognized ci log marker wins, so checks-green monitoring reports done while a later re-arm, failed-check, or issue marker returns the crew to working.
 Only when no matching run exists does it consult semantic busy state; exact busy reports working, exact idle permits fallback to a status-log event whose verb maps to a recognized run-state, and unknown or a dead pane stays unknown instead of trusting a stale log.
 Decision-only events such as `resolved` never become current state or leak their prose into the current-state detail.
 In that status-log fallback, a declared external wait reports the distinct `paused` state with its reason.
 The semantic branch reports working only on an exact busy verdict and names the source that produced it; an unknown verdict never becomes working, never permits the status-log fallback, and never becomes a silent idle.
 For whole-fleet read-only review, `bin/fm-fleet-snapshot.sh --json` emits schema `fm-fleet-snapshot.v1` from the backlog, task metadata, current crew state, endpoint probes, PR/report pointers, scout reports, bounded current summaries from registered secondmate homes, and secondmate return-channel guidance.
-That current-crew-state read costs what `bin/fm-crew-state.sh` costs per task, including its one bounded forge read for a task whose run reached a terminal pass, which the snapshot pays deliberately because a captain-facing view is exactly where an unconfirmed merge claim does its damage.
+That current-crew-state read costs what `bin/fm-crew-state.sh` costs per task, including its one bounded forge read for a task whose state could read `done`, which the snapshot pays deliberately because a captain-facing view is exactly where an unconfirmed merge claim does its damage.
 `bin/fm-fleet-view.sh` renders that snapshot as Markdown for humans, while `bin/fm-bearings-snapshot.sh` provides the bounded bearings projection, so both views consume one structured contract instead of reparsing raw fleet files.
 The script header owns the exact JSON schema.
 
