@@ -294,12 +294,28 @@ make_acquire_case() {  # <name> <id> -> case dir
 # dependency preflight. The adapter refuses without node-pty installed, and
 # bin/backends/conpty/node_modules is not part of a checkout, so the copy is
 # what makes this arm reachable off Windows. The scripts are the real ones.
-make_conpty_binroot() {  # <case-dir> -> echoes the fm-spawn to run
-  local case_dir=$1
-  mkdir -p "$case_dir/binroot"
-  cp -R "$ROOT/bin" "$case_dir/binroot/bin"
-  mkdir -p "$case_dir/binroot/bin/backends/conpty/node_modules/node-pty"
-  printf '%s\n' "$case_dir/binroot/bin/fm-spawn.sh"
+#
+# BUILT ONCE AND SHARED by every conpty case here. The tree is read-only to
+# them - the node-pty stub is the only thing written into it, and every case
+# wants it - while each case keeps its own home, state and pool through
+# run_acquire_spawn's overrides, so nothing a case does can reach this copy. Per
+# case it was seven copies of bin/ per run, which on the Windows lane is the
+# slowest operation in the suite for no gain. A case that ever needs to MUTATE
+# the tree must build its own rather than share this one.
+#
+# The cache is the TREE ITSELF, not a variable: every call site reads this
+# through a command substitution, so a variable set here would be set in a
+# subshell and lost. The node-pty stub is created last, so its presence is what
+# proves a previous copy finished rather than died half-way.
+make_conpty_binroot() {  # -> echoes the fm-spawn to run
+  local root="$TMP_ROOT/conpty-binroot"
+  if [ ! -d "$root/bin/backends/conpty/node_modules/node-pty" ]; then
+    rm -rf "$root"
+    mkdir -p "$root"
+    cp -R "$ROOT/bin" "$root/bin"
+    mkdir -p "$root/bin/backends/conpty/node_modules/node-pty"
+  fi
+  printf '%s\n' "$root/bin/fm-spawn.sh"
 }
 
 run_acquire_spawn() {  # <case-dir> <fakebin> <spawn> <id> [extra spawn args...]
@@ -339,7 +355,7 @@ test_conpty_leases_and_cds_in_the_session_shell() {
   id=acquire-conpty-z2
   case_dir=$(make_acquire_case acquire-conpty "$id")
   fakebin=$(make_conpty_fakebin "$case_dir/fake" "$case_dir/wt")
-  spawn=$(make_conpty_binroot "$case_dir")
+  spawn=$(make_conpty_binroot)
 
   out=$(run_acquire_spawn "$case_dir" "$fakebin" "$spawn" "$id" --backend conpty)
   line=$(acquire_line "$case_dir/sent.log")
@@ -386,7 +402,7 @@ test_aborted_conpty_spawn_returns_its_own_lease() {
   case_dir=$(make_abort_case acquire-conpty-abort "$id")
   export FM_FAKE_LEASED_PATH="$case_dir/leased-slot" FM_FAKE_LEASE_HOLDER="firstmate-$id" FM_FAKE_RETURN_EXIT=0
   fakebin=$(make_conpty_fakebin "$case_dir/fake" "$case_dir/not-a-worktree")
-  spawn=$(make_conpty_binroot "$case_dir")
+  spawn=$(make_conpty_binroot)
 
   out=$(run_acquire_spawn "$case_dir" "$fakebin" "$spawn" "$id" --backend conpty)
   status=$?
@@ -408,7 +424,7 @@ test_unreleasable_lease_prints_the_operator_command() {
   case_dir=$(make_abort_case acquire-conpty-stuck "$id")
   export FM_FAKE_LEASED_PATH="$case_dir/leased-slot" FM_FAKE_LEASE_HOLDER="firstmate-$id" FM_FAKE_RETURN_EXIT=1
   fakebin=$(make_conpty_fakebin "$case_dir/fake" "$case_dir/not-a-worktree")
-  spawn=$(make_conpty_binroot "$case_dir")
+  spawn=$(make_conpty_binroot)
 
   out=$(run_acquire_spawn "$case_dir" "$fakebin" "$spawn" "$id" --backend conpty)
   status=$?
@@ -439,7 +455,7 @@ test_no_recorded_lease_is_reported_without_claiming_either_way() {
   # holder holds nothing - which is what leaves the message to be chosen.
   export FM_FAKE_LEASED_PATH="$case_dir/leased-slot" FM_FAKE_LEASE_HOLDER="firstmate-someone-else" FM_FAKE_RETURN_EXIT=1
   fakebin=$(make_conpty_fakebin "$case_dir/fake" "$case_dir/not-a-worktree")
-  spawn=$(make_conpty_binroot "$case_dir")
+  spawn=$(make_conpty_binroot)
 
   out=$(run_acquire_spawn "$case_dir" "$fakebin" "$spawn" "$id" --backend conpty)
   status=$?
@@ -468,7 +484,7 @@ test_pathless_holder_row_still_attempts_the_release() {
   case_dir=$(make_abort_case acquire-conpty-pathless "$id")
   export FM_FAKE_LEASED_PATH= FM_FAKE_LEASE_HOLDER="firstmate-$id" FM_FAKE_RETURN_EXIT=1
   fakebin=$(make_conpty_fakebin "$case_dir/fake" "$case_dir/not-a-worktree")
-  spawn=$(make_conpty_binroot "$case_dir")
+  spawn=$(make_conpty_binroot)
 
   out=$(run_acquire_spawn "$case_dir" "$fakebin" "$spawn" "$id" --backend conpty)
   status=$?
@@ -495,7 +511,7 @@ test_non_array_status_payload_is_treated_as_unknown() {
   case_dir=$(make_abort_case acquire-conpty-shape "$id")
   export FM_FAKE_STATUS_SHAPE=object FM_FAKE_RETURN_EXIT=1
   fakebin=$(make_conpty_fakebin "$case_dir/fake" "$case_dir/not-a-worktree")
-  spawn=$(make_conpty_binroot "$case_dir")
+  spawn=$(make_conpty_binroot)
 
   out=$(run_acquire_spawn "$case_dir" "$fakebin" "$spawn" "$id" --backend conpty)
   status=$?
@@ -515,7 +531,7 @@ test_unreadable_pool_still_prints_the_operator_command() {
   # in because it is the only one this spawn observed.
   export FM_FAKE_STATUS_UNREADABLE=1 FM_FAKE_RETURN_EXIT=1
   fakebin=$(make_conpty_fakebin "$case_dir/fake" "$case_dir/not-a-worktree")
-  spawn=$(make_conpty_binroot "$case_dir")
+  spawn=$(make_conpty_binroot)
 
   out=$(run_acquire_spawn "$case_dir" "$fakebin" "$spawn" "$id" --backend conpty)
   status=$?

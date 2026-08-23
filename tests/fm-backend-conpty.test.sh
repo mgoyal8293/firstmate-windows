@@ -59,6 +59,31 @@ SH
   printf '%s' "$fb"
 }
 
+# write_create_task_fake_node: the `node` stub every create_task case needs, in
+# one place. It differs from make_node_fakebin's canned-response fake in the one
+# way create_task cares about: the FIRST `exists` must fail, because create_task
+# refuses an id a live session already owns, and every later one must succeed,
+# because the same call is how it confirms the session it just spawned answers.
+# A single definition matters here rather than three copies: a case whose copy
+# drifted would silently stop reproducing the others' setup, and the exists/spawn
+# protocol it stands in for is the adapter's readiness contract.
+write_create_task_fake_node() {  # <case-dir>
+  cat > "$1/fakebin/node" <<'SH'
+#!/usr/bin/env bash
+set -u
+LOG="${FM_CONPTY_LOG:?}"
+cmd=${2:-}
+{ printf '%s' "${1:-}"; for a in "$@"; do printf '\x1f%s' "$a"; done; printf '\n'; } >> "$LOG"
+if [ "$cmd" = exists ]; then
+  n=$(grep -c "$(printf '\x1f')exists$(printf '\x1f')" "$LOG")
+  [ "$n" -gt 1 ] && { printf 'present\n'; exit 0; }
+  printf 'absent\n'; exit 1
+fi
+exit 0
+SH
+  chmod +x "$1/fakebin/node"
+}
+
 # load_adapter: source the adapter into THIS shell with a private home, a fake
 # node on PATH, and the host gate lifted.
 load_adapter() {  # <case-dir>
@@ -306,21 +331,7 @@ calls_for() {  # <command> -> matching log lines
   load_adapter "$CASE"
   FM_BACKEND_CONPTY_SHELL='C:\fake\bash.exe'
 
-  # First `exists` must fail (nothing live), later ones succeed (daemon bound).
-  cat > "$CASE/fakebin/node" <<'SH'
-#!/usr/bin/env bash
-set -u
-LOG="${FM_CONPTY_LOG:?}"
-cmd=${2:-}
-{ printf '%s' "${1:-}"; for a in "$@"; do printf '\x1f%s' "$a"; done; printf '\n'; } >> "$LOG"
-if [ "$cmd" = exists ]; then
-  n=$(grep -c "$(printf '\x1f')exists$(printf '\x1f')" "$LOG")
-  [ "$n" -gt 1 ] && { printf 'present\n'; exit 0; }
-  printf 'absent\n'; exit 1
-fi
-exit 0
-SH
-  chmod +x "$CASE/fakebin/node"
+  write_create_task_fake_node "$CASE"
 
   sid=$(fm_backend_conpty_create_task fm-new1 /tmp/proj) || fail "create_task failed on a free id"
   tag=$(fm_backend_conpty_home_label)
@@ -378,20 +389,7 @@ SH
     || fail "the copy is $crgot bytes, not the $crexpect a CRLF rewrite produces, so this case would prove nothing"
   FM_BACKEND_CONPTY_ROOT="$CASE/repo"
 
-  cat > "$CASE/fakebin/node" <<'SH'
-#!/usr/bin/env bash
-set -u
-LOG="${FM_CONPTY_LOG:?}"
-cmd=${2:-}
-{ printf '%s' "${1:-}"; for a in "$@"; do printf '\x1f%s' "$a"; done; printf '\n'; } >> "$LOG"
-if [ "$cmd" = exists ]; then
-  n=$(grep -c "$(printf '\x1f')exists$(printf '\x1f')" "$LOG")
-  [ "$n" -gt 1 ] && { printf 'present\n'; exit 0; }
-  printf 'absent\n'; exit 1
-fi
-exit 0
-SH
-  chmod +x "$CASE/fakebin/node"
+  write_create_task_fake_node "$CASE"
 
   fm_backend_conpty_create_task fm-crlf1 /tmp/proj >/dev/null || fail "create_task failed with a CR-bearing rcfile"
   spawn_call=$(calls_for spawn)
@@ -410,20 +408,7 @@ SH
   load_adapter "$CASE"
   FM_BACKEND_CONPTY_SHELL='C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe'
 
-  cat > "$CASE/fakebin/node" <<'SH'
-#!/usr/bin/env bash
-set -u
-LOG="${FM_CONPTY_LOG:?}"
-cmd=${2:-}
-{ printf '%s' "${1:-}"; for a in "$@"; do printf '\x1f%s' "$a"; done; printf '\n'; } >> "$LOG"
-if [ "$cmd" = exists ]; then
-  n=$(grep -c "$(printf '\x1f')exists$(printf '\x1f')" "$LOG")
-  [ "$n" -gt 1 ] && { printf 'present\n'; exit 0; }
-  printf 'absent\n'; exit 1
-fi
-exit 0
-SH
-  chmod +x "$CASE/fakebin/node"
+  write_create_task_fake_node "$CASE"
 
   fm_backend_conpty_create_task fm-ps1 /tmp/proj >/dev/null || fail "create_task failed on a pinned non-bash shell"
   spawn_call=$(calls_for spawn)
@@ -686,7 +671,41 @@ line two'
   [ "$out" = 'running|C|1' ] || fail "an untagged mark must be ignored, got $out"
   out=$(track '[""]')
   [ "$out" = 'unknown||0' ] || fail "a session with no mark must be unknown, got $out"
-  pass "conpty liveness: the marker tracker reads split marks, both terminators, and ignores untagged ones"
+
+  # AN UNTERMINATED OSC MUST NOT SWALLOW THE NEXT MARK. The harness writes to
+  # this stream too, so an OSC whose terminator never arrives - a write cut
+  # short, an OSC 8 hyperlink from a tool that died mid-sequence - can sit ahead
+  # of a real mark. Scanning to the first terminator after the STALE opener
+  # consumes the `C` mark's own BEL, the joined body fails the `133` test, and
+  # the last mark stays at the previous PROMPT: `at-prompt` while a command is
+  # running is decideAgentState's `dead` under a live agent, for as long as that
+  # command lasts. Both directions are asserted - the mark is read, and it is
+  # read as `C` - because a scanner that dropped the stale opener's bytes into
+  # the body would also count a mark here.
+  out=$(track '["\u001b]133;B;fmpty=1\u0007","\u001b]8;;http://example/","\u001b]133;C;fmpty=1\u0007"]')
+  [ "$out" = 'running|C|2' ] || fail "a stale unterminated OSC swallowed the next mark, got $out"
+  # The same thing arriving as one chunk, which is how a concurrent writer
+  # usually interleaves.
+  out=$(track '["\u001b]133;B;fmpty=1\u0007\u001b]8;;http://example/\u001b]133;C;fmpty=1\u0007"]')
+  [ "$out" = 'running|C|2' ] || fail "a stale opener in the same chunk swallowed the next mark, got $out"
+  # And the resync must not cost the marker that is genuinely split across
+  # chunks, which is the reason the carry exists at all.
+  out=$(track '["\u001b]133;B;fmpty=1\u0007\u001b]133;C;fmp","ty=1\u0007"]')
+  [ "$out" = 'running|C|2' ] || fail "resyncing lost a mark that was merely split, got $out"
+
+  # THE CARRY IS BOUNDED, and dropping it must not leave a stale `at a prompt`.
+  # A stream that opens an OSC and never terminates it would otherwise grow the
+  # carry for the life of the session; the bytes dropped may have held a mark, so
+  # the reading degrades to `unknown` - the fallback a session that never armed
+  # gets - rather than keeping a prompt reading that could now be wrong. A `C` is
+  # kept deliberately: it suppresses recovery, so a stale one is the safe stale.
+  huge=$(node -e 'process.stdout.write(JSON.stringify(["\u001b]133;D;0;fmpty=1\u0007", "\u001b]" + "x".repeat(4096)]))')
+  out=$(track "$huge")
+  [ "$out" = 'unknown||1' ] || fail "an unterminated OSC longer than the carry bound left the tracker at '$out'; a dropped mark must degrade to unknown, not hold a prompt reading"
+  huge_c=$(node -e 'process.stdout.write(JSON.stringify(["\u001b]133;C;fmpty=1\u0007", "\u001b]" + "x".repeat(4096)]))')
+  out=$(track "$huge_c")
+  [ "$out" = 'running|C|1' ] || fail "a dropped carry must not discard a running-command reading, got $out"
+  pass "conpty liveness: the marker tracker reads split marks, both terminators, ignores untagged ones, and resynchronises rather than letting a stale OSC swallow a mark"
 
   # The screen is the FALLBACK source, and it is a rendered-surface reading - what
   # it matches is what a vendor draws - so both of its reproduced defects are
@@ -760,6 +779,7 @@ line two'
 (
   CASE="$TMP_ROOT/shell-integration"; mkdir -p "$CASE"
   RC="$ROOT/bin/backends/conpty/fm-shell-integration.bash"
+  LIVENESS="$ROOT/bin/backends/conpty/fmpty-liveness.js"
   H="$CASE/home"; mkdir -p "$H"
 
   # marks_from <script-fed-to-stdin> -> the tagged mark letters seen, in order.
@@ -819,6 +839,83 @@ exit
     *) fail "the control case lost the outer shell's own marks too, so it proves nothing: '$stripped'" ;;
   esac
   pass "conpty shell integration: a nested shell continues the mark chain, and stops marking when the carriers are withheld"
+
+  # A SHELL THAT CANNOT ANNOUNCE A RUNNING COMMAND MUST NOT ANNOUNCE PROMPTS.
+  # This is the direction the exported carriers make reachable: a nested shell
+  # inherits both, then reads its own rc files, and a plain `PS0=...` there
+  # destroys the command-start carrier while the inherited prompt hook keeps
+  # firing. Such a shell would mark every prompt and no command, so the daemon
+  # would read `at-prompt` for the whole life of a foreground agent - which
+  # decideAgentState turns into `dead`, the one verdict that can launch a
+  # duplicate agent onto a live worktree.
+  #
+  # Read through the REAL tracker rather than a grep, and read at the moment that
+  # matters: the state the daemon is in while a command holds the foreground.
+  # The sentinel is printed BY that command, so everything up to it is exactly
+  # what the daemon had seen when it started - and it is ASSEMBLED by the command
+  # rather than spelled out, because the shell echoes the line it read and a
+  # spelled-out sentinel would first appear in that echo, cutting the stream
+  # before the command ever started.
+  state_at() {  # <script> <sentinel> [home] -> the tracker's state as it arrived
+    printf '%s' "$1" | env -i HOME="${3:-$H}" PATH="$PATH" bash --rcfile "$RC" -i 2>&1 \
+      | node -e '
+        const l = require(process.argv[1]);
+        const t = l.createPromptTracker();
+        let s = "";
+        process.stdin.setEncoding("utf8");
+        process.stdin.on("data", function (d) { s += d; });
+        process.stdin.on("end", function () {
+          const cut = s.indexOf(process.argv[2]);
+          if (cut === -1) { process.stdout.write("sentinel-never-arrived"); return; }
+          t.feed(s.slice(0, cut + process.argv[2].length));
+          process.stdout.write(t.state() + "|" + t.marks());
+        });
+      ' "$LIVENESS" "$2"
+  }
+  fg_script='%s
+printf %%s%%s FMFG RUN
+exit
+exit
+'
+  # The control: a healthy nested shell, marking its own command start.
+  healthy=$(state_at "$(printf "$fg_script" 'bash -i')" FMFGRUN)
+  case "$healthy" in
+    running\|*) ;;
+    *) fail "a healthy nested shell running a command read '$healthy', not running" ;;
+  esac
+  # The defect, as an operator's ~/.bashrc reaches it: the nested shell inherits
+  # both carriers and then its own rc file assigns PS0, which is the sequence
+  # measured on real Windows for the mirror case. It must stay silent, leaving
+  # the outer shell's `C` as the last word rather than claiming a prompt.
+  HC="$CASE/home-clobber"; mkdir -p "$HC"
+  printf "PS0='OPERATOR'\n" > "$HC/.bashrc"
+  ps0_gone=$(state_at "$(printf "$fg_script" 'bash -i')" FMFGRUN "$HC")
+  case "$ps0_gone" in
+    running\|*) ;;
+    *) fail "a nested shell whose own rc file assigned PS0 read '$ps0_gone' while a command held the foreground; at-prompt here is a false dead on a live agent" ;;
+  esac
+  # The two runs differ only in whether the nested shell could mark a running
+  # command, so their mark counts must differ too - otherwise the assertion above
+  # would pass on a build where nothing marked at all.
+  [ "${healthy#running|}" -gt "${ps0_gone#running|}" ] \
+    || fail "the healthy nested run counted ${healthy#running|} marks against the clobbered run's ${ps0_gone#running|}; the nested shell marked in neither, so this proved nothing"
+  # And the same shell must still be able to announce PROMPTS once it can
+  # announce commands again - the checks are read per mark, not latched, so a
+  # shell that restores PS0 heals without re-sourcing anything.
+  healed=$(state_at "bash -i
+PS0='OPERATOR'
+PS0='\\e]133;C;fmpty=1\\a'
+printf %s%s FMFG RUN
+exit
+exit
+" FMFGRUN)
+  case "$healed" in
+    running\|*) ;;
+    *) fail "a nested shell that restored the command-start carrier read '$healed' while a command held the foreground" ;;
+  esac
+  [ "${healed#running|}" -gt "${ps0_gone#running|}" ] \
+    || fail "restoring PS0 did not bring the marks back (${healed#running|} against the clobbered run's ${ps0_gone#running|})"
+  pass "conpty shell integration: a shell that cannot mark a running command marks no prompts either, so an inherited prompt hook can never report a live agent as stopped"
 
   # SHELL is what any tool in the session opens a shell with - `treehouse get`
   # run by hand, and anything else that consults it. An absent or unusable value

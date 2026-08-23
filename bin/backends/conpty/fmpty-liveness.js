@@ -50,6 +50,15 @@
 // froze the last mark at `C` for the task's whole life whenever that subshell's
 // own rc files reassigned PROMPT_COMMAND.
 //
+// What IS narrowed is which shells may say `at a prompt`. A shell can inherit
+// the prompt hook without being able to emit the command-start one - a rc file
+// that assigns PS0, a bash older than 4.4 that will never expand it - and a
+// shell that marks only prompts reports a live foreground agent as stopped. The
+// rcfile therefore re-checks both of those at every mark and stays silent when
+// it cannot pair a prompt with a running command, so the two carriers cannot
+// disagree on this stream. The check belongs there rather than here: only the
+// shell emitting a mark can say whether it could have emitted the other one.
+//
 // FAIL SAFE WHEN THE SIGNAL IS ABSENT. A session that has emitted no marker -
 // an older Git Bash whose bash predates PS0, a shell that ignored the rcfile, a
 // non-bash session shell - reports `unknown`, and the verdict falls back to the
@@ -88,9 +97,10 @@ const ST = ESC + '\\';
 
 // A marker can be split across pty chunks, so an incomplete one is carried to
 // the next feed. The carry is bounded: a stream that opens an OSC and never
-// terminates it must not grow this without limit. Dropping an over-long carry is
-// safe - the scanner resynchronises on the next OSC opener, and no marker is
-// ever accepted without both its terminator and its tag.
+// terminates it must not grow this without limit. It holds at most the bytes
+// from the LAST opener seen, because the scan resynchronises on a later opener
+// rather than carrying an abandoned one, and no marker is ever accepted without
+// both its terminator and its tag.
 const MAX_CARRY = 512;
 
 // createPromptTracker: the marker state machine. `feed` takes raw pty text in
@@ -117,6 +127,17 @@ function createPromptTracker(opts) {
     accepted++;
   }
 
+  // forget: bytes were discarded, so a marker may have been missed. Only an
+  // at-prompt reading is cleared. `C` is left alone deliberately: a stale
+  // "command running" suppresses recovery, while a stale "at a prompt" is a
+  // false `dead` on a live agent - the one outcome that can launch a duplicate
+  // agent onto a live worktree. Clearing it drops liveness back to the
+  // process-list-plus-screen fallback, which is what a session that never armed
+  // gets.
+  function forget() {
+    if (last !== 'C') last = '';
+  }
+
   function feed(chunk) {
     const s = carry + String(chunk == null ? '' : chunk);
     carry = '';
@@ -128,15 +149,31 @@ function createPromptTracker(opts) {
         carry = s.charAt(s.length - 1) === ESC ? ESC : '';
         return;
       }
+      // RESYNC ON A LATER OPENER. The harness writes to this stream too, so an
+      // OSC that is never terminated - a write cut short, an OSC 8 hyperlink
+      // whose terminator never arrives - can sit on the stream ahead of a real
+      // mark. Without this, that stale opener consumes the NEXT marker's own
+      // terminator, the joined body fails the `133` test, and a `C` announcing a
+      // running command is silently swallowed: the last mark stays at the
+      // previous prompt and a live agent reads `dead`. An opener before the
+      // terminator proves the earlier one was abandoned, so the scan restarts
+      // there. Nothing is lost by skipping the span: a complete marker begins
+      // with an opener of its own, which is where the scan resumes.
+      const nextOpen = s.indexOf(OSC_OPEN, open + OSC_OPEN.length);
       const bel = s.indexOf(BEL, open + OSC_OPEN.length);
       const st = s.indexOf(ST, open + OSC_OPEN.length);
       let end = -1;
       let next = -1;
       if (bel !== -1 && (st === -1 || bel < st)) { end = bel; next = bel + 1; }
       else if (st !== -1) { end = st; next = st + ST.length; }
+      if (nextOpen !== -1 && (end === -1 || nextOpen < end)) { i = nextOpen; continue; }
       if (end === -1) {
+        // No terminator and no later opener: this may be a marker split across
+        // chunks, so carry it - bounded, since an OSC that never terminates
+        // would otherwise grow the carry for the life of the session.
         const tail = s.slice(open);
-        carry = tail.length <= maxCarry ? tail : '';
+        if (tail.length <= maxCarry) carry = tail;
+        else { carry = ''; forget(); }
         return;
       }
       accept(s.slice(open + OSC_OPEN.length, end));

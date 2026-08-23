@@ -698,11 +698,24 @@ function agentStateAsync(maxAgeMs, cb) {
 }
 
 function agentState() {
+  const prompt = promptTracker.state();
+  // Every arm answers through the same reporter, including this one. The prompt
+  // fields come off the pty byte stream and never touch the process list, so a
+  // session whose child has exited still reports its mark chain - a reader that
+  // treats an absent count as a hard failure would otherwise abort on the one
+  // state it can be certain about. The verdict itself is decideAgentState's to
+  // state, so `missing` is written down once.
   if (exited) {
-    return { state: 'missing', why: 'pty child exited', exited: exited, procs: [] };
+    const gone = liveness.stateReport({
+      verdict: liveness.decideAgentState({ exited: exited }),
+      prompt: prompt,
+      promptMark: promptTracker.lastMark(),
+      promptMarks: promptTracker.marks(),
+    });
+    gone.exited = exited;
+    return gone;
   }
   const list = procCache.list;
-  const prompt = promptTracker.state();
   if (!list) {
     return liveness.stateReport({
       verdict: liveness.decideAgentState({ listAvailable: false, listSource: procCache.source }),

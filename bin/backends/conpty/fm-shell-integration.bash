@@ -36,6 +36,42 @@
 #   PS0             the `C` mark, printed when a command starts
 #   PROMPT_COMMAND  the `D` mark, printed before the next prompt is drawn
 #
+# THEY ARE EXPORTED TOGETHER BUT THEY ARE NOT TWO INDEPENDENT FACTS. A shell
+# that can announce a PROMPT but not a RUNNING COMMAND reports a live foreground
+# agent as "at a prompt", which is a false `dead` - the one verdict that can
+# launch a duplicate agent onto a live worktree. Inheritance is exactly how a
+# shell reaches that state without ever running the arming code below: a nested
+# bash inherits both carriers, then reads its own rc files, and a plain
+# `PS0='...'` there destroys the `C` carrier while the inherited `D` hook keeps
+# firing; a nested bash older than 4.4 gets there for free, inheriting a PS0 it
+# will never expand.
+#
+# So the `D` hook CHECKS, every time it fires, that the shell running it can
+# still announce a running command, and stays silent when it cannot:
+#
+#   - PS0 must still carry firstmate's `C` mark, which is what a clobbering
+#     assignment destroys; and
+#   - this shell must be able to EXPAND PS0 at all, which is the bash 4.4 floor
+#     below. The floor is a property of the shell, not of the environment, so a
+#     nested bash 4.3 fails it no matter what it inherited.
+#
+# Both are stateless properties of the shell running the hook, deliberately: a
+# hand-opened shell must be able to announce its own prompt the moment it draws
+# it, before it has run anything. Nothing about the marks changes for a shell
+# that passes - same bytes, same cadence - and a shell that fails either check
+# goes quiet, which leaves liveness holding the outer shell's `C` or falling back
+# to the process list and screen. Never `at-prompt`.
+#
+# The checks guard the `D` hook because it is the only mark that can cross into
+# a shell that never ran this file. The prompt brackets below live in PS1, which
+# is not exported and is armed in the same pass as PS0, so a shell can only emit
+# them if it armed both here. What that leaves is a shell that destroys its own
+# PS0 AFTER arming and keeps PS1: its prompt brackets still mark, so a command
+# running in it can read `at-prompt` until this file is sourced again, which
+# re-arms both. Conditioning PS1 the same way is not worth it - the guard would
+# have to survive readline's zero-width brackets, and would print itself onto
+# the captain's prompt on a shell with `promptvars` off.
+#
 # NO FIRSTMATE PATH PUTS A SHELL BETWEEN THIS ONE AND THE AGENT. It used to: a
 # bare `treehouse get` opens the pooled worktree in a provider SUBSHELL that
 # lives for the whole task, so the agent started one level down, in a shell that
@@ -44,15 +80,20 @@
 # THIS shell, so the agent runs here and no foreign rc file sits between
 # firstmate and the mark.
 #
-# That matters because inheritance is not immunity. A nested shell sources
-# /etc/bash.bashrc and ~/.bashrc AFTER inheriting the carriers, and an ordinary
-# `PROMPT_COMMAND='history -a'` in one of them destroys the finished-mark
-# carrier while leaving PS0 intact: the session then emits `C` and never `D`,
-# and the signal freezes at "a command is running". Measured on real Windows
-# with the provider subshell in place: a clean HOME gave DABCDCDCDCDABC, a
-# clobbering one gave DABCCCCDABC. That is a loud failure to PROVE a stop -
+# That matters because inheritance is not immunity, and a nested shell can lose
+# either carrier. It sources /etc/bash.bashrc and ~/.bashrc AFTER inheriting
+# them, so an ordinary `PROMPT_COMMAND='history -a'` in one of them destroys the
+# finished-mark carrier while leaving PS0 intact: the session then emits `C` and
+# never `D`, and the signal freezes at "a command is running". Measured on real
+# Windows with the provider subshell in place: a clean HOME gave DABCDCDCDCDABC,
+# a clobbering one gave DABCCCCDABC. That is a loud failure to PROVE a stop -
 # `fm-control exit` refuses rather than reporting an unproven transition - never
-# a false stop, and it is now reachable only in a shell someone opened by hand.
+# a false stop. The MIRROR case, a rc file that assigns PS0 and leaves
+# PROMPT_COMMAND alone, is the dangerous direction rather than the safe one, and
+# it is the one the `D` hook's own checks above rule out: that shell emits
+# nothing, so liveness keeps the outer shell's `C` and falls back rather than
+# reporting a prompt it cannot back up. Both are now reachable only in a shell
+# someone opened by hand.
 #
 # PS1 is NOT exported, because exporting it does not work here: Git for Windows'
 # /etc/bash.bashrc honours an already-exported PS1, and then sources
@@ -75,7 +116,9 @@
 # foreground agent as "at a prompt", which is exactly the false `dead` this must
 # never produce. So on an older bash this arms nothing at all, the daemon sees
 # no mark, and liveness falls back to the process-list-and-screen reading this
-# backend shipped with.
+# backend shipped with. The floor is checked again at MARK time, not only here,
+# because a shell can inherit the carriers without ever running this file - see
+# the `D` hook's two checks above, which is where that guard actually holds.
 
 # Order matters: the captain's environment first, this file's additions second,
 # so nothing here is overwritten by a later PS1 or PROMPT_COMMAND assignment.
@@ -192,7 +235,16 @@ if _fm_conpty_bash_has_ps0; then
   # where a newline is as good a separator as `;`, and newlines survive the
   # export into a child. The elements keep their order, and the only property
   # lost is that bash would have run them as separate commands.
-  _fm_conpty_mark_finished='_fm_conpty_status=$?; printf "\033]133;D;%s;fmpty=1\007" "$_fm_conpty_status"; ( exit "$_fm_conpty_status" )'
+  #
+  # The two checks are the ones the header describes, and they are read at MARK
+  # time off the shell running the hook, because that is the only shell whose
+  # honesty is in question: the arming guard above cannot answer for a shell that
+  # inherited this hook without ever reaching it. PS0 must still carry the `C`
+  # mark, and this shell must be new enough to expand PS0 at all - the same 4.4
+  # floor `_fm_conpty_bash_has_ps0` applies at arm time, written as one
+  # comparison here because it has to fit in an exported string. An unset
+  # BASH_VERSINFO reads 0 and stays silent, which is the safe direction.
+  _fm_conpty_mark_finished='_fm_conpty_status=$?; case "${PS0-}" in *"133;C;fmpty=1"*) [ "$(( ${BASH_VERSINFO[0]:-0} * 100 + ${BASH_VERSINFO[1]:-0} ))" -ge 404 ] && printf "\033]133;D;%s;fmpty=1\007" "$_fm_conpty_status" ;; esac; ( exit "$_fm_conpty_status" )'
   _fm_conpty_pc_decl=$(declare -p PROMPT_COMMAND 2>/dev/null || true)
   case "$_fm_conpty_pc_decl" in
     'declare -a'*|'declare -ax'*)
