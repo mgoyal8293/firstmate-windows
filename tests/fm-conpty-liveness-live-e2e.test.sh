@@ -85,6 +85,26 @@ node -e 'require("node-pty")' --prefix "$(dirname "$CLIENT")" >/dev/null 2>&1 \
 LAB=$(fm_test_tmproot fm-conpty-liveness-live)
 STATE="$LAB/state"
 mkdir -p "$STATE"
+
+# A session daemon holds its state directory open for a moment after the pty
+# child is killed, and Windows refuses to remove a directory a live process is
+# still sitting in - so the shared reaper printed a "Device or resource busy" it
+# could do nothing about, on every run including the passing ones. Retry briefly
+# first, then hand back to the shared reaper. This is the extra-teardown hook
+# tests/lib.sh documents for exactly this case.
+fm_conpty_live_cleanup() {
+  local dir i
+  for dir in "$LAB" "${LEASE_LAB:-}"; do
+    [ -n "$dir" ] && [ -d "$dir" ] || continue
+    i=0
+    while [ "$i" -lt 15 ]; do
+      rm -rf "$dir" 2>/dev/null && break
+      i=$((i + 1)); sleep 1
+    done
+  done
+  fm_test_cleanup
+}
+trap fm_conpty_live_cleanup EXIT INT TERM
 SESSION_SHELL=${FM_BACKEND_CONPTY_SHELL:-C:\\Program Files\\Git\\bin\\bash.exe}
 
 winpath() { cygpath -w "$1" 2>/dev/null || printf '%s' "$1"; }
@@ -107,6 +127,60 @@ wait_verdict() {  # <id> <want> <secs> -> 0 when reached
   while [ "$i" -lt "$max" ]; do
     [ "$(verdict "$id")" = "$want" ] && return 0
     i=$((i + 1)); sleep 1
+  done
+  return 1
+}
+# The daemon's own explanation of the verdict. Used for synchronisation, so the
+# guard never re-implements the harness-name table it exists to check: only the
+# daemon knows which attached process it recognised.
+why() {  # <id>
+  fmpty state --id "$1" 2>/dev/null | sed -n 's/.*"why":"\([^"]*\)".*/\1/p'
+}
+# Wait until the daemon reports a harness ATTACHED to the console while the
+# shell holds the foreground. Without this the backgrounded case is vacuous: the
+# session is already `dead` before the harness is launched, so waiting for
+# `dead` passes whether or not the harness ever attached.
+wait_attached_idle() {  # <id> <secs>
+  local i=0
+  while [ "$i" -lt "$2" ]; do
+    case "$(why "$1")" in *'attached but not in the foreground') return 0 ;; esac
+    i=$((i + 1)); sleep 1
+  done
+  return 1
+}
+# Wait for the mark counter to pass a baseline, which is how a newly started
+# interactive shell announces it armed and reached its OWN prompt. Typing into a
+# shell that has not got there yet loses the keystrokes.
+wait_marks_above() {  # <id> <baseline> <secs>
+  local i=0 now
+  while [ "$i" -lt "$3" ]; do
+    now=$(prompt_marks "$1")
+    if [ -n "$now" ] && [ "$now" -gt "$2" ] 2>/dev/null; then return 0; fi
+    i=$((i + 1)); sleep 1
+  done
+  return 1
+}
+# Wait until the SESSION SHELL, not some foreground process, is the thing
+# consuming keystrokes. A bare Enter at a shell prompt runs the prompt hook and
+# advances the mark counter; the same Enter delivered to a foreground TUI does
+# not. Measured on claude 2.1.220: three bare Enters at a prompt moved the
+# counter 3 -> 6 -> 9 -> 12, and three delivered to the harness in the
+# foreground left it at 13.
+#
+# This is needed because a BACKGROUNDED harness still reads the pty even with
+# its output redirected. Measured on the same build, it swallowed the next line
+# the case typed and then exited 1, which turned the following assertion into a
+# false `dead` on roughly two runs in three.
+wait_shell_owns_input() {  # <id> <secs>
+  local i=0 base now
+  base=$(prompt_marks "$1")
+  [ -n "$base" ] || return 1
+  while [ "$i" -lt "$2" ]; do
+    fmpty key --id "$1" --key Enter >/dev/null 2>&1
+    sleep 1
+    now=$(prompt_marks "$1")
+    if [ -n "$now" ] && [ "$now" -gt "$base" ] 2>/dev/null; then return 0; fi
+    i=$((i + 1))
   done
   return 1
 }
@@ -231,15 +305,40 @@ for harness in claude codex opencode grok kimi pi cursor-agent muse; do
   start_session "$id"
 
   # 1. Backgrounded: attached to the console, but the shell owns the foreground.
+  #
+  # Wait for the harness to ATTACH before reading the verdict. start_session has
+  # already asserted the empty session is `dead`, so waiting only for `dead`
+  # would pass without the harness ever starting and would prove nothing - and
+  # it is the attached-but-not-foreground reading, not the empty one, that a
+  # console-list-only classifier gets wrong.
   type_line "$id" "$harness >/dev/null 2>&1 &"
-  wait_verdict "$id" dead 30 \
+  wait_attached_idle "$id" 60 \
+    || fail "$harness never attached to the console while the shell was idle (daemon says: $(why "$id")), so the backgrounded case proved nothing"
+  [ "$(verdict "$id")" = dead ] \
     || fail "$harness backgrounded with an idle shell reported '$(verdict "$id")', not dead"
 
+  # Read that state promptly and do not assume it persists: measured on claude
+  # 2.1.220, a backgrounded harness quits within about 25s in every redirection
+  # this tried (pty stdin, a pipe that never closes, and /dev/null). Take the
+  # keyboard back before typing anything the next case depends on.
+  wait_shell_owns_input "$id" 60 \
+    || fail "the session shell never took the keyboard back after $harness was backgrounded, so nothing typed after this could be trusted"
+
   # 2. Foreground, in a NESTED shell, which is the shape every real task has.
+  #
+  # Synchronise on the nested shell's OWN prompt mark, not on a verdict that is
+  # already true. `dead` holds before `bash -i` is even typed, so waiting for it
+  # neither proves the mark chain reached the nested shell nor keeps the next
+  # line from being typed into a shell that is still starting. Measured on real
+  # Windows: it did exactly that, the harness line was swallowed, and the case
+  # failed as a false `dead` roughly two runs in three.
+  marks_outer=$(prompt_marks "$id")
+  [ -n "$marks_outer" ] || fail "could not read promptMarks before nesting, so the nested case could not be synchronised"
   type_line "$id" 'bash -i'
-  sleep 2
+  wait_marks_above "$id" "$marks_outer" 30 \
+    || fail "the nested shell never emitted a prompt mark of its own (still $(prompt_marks "$id"), baseline $marks_outer), so the mark chain did not reach it"
   wait_verdict "$id" dead 20 \
-    || fail "a nested shell at its own prompt reported '$(verdict "$id")', not dead - the mark chain did not reach it"
+    || fail "a nested shell at its own prompt reported '$(verdict "$id")', not dead"
   type_line "$id" "$harness"
   wait_verdict "$id" alive 60 \
     || fail "$harness in the foreground of a nested shell reported '$(verdict "$id")', not alive"
