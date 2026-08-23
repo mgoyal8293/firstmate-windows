@@ -718,6 +718,7 @@ The portable classifier regression is `tests/fm-backend-cmux.test.sh`.
 
 The compatibility floor is Windows 10 1809 (ConPTY's own floor) with Node 20.
 Active live evidence is a manual pass recorded on 2026-08-18 against Windows 10.0.26200, Node v22.18.0, node-pty 1.1.0, @xterm/headless 6.0.0, and a real Claude Code 2.1.220, extended on 2026-08-20 by the foreground-liveness and control-plane pass below (same host, Git for Windows 2.50.1 with bash 5.2.37, treehouse 2.1.1).
+It was re-run in full on 2026-08-23 on the same host, against the rebased code, because the control plane was rewritten underneath the earlier pass and evidence taken before that rewrite no longer covers what ships; the readings below are from that re-run except where a block is explicitly dated otherwise.
 The 2026-08-19 block that precedes it is retained as history and is **superseded**: it was measured on a spawn topology that no longer exists.
 The Windows CI lane in `.github/workflows/windows-ci.yml` carries only the portable regression `tests/fm-backend-conpty.test.sh` - which now covers the adapter with a faked session client, the liveness decision table with real node, and the mark chain with real bash - so this live evidence stays a recorded manual pass rather than a gate that reruns on every change.
 The backend capability matrix is covered portably by `tests/fm-control.test.sh`, and the real-harness half of the liveness proof is the opt-in `tests/fm-conpty-liveness-live-e2e.test.sh`.
@@ -823,7 +824,10 @@ foreground agent     state=alive  why=harness process claude.exe and a foregroun
 ```
 
 That third reading is the divergence the console list alone gets wrong: the harness is still in the process list, and only the shell's mark establishes that it is no longer running the session.
-A deliberately backgrounded (`&`) real claude cannot be held in that state, because it exits on its own without a tty; the scout report's stand-in agent covers that shape, and `tests/fm-backend-conpty.test.sh` pins the decision itself.
+A deliberately backgrounded (`&`) real claude reaches that state but cannot be *held* in it.
+Measured on 2026-08-23, it attaches and reads `dead` within a poll or two - `why=the session shell is at a prompt, so claude.exe is attached but not in the foreground` - and then exits within about 25 s under every redirection tried: pty stdin, a pipe that never closes (`sleep 100000 | claude`), and `/dev/null`.
+Two consequences, both load-bearing for the opt-in guard: the reading must be taken promptly rather than assumed to persist, and a backgrounded harness still reads the pty even with its output redirected, so it swallows whatever is typed next until it quits.
+`tests/fm-backend-conpty.test.sh` pins the decision itself, portably and without a harness.
 
 All three control verbs, end to end on a task spawned by `bin/fm-spawn.sh` with `--backend conpty --harness claude`:
 
@@ -835,6 +839,34 @@ relaunched ctlprobe harness=claude from=claude model=default effort=default back
 ```
 
 The endpoint reported `present` and the pooled worktree was still on disk after `exit`, and the replacement agent read `alive` with `claude.exe` attached again.
+
+Sampled as fast as one client call allows, the `exit` transition shows the divergence directly (2026-08-23; `fm-control exit` fired from the background so no sample is lost to it):
+
+```text
+11:59:05.256 mark=C prompt=running   procs=[claude.exe, sh.exe, bash.exe, bash.exe]
+11:59:05.959 mark=D prompt=at-prompt procs=[claude.exe, sh.exe, bash.exe, bash.exe]
+11:59:06.981 mark=B prompt=at-prompt procs=[bash.exe, bash.exe]
+```
+
+The middle sample is the whole point of the mark source: the shell has returned to its prompt while `claude.exe` is still in the console list, so a console-list-only classifier reads `alive` there.
+
+An unplanned confirmation of the abort path came from the same session: a spawn that aborted after leasing left `treehouse status` reading `in-use` under the aborted session's own shell rather than durably leased, and `available` once that window closed.
+
+**Does the mark source remove the dependency on the harness's process name?** Partly, and in the direction that matters.
+The at-prompt reading is taken before any name matching, so a harness the name table does not recognise can never read `dead` merely for being unrecognised - the unsafe direction, which is what a false `dead` on a live agent would be.
+A positive `alive` still needs a recognised name; an unrecognised process holding the foreground narrows to `ambiguous`, deliberately, matching what tmux reports for a foreground group holding something other than a shell.
+Measured on 2026-08-23 with a foreground `node.exe`, which nothing in the table matches:
+
+```text
+idle shell        verdict=dead      prompt=at-prompt agentName=[]  why=the session shell is at a prompt
+node.exe running  verdict=ambiguous prompt=running   agentName=[]  why=a foreground command is running but no
+                                                                       attached process is a recognised harness
+after it finishes verdict=dead      prompt=at-prompt agentName=[]  why=the session shell is at a prompt
+```
+
+On the npm install itself the unrecognised shape does not arise.
+`claude` on PATH is npm's `/bin/sh` shim, which `exec`s a native `bin/claude.exe` the package's postinstall copies into place, and the documented `--ignore-scripts` fallback `node cli-wrapper.cjs` uses `spawnSync` to launch that same native binary as a child.
+Both paths put a real `claude.exe` on the console - measured `procs=[claude.exe, node.exe, bash.exe, bash.exe, bash.exe]` for the fallback - so `claude.exe` is what the daemon sees either way.
 
 No harness mark collision, checked on the transcript of that live session:
 
@@ -999,12 +1031,22 @@ after /exit t+02  state=dead   prompt=unknown marks=0 screen=shell   procs=bash.
 
 This is the measurement behind the narrowed claim above: `dead` arrives only once `claude.exe` has left the console list, one poll later, not while it lingers.
 
-**(2f) The strengthened opt-in guard on the real host.**
-`FM_CONPTY_LIVENESS_LIVE=1 tests/fm-conpty-liveness-live-e2e.test.sh` exited 0 with 2 ok and 0 not ok, claude checked, and no OSC 133 mark of its own - tagged or untagged - while it held the foreground.
-One cosmetic wart, recorded rather than hidden: the shared temp cleanup cannot remove the killed session's directory on Windows ("Device or resource busy"), printed after the assertions, with no effect on the exit status.
+**(2f) The opt-in guard on the real host.**
+`FM_CONPTY_LIVENESS_LIVE=1 tests/fm-conpty-liveness-live-e2e.test.sh` exits 0 with 3 ok and 0 not ok, claude checked, and no OSC 133 mark of its own - tagged or untagged - while it held the foreground.
+Six consecutive runs on 2026-08-23.
+
+That count is six because the first re-run failed, and the cause was in the guard rather than the backend.
+It passed about one run in three: its waits were satisfied before the state they named existed, so the backgrounded case passed on an empty session and the nested case lost its only synchronisation, and the harness line was then typed into a shell that had not started - where the still-backgrounded harness ate it before exiting.
+The waits now synchronise on evidence, none of which spends tokens: the daemon must itself report a harness attached while the shell is idle, the mark counter must pass a baseline before anything is typed into a newly nested shell, and the shell must demonstrably own the keyboard again.
+That last one uses a bare Enter, which advances the counter at a shell prompt and does not while a foreground TUI holds the keyboard:
+
+```text
+at a shell prompt          enter 1: 3 -> 6    enter 2: 6 -> 9    enter 3: 9 -> 12
+claude holding foreground  enter 1: 13 -> 13  enter 2: 13 -> 13  enter 3: 13 -> 13
+```
 
 **Two suites fail on this Windows host for reasons that predate this branch.**
-Both were rerun at the pre-change base commit `1baa477` on the same host and produced the identical single failure each, so they are host facts and not this change's:
+Both were rerun on 2026-08-23 at the current pre-change base commit `6d7dc9a` on the same host and produced the identical single failure each, so they are host facts and not this change's:
 
 | Suite | Result on this host | The failing case |
 |---|---|---|

@@ -152,7 +152,7 @@ Regression safety for this adapter's own tests is in `tests/fm-backend-conpty.te
 - **Away mode (`/afk`) is unavailable.** The away-mode daemon must inject into the pane firstmate *itself* runs in, and there is no ConPTY equivalent of `$TMUX_PANE` or `$HERDR_PANE_ID` for firstmate to identify that pane by; a Windows firstmate runs in Windows Terminal or Git Bash, not inside a session this adapter owns. Creating the daemon's own non-visible terminal is a second missing piece: `bin/fm-afk-launch.sh`'s create/close/exists primitives are per-backend, and this adapter's session creation is task-scoped. Both refuse cleanly today rather than degrading, and away mode is the only firstmate capability this costs.
 - Scrollback while a harness holds the alternate screen is zero by construction; deep history comes from the transcript, which is capped and rotated (one generation kept) so an overnight session cannot fill the disk.
 - **Teardown does not remove a completed task's session directory.** `bin/fm-teardown.sh` retires the task's own records but has no conpty cleanup at all, so `state/conpty/<session>/` and its `transcript.log` survive on any host. That transcript is deliberately durable evidence rather than a leak, but nothing prunes the directory afterwards, so one accumulates per completed task, tracked as `winfm-conpty-transcript-dir-accumulation`.
-- No real-host gate reruns this adapter. `.github/workflows/windows-ci.yml` does run `tests/fm-backend-conpty.test.sh` on `windows-latest`, but that test fakes the client, so a real ConPTY console, a real daemon, and a real agent are still covered only by the recorded manual pass above.
+- No real-host gate reruns this adapter automatically. `.github/workflows/windows-ci.yml` runs `tests/fm-backend-conpty.test.sh` on `windows-latest`, but that test fakes the client. A real ConPTY console, a real daemon, and a real installed harness are covered by the opt-in `tests/fm-conpty-liveness-live-e2e.test.sh`, which has to be run by hand because standard CI has neither harness binaries nor credentials, plus the recorded manual pass above.
 
 ### The sign-out test that was not run
 
@@ -177,6 +177,10 @@ Report the result back into this section either way.
 
 ```sh
 tests/fm-backend-conpty.test.sh
+FM_CONPTY_LIVENESS_LIVE=1 tests/fm-conpty-liveness-live-e2e.test.sh   # Windows only, opt-in
 ```
+
+The first runs in CI and pins the decision table, the mark chain, and the adapter against a faked client.
+The second is the half only a real console can answer - whether an installed harness is recognised by name and whether it writes OSC 133 marks of its own - so run it after any harness upgrade, and after a treehouse upgrade for the lease transition it also covers.
 
 [`verification/runtime-backends.md`](verification/runtime-backends.md#conpty) records the active version matrix and the real-host lifecycle evidence.
