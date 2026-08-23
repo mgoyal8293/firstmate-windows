@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # tests/fm-session-token.test.sh - per-session token ownership for the fleet lock
-# (bin/fm-session-lock-lib.sh, bin/fm-lock.sh).
+# (bin/fm-session-token-lib.sh, bin/fm-lock.sh).
 #
 # WHY THIS EXISTS. The ancestry walk cannot work on the Windows runtimes: MSYS's
 # /proc holds only MSYS processes, so a native harness never appears in it and
@@ -83,7 +83,8 @@ new_primary_home() {
   git -C "$h" commit -q --allow-empty -m init
   : > "$h/AGENTS.md"
   for lib in fm-claude-sessionend-release.sh fm-primary-scope-lib.sh fm-session-lock-lib.sh \
-    fm-cursor-lib.sh fm-proc-lib.sh fm-hook-host-lib.sh fm-wake-lib.sh fm-lock.sh; do
+    fm-cursor-lib.sh fm-proc-lib.sh fm-session-token-lib.sh fm-hook-host-lib.sh \
+    fm-path-lib.sh fm-wake-lib.sh fm-lock.sh; do
     cp "$ROOT/bin/$lib" "$h/bin/$lib"
   done
   chmod +x "$h/bin/fm-claude-sessionend-release.sh" "$h/bin/fm-lock.sh"
@@ -341,8 +342,39 @@ test_release_is_inert_on_an_ancestry_owned_home() {
   pass "session end: inert on a home that records no token"
 }
 
+# The other half of the same predicate: a walk that is MISSING is not a walk
+# that answered "nobody".
+#
+# CONTRACT: fm_session_ancestry_unavailable must never report "ancestry
+# structurally cannot answer" on evidence it did not gather. The walk lives in
+# bin/fm-session-lock-lib.sh, which sources bin/fm-session-token-lib.sh, so a
+# consumer that sources the token lib alone would get 127 from the walk call,
+# skip the refusal it guards, and open the token acquisition path - granting the
+# fleet lock on an unmeasured claim. Refusing leaves the home read-only and
+# falls back on upstream's own ancestry refusal.
+#
+# Driven in a fresh bash rather than a subshell because a subshell inherits
+# fm_harness_ancestry_pids from this file's own source line, which is exactly
+# the condition being excluded.
+test_ancestry_unavailable_refuses_when_the_walk_itself_is_absent() {
+  local rc=0
+  bash -c '
+    set -u
+    . "$1/bin/fm-session-token-lib.sh"
+    command -v fm_harness_ancestry_pids >/dev/null 2>&1 \
+      && { printf "fixture: fm_harness_ancestry_pids must NOT be defined here\n" >&2; exit 2; }
+    FM_PROC_UNAME_S=$2
+    fm_session_ancestry_unavailable
+  ' _ "$ROOT" "$WIN" || rc=$?
+  [ "$rc" = 2 ] && fail "token: the fixture failed to isolate bin/fm-session-token-lib.sh from the ancestry walk"
+  [ "$rc" = 0 ] \
+    && fail "token: SECURITY - a MISSING ancestry walk must not read as one that structurally cannot answer; the token acquisition path was opened on evidence never gathered"
+  pass "fm_session_ancestry_unavailable: refuses when the ancestry walk is not available to be asked"
+}
+
 test_token_is_ignored_where_ancestry_actually_works
 test_ancestry_unavailable_requires_both_platform_and_empty_walk
+test_ancestry_unavailable_refuses_when_the_walk_itself_is_absent
 test_the_windows_refusal_names_the_token_not_ancestry
 test_token_acquires_and_records_a_plain_pid
 test_same_session_reacquisition_is_idempotent

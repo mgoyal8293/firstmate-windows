@@ -2,9 +2,9 @@
 
 This repository is a Windows port of firstmate.
 It is one repo, not a rewrite: every platform difference is an added
-`case "$(uname -s)" in MINGW*|MSYS*)` arm, or a capability probe, inside the function that already owned the behaviour.
-That is deliberate - git merges added arms cleanly, and rewritten files conflict on every upstream touch until the port is unmaintainable.
-Keep new work in that shape.
+`case "$(uname -s)" in MINGW*|MSYS*)` arm, or a capability probe, inside the function that already owned the behaviour, and a whole self-contained mechanism is a new `bin/fm-*-lib.sh` that owner sources.
+That is deliberate - git merges added arms and new files cleanly, while rewritten files conflict on every upstream touch until the port is unmaintainable.
+[`CONTRIBUTING.md`](../CONTRIBUTING.md) "Windows-port changes" owns that rule; keep new work in that shape.
 
 The target runtime is Git for Windows (MSYS2/MINGW64 bash), not WSL.
 WSL runs upstream firstmate unchanged and needs none of this.
@@ -16,10 +16,10 @@ Each is fixed at exactly one owner:
 
 | Failure | Owner | Substitute |
 |---|---|---|
-| `ln -s` silently makes a recursive COPY, so every fleet lock spins forever | `bin/fm-proc-lib.sh` | exports `MSYS=winsymlinks:nativestrict` on source; `bin/fm-bootstrap.sh` then PROVES a symlink can be made |
+| `ln -s` silently makes a recursive COPY, so every fleet lock spins forever | `bin/fm-proc-lib.sh` | exports `MSYS=winsymlinks:nativestrict` on source; `bin/fm-bootstrap.sh` then PROVES a symlink can be made, through the detectors in `bin/fm-symlink-preflight-lib.sh` |
 | MSYS `ps` rejects `-o`, so every process-table read fails on call one | `bin/fm-proc-lib.sh` | `fm_proc_field` reads the `/proc/<pid>/{ppid,pgid,sid,exename,cmdline}` files, with `ps -o` as the non-`/proc` fallback. Fixes harness detection, teardown, the watcher and the process-event runner; does **not** by itself fix the session lock - see "How the session lock is owned" below |
-| `lsof` is absent, so teardown reaps nothing - and Windows then physically refuses to delete the worktree the unreaped agent sits in | `bin/fm-teardown.sh`, `bin/fm-lock-lib.sh` | a bounded `/proc/*/cwd` (and `/proc/*/fd`) scan, which also sees the native Windows children MSYS spawned |
-| `chmod` is a no-op on `noacl` mounts, so no PR can be merged and no watcher check can be armed | `bin/fm-pr-lib.sh` | the exact-mode assertion is capability-gated; see the security note below |
+| `lsof` is absent, so teardown reaps nothing - and Windows then physically refuses to delete the worktree the unreaped agent sits in | `bin/fm-teardown.sh`, `bin/fm-lock-proc-lib.sh` | a bounded `/proc/*/cwd` (and `/proc/*/fd`) scan, which also sees the native Windows children MSYS spawned |
+| `chmod` is a no-op on `noacl` mounts, so no PR can be merged and no watcher check can be armed | `bin/fm-file-mode-lib.sh` | the exact-mode assertion is capability-gated; see the security note below |
 | A stored process identity was read through `ps -o lstart= -o command=` in a second place, so a secondmate's missed-report guard could never read its own sender | `bin/fm-proc-lib.sh` | `fm_pid_identity` moved here from `bin/fm-wake-lib.sh` and `bin/fm-pending-reply-lib.sh`'s private copy is gone. The pending-reply record now tags the stored identity's format and verifies an untagged one against the reader that wrote it, so records already on disk are not read as dead senders |
 | The `/proc` cwd and fd-target compare matched raw spellings, so a short (8.3) `%TEMP%` component - the spelling GitHub's Windows runners use - made the scan report NOBODY under a directory a live process was sitting in | `bin/fm-proc-lib.sh` | `fm_proc_cwd_prefixes` resolves the caller's directory through a `cygpath -m -l` probe and scans both spellings, so one location reachable under a mount alias or a short name is recognised as one. A match is what makes `bin/fm-teardown.sh` REFUSE to delete a worktree a live process occupies, and what makes `bin/fm-lock-lib.sh` read a held lock as live rather than stale; before it, teardown could delete that worktree out from under the process. Without `cygpath` the caller's spelling stays the only verdict |
 
@@ -54,8 +54,8 @@ in preference to remounting Git for Windows with `acl`.
 Where it is waived, five assertions still carry the binding: regular file, not a
 symlink, link count 1, pinned device, and the SHA-256 content binding, all under
 the home's own `state/` directory.
-`bin/fm-pr-lib.sh` holds the full reasoning; do not re-spell this policy at a
-call site.
+`bin/fm-file-mode-lib.sh` holds the full reasoning; do not re-spell this policy
+at a call site.
 
 ## Setup
 
@@ -121,7 +121,7 @@ path rather than replacing it.**
 
 - The token is a value the harness exports that is stable for one session and
   different in every other, so a process holding it is provably inside that
-  session. `bin/fm-session-lock-lib.sh` holds the verified source per harness;
+  session. `bin/fm-session-token-lib.sh` holds the verified source per harness;
   Claude's is `CLAUDE_CODE_SESSION_ID`, measured identical across `SessionStart`,
   the Bash tool's `PreToolUse`, `Stop` and `SessionEnd`, and equal to the
   `session_id` each hook payload carries on stdin.
@@ -210,12 +210,13 @@ $ readlink  -> /tmp/fmspell.1290/target
 spun forever - the wedge the winsymlinks fix removed, reintroduced one layer up.
 Any home under a mount-aliased path hits it.
 
-`fm_lock_same_path` is the fallback, and it uses `cygpath`, which owns the mount
-table. `cd ... && pwd -P` is NOT a resolver here: it canonicalises symlinked
-components but leaves the mount alias exactly as given, so it returns both
-spellings unchanged (measured). The strict string compare stays first and stays
-authoritative; where no `cygpath` exists the strict compare remains the only
-verdict, so this can widen a match and never silently accept an unresolvable one.
+`fm_lock_same_path` (`bin/fm-path-lib.sh`) is the fallback, and it uses
+`cygpath`, which owns the mount table. `cd ... && pwd -P` is NOT a resolver
+here: it canonicalises symlinked components but leaves the mount alias exactly
+as given, so it returns both spellings unchanged (measured). The strict string
+compare stays first and stays authoritative; where no `cygpath` exists the
+strict compare remains the only verdict, so this can widen a match and never
+silently accept an unresolvable one.
 
 It resolves the mount alias only.
 `fm_lock_same_path` calls `cygpath -m` without `-l`, so it cannot see through an 8.3 short component - the spelling GitHub's runners use for `%TEMP%` - and still compares a short spelling against a long one.

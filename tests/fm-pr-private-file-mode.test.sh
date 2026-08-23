@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # tests/fm-pr-private-file-mode.test.sh - the exact-mode half of firstmate's
-# private-file trust binding (bin/fm-pr-lib.sh), and the platform-scoped waiver
-# that keeps Windows able to merge at all.
+# private-file trust binding (bin/fm-file-mode-lib.sh), and the platform-scoped
+# waiver that keeps Windows able to merge at all.
 #
 # This is a SECURITY boundary, not a portability detail. The binding stops a
 # watcher check script, a poll sidecar or a registration record being swapped
@@ -27,8 +27,8 @@ set -u
 . "$ROOT/bin/fm-pr-lib.sh"
 
 # Clear the capability memo so the next probe re-measures. The two globals are
-# owned by bin/fm-pr-lib.sh, so shellcheck cannot see their use from here.
-# shellcheck disable=SC2034 # Read and written by bin/fm-pr-lib.sh fm_pr_mode_enforced.
+# owned by bin/fm-file-mode-lib.sh, so shellcheck cannot see their use from here.
+# shellcheck disable=SC2034 # Read and written by bin/fm-file-mode-lib.sh fm_pr_mode_enforced.
 reset_mode_memo() {
   FM_PR_MODE_ENFORCED_DIR=
   FM_PR_MODE_ENFORCED=
@@ -37,7 +37,7 @@ reset_mode_memo() {
 # Pin the memo to "this directory does not enforce modes", which is exactly the
 # state the probe reaches on a Git-for-Windows noacl mount. Simulating it is what
 # lets the waiver's behaviour be asserted from a POSIX runner.
-# shellcheck disable=SC2034 # Read by bin/fm-pr-lib.sh fm_pr_mode_enforced.
+# shellcheck disable=SC2034 # Read by bin/fm-file-mode-lib.sh fm_pr_mode_enforced.
 pin_mode_not_enforced() {  # <dir>
   FM_PR_MODE_ENFORCED_DIR=$1
   FM_PR_MODE_ENFORCED=1
@@ -139,7 +139,41 @@ test_private_file_binding_keeps_its_other_assertions_when_mode_is_waived() {
   pass "fm_pr_private_file_valid: device pin, symlink refusal and link-count 1 all survive the waived mode assertion"
 }
 
+# The fail-closed direction of the capability probe itself, exercised through the
+# public predicate rather than by reading bin/fm-file-mode-lib.sh's source.
+#
+# CONTRACT: fm_pr_file_mode_is must never WAIVE the exact-mode assertion because
+# it could not take a reading. Both predicates read the stored mode through
+# fm_pr_file_mode, which bin/fm-pr-lib.sh owns; splitting them into their own
+# file made "sourced without that owner" reachable, and there the probe would
+# compare an empty reading against 644, conclude the filesystem does not enforce
+# modes, and waive a security assertion. Uncertainty must be ENFORCEMENT.
+#
+# The lib is sourced in a fresh bash rather than a subshell on purpose: a
+# subshell inherits fm_pr_file_mode from this file's own source line, which is
+# exactly the condition being excluded.
+test_mode_assertion_is_enforced_when_the_mode_reader_is_absent() {
+  local root f rc
+  root=$(fm_test_tmproot fm-mode) || fail "mode-guard: could not create a fixture root"
+  f="$root/artifact"
+  : > "$f"
+  chmod 0644 "$f"
+  rc=0
+  bash -c '
+    set -u
+    . "$1/bin/fm-file-mode-lib.sh"
+    command -v fm_pr_file_mode >/dev/null 2>&1 \
+      && { printf "fixture: fm_pr_file_mode must NOT be defined here\n" >&2; exit 2; }
+    fm_pr_file_mode_is "$2" 600 2>/dev/null
+  ' _ "$ROOT" "$f" || rc=$?
+  [ "$rc" = 2 ] && fail "mode-guard: the fixture failed to isolate bin/fm-file-mode-lib.sh from its owner"
+  [ "$rc" = 0 ] \
+    && fail "mode-guard: SECURITY - a 0644 file must NOT satisfy \"must be 0600\" when the mode reader is absent; the assertion was WAIVED on a reading that was never taken"
+  pass "fm_pr_file_mode_is: enforces rather than waives when it cannot read a mode at all"
+}
+
 test_mode_assertion_stays_strict_where_chmod_works
+test_mode_assertion_is_enforced_when_the_mode_reader_is_absent
 test_mode_assertion_is_waived_only_where_chmod_cannot_round_trip
 test_mode_probe_is_not_fooled_by_a_no_op_chmod
 test_private_file_binding_keeps_its_other_assertions_when_mode_is_waived
