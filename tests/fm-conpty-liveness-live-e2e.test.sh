@@ -40,8 +40,16 @@
 # and no verified harness runs its tool shells any other way (measured for
 # Claude Code 2.1.220: promptMarks did not move across a real Bash tool call).
 #
-# Run it after any harness upgrade, and before trusting the dated per-harness
-# rows in docs/verification/runtime-backends.md "conpty".
+# It also asserts, once rather than per harness, the lease state transition that
+# bin/fm-spawn.sh's abort path depends on: a holder-scoped return clears this
+# task's own durable lease, and a return naming any other holder does not. That
+# one needs a real pool, because a faked treehouse can only confirm whatever the
+# fake was written to do, and it is the property that keeps an aborting spawn
+# from handing back a slot belonging to another live task.
+#
+# Run it after any harness upgrade, after a treehouse upgrade, and before
+# trusting the dated per-harness rows in docs/verification/runtime-backends.md
+# "conpty".
 #
 # NOT YET REGISTERED IN bin/fm-test-run.sh. It belongs in that script's
 # `live-harness-optin` family, so its gate skip is expected rather than
@@ -111,6 +119,111 @@ start_session() {  # <id>
   [ "$(verdict "$1")" = dead ] \
     || fail "a session with nothing running should be dead, got '$(verdict "$1")'"
 }
+
+# --- the lease transition bin/fm-spawn.sh's abort path depends on -------------
+#
+# conpty_release_spawn_lease hands a leased slot back when a spawn aborts before
+# the task record teardown would read exists, holder-scoped with
+# `treehouse return --force --if-lease-holder <holder> <path>`. Two properties of
+# REAL treehouse are load-bearing there, and a faked pool can only ever confirm
+# what the fake was written to do:
+#
+#   - a return from the OWNING holder really does clear the durable lease, or the
+#     abort leaks a slot with no record left to reclaim it from;
+#   - a return from any OTHER holder really does not, or the abort could hand
+#     back a slot belonging to another live task, because it locates the slot by
+#     holder label rather than by a path it may never have observed.
+#
+# This asserts the transition, not an immediate reclaim: releasing the lease is
+# not the same as freeing the slot, which stays in use until the aborted
+# session's own window closes (bin/fm-spawn.sh records that measurement).
+#
+# The pool is pinned inside the temp root, so this can never reach a real one.
+if command -v treehouse >/dev/null 2>&1 && command -v git >/dev/null 2>&1; then
+  LEASE_LAB=$(fm_test_tmproot fm-conpty-lease-transition)
+  LEASE_REPO="$LEASE_LAB/repo"
+
+  # THIS FIXTURE MUST NEVER BE ABLE TO TARGET THE CHECKOUT UNDER TEST, and it is
+  # written defensively because the obvious form is not safe. Two behaviours
+  # combine badly: `set -e` is SUPPRESSED inside a compound command used as the
+  # left operand of `||`, so a `( set -e; cd "$dir"; git ... ) || fail` block does
+  # NOT abort when the `cd` fails - and every git command after it then runs
+  # against the ambient working directory, which is the checkout being tested.
+  # A `git add -A && git commit` reached that way commits the tester's own
+  # in-progress work to the branch under test, under the fixture's identity.
+  #
+  # So nothing here relies on `cd` for isolation and nothing lets git choose its
+  # own target: the path is validated before use, every git call is pinned with
+  # `-C`, and the identity is written to the fixture repo's own config only.
+  [ -n "$LEASE_REPO" ] && [ "$LEASE_REPO" != /repo ] \
+    || fail "the lease fixture got no usable temp path, so it refused to run git rather than risk the checkout under test"
+  case "$LEASE_LAB" in
+    "$ROOT"|"$ROOT"/*)
+      fail "the lease fixture resolved inside the checkout under test ($LEASE_LAB), so it refused to run" ;;
+  esac
+  mkdir -p "$LEASE_REPO" || fail "could not create the disposable pool repo at $LEASE_REPO"
+  [ -d "$LEASE_REPO" ] || fail "the disposable pool repo is missing at $LEASE_REPO"
+  git -C "$LEASE_REPO" init -q . || fail "could not init the disposable pool repo"
+  # An unroutable .invalid identity, scoped to the fixture repo, so it can never
+  # be mistaken for a real author and can never apply to another repository.
+  git -C "$LEASE_REPO" config user.email fixture@conpty-lease.invalid \
+    || fail "could not set the fixture repo's own commit email"
+  git -C "$LEASE_REPO" config user.name 'conpty lease fixture' \
+    || fail "could not set the fixture repo's own commit name"
+  printf 'seed\n' > "$LEASE_REPO/seed.txt" || fail "could not seed the fixture repo"
+  git -C "$LEASE_REPO" add -A || fail "could not stage the fixture seed"
+  git -C "$LEASE_REPO" commit -qm 'seed the disposable treehouse pool' \
+    || fail "could not commit the fixture seed"
+  # A TOML literal string, so a Windows root needs no backslash escaping.
+  printf "max_trees = 1\nroot = '%s'\n" "$(winpath "$LEASE_LAB")" \
+    > "$LEASE_REPO/treehouse.toml" || fail "could not write the fixture pool config"
+
+  # The holder recorded against one slot, '' once released, or a marker when the
+  # row is gone entirely - which is also 'no longer leased to me'.
+  lease_holder_of() {  # <slot-path>
+    ( cd "$LEASE_REPO" && treehouse status --json 2>/dev/null ) | node -e '
+      let s = "";
+      process.stdin.on("data", function (d) { s += d; });
+      process.stdin.on("end", function () {
+        try {
+          const rows = JSON.parse(s);
+          const hit = (Array.isArray(rows) ? rows : []).find(function (r) {
+            return r && r.path === process.argv[1];
+          });
+          process.stdout.write(hit ? String(hit.lease_holder || "") : "<row-gone>");
+        } catch (e) { process.stdout.write("<unreadable>"); }
+      });
+    ' "$1"
+  }
+
+  LEASE_MINE="firstmate-fmlive-$$"
+  LEASE_THEIRS="firstmate-another-task-$$"
+  LEASE_SLOT=$( cd "$LEASE_REPO" && treehouse get --lease --lease-holder "$LEASE_MINE" 2>/dev/null )
+  [ -n "$LEASE_SLOT" ] \
+    || fail "could not lease a slot from the disposable pool, so the lease transition proved nothing"
+  held=$(lease_holder_of "$LEASE_SLOT")
+  [ "$held" = "$LEASE_MINE" ] \
+    || fail "a freshly leased slot recorded holder '$held', not this task's '$LEASE_MINE'"
+
+  ( cd "$LEASE_REPO" && treehouse return --force --if-lease-holder "$LEASE_THEIRS" "$LEASE_SLOT" ) \
+    >/dev/null 2>&1 || true
+  held=$(lease_holder_of "$LEASE_SLOT")
+  [ "$held" = "$LEASE_MINE" ] \
+    || fail "a return naming a holder that does not own the lease still changed it to '$held'; an aborting spawn could take a live task's slot"
+
+  ( cd "$LEASE_REPO" && treehouse return --force --if-lease-holder "$LEASE_MINE" "$LEASE_SLOT" ) \
+    >/dev/null 2>&1 \
+    || fail "the holder-scoped return failed against this task's own lease, so the abort path would leak the slot"
+  held=$(lease_holder_of "$LEASE_SLOT")
+  case "$held" in
+    ''|'<row-gone>') ;;
+    *) fail "the durable lease survived a return by its own holder; it is still held by '$held'" ;;
+  esac
+
+  pass "conpty spawn abort: against real treehouse $(treehouse --version 2>/dev/null | tr -d 'v\n'), a holder-scoped return clears this task's own durable lease and refuses one it does not own"
+else
+  echo "note: treehouse or git is missing here, so the spawn-abort lease transition was not checked"
+fi
 
 CHECKED=0
 for harness in claude codex opencode grok kimi pi cursor-agent muse; do

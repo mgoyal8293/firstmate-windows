@@ -878,6 +878,38 @@ exit
   [ "$(printf '%s' "$plain" | tr -cd D | wc -c)" = "$(printf '%s' "$resourced" | tr -cd D | wc -c)" ] \
     || fail "re-sourcing with the carriers already armed added marks (plain '$plain' vs re-sourced '$resourced')"
   pass "conpty shell integration: each carrier is armed idempotently, so a re-source heals a wiped one and duplicates nothing"
+
+  # AN OPERATOR'S ARRAY HOOKS MUST EACH RUN ONCE PER PROMPT. PROMPT_COMMAND is a
+  # string historically and an array from bash 5.1 on. Only the string form
+  # crosses into a child through the environment, so an inherited array is
+  # flattened into one list - but assigning that flattened string to a variable
+  # STILL DECLARED an array writes element 0 and leaves every later element in
+  # place, so the originals run a second time after the copy. The array is set by
+  # a file sourced BEFORE this one, which is how it really arrives: a system
+  # bash.bashrc runs ahead of --rcfile, and a hand-source runs after the
+  # operator's own rc files.
+  #
+  # The counts are the discriminator, not the presence of the hooks: defective
+  # code runs the TRAILING hook twice per prompt while the leading one stays
+  # correct, so asserting each against the prompt count separates the two and
+  # cannot pass vacuously.
+  pre_array="$CASE/pre-array.bash"
+  cat > "$pre_array" <<'PRE'
+PROMPT_COMMAND=('printf "FMH1\n"' 'printf "FMLAST\n"')
+PRE
+  printf '. %s\n' "$RC" >> "$pre_array"
+  arrayed=$(printf 'true\nexit\n' \
+    | env -i HOME="$H" PATH="$PATH" bash --rcfile "$pre_array" -i 2>&1)
+  a_prompts=$(printf '%s' "$arrayed" | grep -ao '133;D' | wc -l | tr -d ' ')
+  a_first=$(printf '%s' "$arrayed" | grep -ao 'FMH1' | wc -l | tr -d ' ')
+  a_last=$(printf '%s' "$arrayed" | grep -ao 'FMLAST' | wc -l | tr -d ' ')
+  [ "$a_prompts" -gt 0 ] \
+    || fail "the array-form case drew no marked prompt, so it proved nothing about duplicate hook runs"
+  [ "$a_first" = "$a_prompts" ] \
+    || fail "an operator's leading array hook ran $a_first times across $a_prompts prompts; once each was expected"
+  [ "$a_last" = "$a_prompts" ] \
+    || fail "an operator's trailing array hook ran $a_last times across $a_prompts prompts; the flattened copy left the original array element in place, so it runs twice per prompt"
+  pass "conpty shell integration: an operator's array-form prompt hooks survive arming without the trailing one running twice"
 ) || exit 1
 
 pass "conpty adapter unit tests complete"

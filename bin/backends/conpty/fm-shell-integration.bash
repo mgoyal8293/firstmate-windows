@@ -190,6 +190,14 @@ if _fm_conpty_bash_has_ps0; then
   case "$_fm_conpty_pc_now" in
     *"$_fm_conpty_mark_finished"*) ;;
     *)
+      # `unset` before assigning, because assigning a string to a variable that
+      # is STILL DECLARED an array writes element 0 and leaves every later
+      # element in place. The flattened copy then lives in element 0 while the
+      # originals still run after it, so an rc file that used the documented
+      # array form would have its trailing hooks run twice per prompt. Measured
+      # on bash 5.2.21 with a two-element operator array, before this unset: two
+      # prompts, the first hook ran twice (correct) and the last ran four times.
+      unset PROMPT_COMMAND
       PROMPT_COMMAND="$_fm_conpty_mark_finished${_fm_conpty_pc_now:+; $_fm_conpty_pc_now}"
       export PROMPT_COMMAND
       ;;

@@ -695,8 +695,18 @@ parse_orca_worktree_result() {
   fi
 }
 
-# conpty_release_spawn_lease: give back the pool slot this spawn leased, on the
+# conpty_release_spawn_lease: release the durable lease this spawn took, on the
 # abort path where the record teardown would read does not exist yet.
+#
+# What it gives back is the LEASE, not the slot, and the distinction is measured
+# rather than assumed: on Windows the release leaves `lease_id` and
+# `lease_holder` empty while the slot still reads `in-use`, because the aborted
+# session's own shell is still sitting in it, and the slot returns to
+# `available` when that window closes. The lease is the part worth releasing
+# here because it is the part that would otherwise outlive the aborted spawn
+# with no record left to reclaim it from. Nothing here kills that endpoint: the
+# abort tells the operator to inspect it, and a spawn abort must not destroy the
+# evidence of why it aborted.
 #
 # Only this backend needs it, and only because the lease is what makes the slot
 # outlive its acquirer: everywhere else `treehouse get`'s subshell holds the slot
