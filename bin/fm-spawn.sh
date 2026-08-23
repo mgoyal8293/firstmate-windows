@@ -721,14 +721,18 @@ parse_orca_worktree_result() {
 # task id, which no firstmate-provisioned layout produces - the pool is keyed per
 # clone path, and every home clones into its own projects/.
 #
-# The scan also answers whether there is anything to release at all, and the two
-# answers must not be conflated. A pool that read cleanly and holds no row for
-# this holder means the lease was never taken (the most likely abort: the
-# in-session `treehouse get --lease` itself failed, so the shell never left the
-# project and the cwd poll timed out), and telling the operator a slot stays
-# leased there would send them after a lease that does not exist. A pool that
-# could not be read or parsed is genuinely unknown, and an unknown state still
-# earns the hint.
+# NEITHER ANSWER THE SCAN GIVES IS A CONFIDENT NEGATIVE. A pool that read
+# cleanly and holds no row for this holder establishes only that none is recorded
+# AT THAT MOMENT, so claiming a slot stays leased there would send the operator
+# after a lease that may not exist - but concluding none was ever taken is the
+# opposite error, because the in-session `treehouse get --lease` can still be
+# running. The commonest abort cannot tell those apart: a lease that FAILED
+# leaves the substitution empty and `cd ""` is a no-op, and a lease still being
+# cut has simply not returned yet, so both leave the shell in the project and
+# both time out the cwd poll identically. So that path reports what is known,
+# names the in-flight possibility, and still hands over the reclaim command. A
+# pool that could not be read or parsed - including a payload that is not the
+# array of rows this expects - is genuinely unknown and keeps today's hint.
 #
 # Best-effort by design. A failed abort is worse than a leaked slot, so when the
 # release cannot be made this prints the exact one-line command instead of
@@ -743,7 +747,8 @@ conpty_release_spawn_lease() {  # <holder>
       process.stdin.on("end", function () {
         try {
           const rows = JSON.parse(s);
-          const hit = (Array.isArray(rows) ? rows : []).find(function (r) {
+          if (!Array.isArray(rows)) return;
+          const hit = rows.find(function (r) {
             return r && r.lease_holder === process.argv[1] && r.path;
           });
           process.stdout.write("readable\n" + (hit ? String(hit.path) : ""));
@@ -759,7 +764,7 @@ conpty_release_spawn_lease() {  # <holder>
       ;;
   esac
   if [ "$pool_read" = 1 ] && [ -z "$path" ]; then
-    echo "note: task $ID took no worktree lease as $holder, so the abort had none to release" >&2
+    echo "note: no worktree lease is recorded for $holder right now, so task $ID's abort released none; an in-session 'treehouse get --lease' that is still running can land one after this check, so if 'treehouse status' shows a slot leased to $holder, reclaim it with: treehouse return --force --if-lease-holder $holder <path from 'treehouse status'>" >&2
     return 0
   fi
   [ -n "$path" ] || path=${WT:-}
