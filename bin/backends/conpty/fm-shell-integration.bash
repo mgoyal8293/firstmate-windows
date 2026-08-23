@@ -12,10 +12,20 @@
 # owned by fmpty-liveness.js, which explains the verdict table.
 #
 # HOW IT IS LOADED. bin/backends/conpty.sh launches the session shell as
-# `bash --rcfile <this file> -i`. That REPLACES ~/.bashrc rather than adding to
-# it, so this file sources the system and user files first: the captain's own
+# `bash --rcfile <this file> -i`. That replaces the USER file, ~/.bashrc, and
+# only that one - so this file sources ~/.bashrc itself: the captain's own
 # environment, aliases, and the OSC 0 title sequence that this backend's
-# worktree discovery depends on all have to survive untouched.
+# worktree discovery depends on all have to survive untouched. The SYSTEM file
+# is not ours to source. bash runs SYS_BASHRC unconditionally for an interactive
+# shell, before the --rcfile and suppressed only by --norc, so sourcing
+# /etc/bash.bashrc here would run it a SECOND time and repeat every
+# non-idempotent side effect in it and in the /etc/profile.d files it pulls in:
+# a doubled PATH prepend, ssh-agent or keychain started twice, and a banner
+# printed twice into the very screen the liveness fallback reads to classify
+# this session. On a bash built without SYS_BASHRC, sourcing it here would be
+# worse rather than better - no other shell on that host reads the system file,
+# so the session shell would be the odd one out, which is the opposite of the
+# parity this backend exists to reach.
 #
 # THE MARKS FOLLOW THE SESSION INTO A NESTED SHELL. The two hooks that carry
 # them are EXPORTED, so an interactive bash opened BY HAND inside the session
@@ -69,10 +79,8 @@
 
 # Order matters: the captain's environment first, this file's additions second,
 # so nothing here is overwritten by a later PS1 or PROMPT_COMMAND assignment.
-if [ -f /etc/bash.bashrc ]; then
-  # shellcheck source=/dev/null
-  . /etc/bash.bashrc
-fi
+# bash has already run the system rc by the time this file is read; only the
+# user file was displaced by --rcfile, so only the user file is restored here.
 if [ -n "${HOME:-}" ] && [ -f "$HOME/.bashrc" ]; then
   # shellcheck source=/dev/null
   . "$HOME/.bashrc"
@@ -176,9 +184,14 @@ if _fm_conpty_bash_has_ps0; then
   # PROMPT_COMMAND the captain already had cannot change what that hook sees in
   # $?. PROMPT_COMMAND is a string on every bash that reaches here and an array
   # from 5.1 on; only the string form can cross into a child through the
-  # environment, so an inherited array is flattened into one list. The elements
-  # keep their order and their separators, and the only property lost is that
-  # bash would have run them as separate commands.
+  # environment, so an inherited array is flattened into one list. The join is by
+  # NEWLINE, not `; `, because an element carrying a trailing `#` comment would
+  # otherwise comment out every element after it on the joined line - measured on
+  # bash 5.2 with a two-element array whose first element ended in a comment: the
+  # second hook ran zero times. bash evaluates PROMPT_COMMAND as a command list,
+  # where a newline is as good a separator as `;`, and newlines survive the
+  # export into a child. The elements keep their order, and the only property
+  # lost is that bash would have run them as separate commands.
   _fm_conpty_mark_finished='_fm_conpty_status=$?; printf "\033]133;D;%s;fmpty=1\007" "$_fm_conpty_status"; ( exit "$_fm_conpty_status" )'
   _fm_conpty_pc_decl=$(declare -p PROMPT_COMMAND 2>/dev/null || true)
   case "$_fm_conpty_pc_decl" in
@@ -186,8 +199,7 @@ if _fm_conpty_bash_has_ps0; then
       # SC2178/SC2128: this branch is the only one that reads PROMPT_COMMAND as
       # an array, and it runs only when `declare -p` proved it is one.
       # shellcheck disable=SC2178,SC2128
-      _fm_conpty_pc_now=$(printf '%s; ' "${PROMPT_COMMAND[@]}")
-      _fm_conpty_pc_now=${_fm_conpty_pc_now%; }
+      _fm_conpty_pc_now=$(printf '%s\n' "${PROMPT_COMMAND[@]}")
       ;;
     *)
       # shellcheck disable=SC2178,SC2128
@@ -205,7 +217,12 @@ if _fm_conpty_bash_has_ps0; then
       # on bash 5.2.21 with a two-element operator array, before this unset: two
       # prompts, the first hook ran twice (correct) and the last ran four times.
       unset PROMPT_COMMAND
-      PROMPT_COMMAND="$_fm_conpty_mark_finished${_fm_conpty_pc_now:+; $_fm_conpty_pc_now}"
+      if [ -n "$_fm_conpty_pc_now" ]; then
+        PROMPT_COMMAND="$_fm_conpty_mark_finished
+$_fm_conpty_pc_now"
+      else
+        PROMPT_COMMAND="$_fm_conpty_mark_finished"
+      fi
       export PROMPT_COMMAND
       ;;
   esac

@@ -721,24 +721,32 @@ parse_orca_worktree_result() {
 # task id, which no firstmate-provisioned layout produces - the pool is keyed per
 # clone path, and every home clones into its own projects/.
 #
-# NEITHER ANSWER THE SCAN GIVES IS A CONFIDENT NEGATIVE. A pool that read
-# cleanly and holds no row for this holder establishes only that none is recorded
-# AT THAT MOMENT, so claiming a slot stays leased there would send the operator
-# after a lease that may not exist - but concluding none was ever taken is the
-# opposite error, because the in-session `treehouse get --lease` can still be
-# running. The commonest abort cannot tell those apart: a lease that FAILED
-# leaves the substitution empty and `cd ""` is a no-op, and a lease still being
-# cut has simply not returned yet, so both leave the shell in the project and
-# both time out the cwd poll identically. So that path reports what is known,
-# names the in-flight possibility, and still hands over the reclaim command. A
-# pool that could not be read or parsed - including a payload that is not the
-# array of rows this expects - is genuinely unknown and keeps today's hint.
+# THE RETURN IS ALWAYS ATTEMPTED, AND THE SCAN ONLY CHOOSES WHAT TO SAY. Do not
+# reintroduce an early return on "the pool reported no lease for this holder",
+# however cheap it looks: no answer the scan gives is a negative that can carry
+# that weight. A row can match this holder and carry no usable path, or the
+# `lease_holder`/`path` keys can drift, and skipping the release on either would
+# leak exactly the slot this function exists to hand back. The scan cannot even
+# settle whether a lease was taken: the in-session `treehouse get --lease` may
+# still be running, and the commonest abort cannot tell that from a lease that
+# FAILED, because a failure leaves the substitution empty and `cd ""` is a no-op,
+# so both leave the shell in the project and both time out the cwd poll
+# identically. Since `--if-lease-holder` already makes the return a no-op when
+# this holder holds nothing, attempting it unconditionally costs nothing and
+# removes the whole question.
+#
+# So the three outcomes are all about wording. A confirmed release is silent. A
+# release that failed where the pool read cleanly and held no row for this holder
+# says only that - none is recorded at this moment - names the in-flight
+# possibility, and still hands over the reclaim command. Anything else, including
+# a payload that is not the array of rows this expects, is genuinely unknown and
+# keeps the leaked-slot warning.
 #
 # Best-effort by design. A failed abort is worse than a leaked slot, so when the
 # release cannot be made this prints the exact one-line command instead of
 # failing.
 conpty_release_spawn_lease() {  # <holder>
-  local holder=$1 path= probe= pool_read=
+  local holder=$1 path= probe= pool_read= holder_row=
   [ -n "$holder" ] || return 0
   if command -v treehouse >/dev/null 2>&1 && command -v node >/dev/null 2>&1; then
     probe=$( cd "${PROJ_ABS:-.}" 2>/dev/null && treehouse status --json 2>/dev/null | node -e '
@@ -749,27 +757,32 @@ conpty_release_spawn_lease() {  # <holder>
           const rows = JSON.parse(s);
           if (!Array.isArray(rows)) return;
           const hit = rows.find(function (r) {
-            return r && r.lease_holder === process.argv[1] && r.path;
+            return r && r.lease_holder === process.argv[1];
           });
-          process.stdout.write("readable\n" + (hit ? String(hit.path) : ""));
+          if (!hit) { process.stdout.write("none"); return; }
+          process.stdout.write("held\n" + (hit.path ? String(hit.path) : ""));
         } catch (e) { /* no readable pool: the state is unknown, not empty */ }
       });
     ' "$holder" ) || probe=
   fi
   case "$probe" in
-    readable*)
+    none)
       pool_read=1
-      path=${probe#readable}
+      ;;
+    held*)
+      pool_read=1
+      holder_row=1
+      path=${probe#held}
       path=${path#$'\n'}
       ;;
   esac
-  if [ "$pool_read" = 1 ] && [ -z "$path" ]; then
-    echo "note: no worktree lease is recorded for $holder right now, so task $ID's abort released none; an in-session 'treehouse get --lease' that is still running can land one after this check, so if 'treehouse status' shows a slot leased to $holder, reclaim it with: treehouse return --force --if-lease-holder $holder <path from 'treehouse status'>" >&2
-    return 0
-  fi
   [ -n "$path" ] || path=${WT:-}
   if [ -n "$path" ] \
      && ( cd "${PROJ_ABS:-.}" 2>/dev/null && treehouse return --force --if-lease-holder "$holder" "$path" ) >/dev/null 2>&1; then
+    return 0
+  fi
+  if [ "$pool_read" = 1 ] && [ -z "$holder_row" ]; then
+    echo "note: no worktree lease is recorded for $holder right now, so task $ID's abort released none; an in-session 'treehouse get --lease' that is still running can land one after this check, so if 'treehouse status' shows a slot leased to $holder, reclaim it with: treehouse return --force --if-lease-holder $holder ${path:-<path from 'treehouse status'>}" >&2
     return 0
   fi
   echo "warning: task $ID's worktree lease was not released; the slot stays leased to $holder until you run: treehouse return --force --if-lease-holder $holder ${path:-<path from 'treehouse status'>}" >&2

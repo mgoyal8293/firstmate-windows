@@ -435,13 +435,15 @@ test_no_recorded_lease_is_reported_without_claiming_either_way() {
   case_dir=$(make_abort_case acquire-conpty-nolease "$id")
   # The pool reads cleanly and its one slot is leased to a DIFFERENT task, so the
   # probe finds no row for this holder.
-  export FM_FAKE_LEASED_PATH="$case_dir/leased-slot" FM_FAKE_LEASE_HOLDER="firstmate-someone-else" FM_FAKE_RETURN_EXIT=0
+  # The return is always attempted, and a real treehouse refuses it because this
+  # holder holds nothing - which is what leaves the message to be chosen.
+  export FM_FAKE_LEASED_PATH="$case_dir/leased-slot" FM_FAKE_LEASE_HOLDER="firstmate-someone-else" FM_FAKE_RETURN_EXIT=1
   fakebin=$(make_conpty_fakebin "$case_dir/fake" "$case_dir/not-a-worktree")
   spawn=$(make_conpty_binroot "$case_dir")
 
   out=$(run_acquire_spawn "$case_dir" "$fakebin" "$spawn" "$id" --backend conpty)
   status=$?
-  export FM_FAKE_LEASE_HOLDER=
+  export FM_FAKE_LEASE_HOLDER= FM_FAKE_RETURN_EXIT=0
   [ "$status" -ne 0 ] || fail "the spawn should have aborted on a worktree that is not isolated"$'\n'"$out"
   assert_not_contains "$out" "stays leased" \
     "the abort asserted a leaked slot as fact although no lease is recorded for this holder"
@@ -451,9 +453,36 @@ test_no_recorded_lease_is_reported_without_claiming_either_way() {
     "the abort did not tell the operator an in-flight acquisition can still land a lease after the check"
   assert_contains "$out" "treehouse return --force --if-lease-holder firstmate-$id" \
     "the abort withheld the reclaim command, so a lease landing after the check could never be reclaimed"
-  [ -z "$(treehouse_return_call "$case_dir/treehouse.log")" ] \
-    || fail "the abort ran treehouse return although no lease is recorded for this holder"$'\n'"$out"
   pass "an abort with no recorded lease for this task says so, names the in-flight case, and still offers the reclaim command"
+}
+
+# A ROW WITHOUT A USABLE PATH IS NOT AN ABSENT LEASE. The pool names this holder
+# but carries no path for it - a drifted or renamed key, or a row written before
+# the path was known. The release must still be attempted against the path this
+# spawn observed, because skipping it is the leak this function exists to
+# prevent, and the message must not tell the operator no lease is recorded when
+# the pool just said otherwise.
+test_pathless_holder_row_still_attempts_the_release() {
+  local case_dir id fakebin spawn out status us call
+  id=acquire-conpty-pathless-z8
+  case_dir=$(make_abort_case acquire-conpty-pathless "$id")
+  export FM_FAKE_LEASED_PATH= FM_FAKE_LEASE_HOLDER="firstmate-$id" FM_FAKE_RETURN_EXIT=1
+  fakebin=$(make_conpty_fakebin "$case_dir/fake" "$case_dir/not-a-worktree")
+  spawn=$(make_conpty_binroot "$case_dir")
+
+  out=$(run_acquire_spawn "$case_dir" "$fakebin" "$spawn" "$id" --backend conpty)
+  status=$?
+  export FM_FAKE_LEASE_HOLDER= FM_FAKE_RETURN_EXIT=0
+  [ "$status" -ne 0 ] || fail "the spawn should have aborted on a worktree that is not isolated"$'\n'"$out"
+  us=$(printf '\x1f')
+  call=$(treehouse_return_call "$case_dir/treehouse.log")
+  assert_contains "$call" "${us}return${us}--force${us}--if-lease-holder${us}firstmate-$id${us}$case_dir/not-a-worktree" \
+    "a holder row with no usable path suppressed the release entirely, leaking the slot it was meant to hand back"
+  assert_not_contains "$out" "no worktree lease is recorded" \
+    "the abort claimed no lease is recorded although the pool named this holder"
+  assert_contains "$out" "stays leased to firstmate-$id" \
+    "a release that failed while the pool named this holder did not report the slot as still leased"
+  pass "a pool row naming this holder with no usable path still gets the release attempted, and is never reported as no lease"
 }
 
 # AN UNEXPECTED PAYLOAD SHAPE IS NOT AN EMPTY POOL. `status --json` answering with
@@ -506,5 +535,6 @@ test_unreleasable_lease_prints_the_operator_command
 test_no_recorded_lease_is_reported_without_claiming_either_way
 test_unreadable_pool_still_prints_the_operator_command
 test_non_array_status_payload_is_treated_as_unknown
+test_pathless_holder_row_still_attempts_the_release
 
 echo "# all fm-spawn-worktree-settle tests passed"

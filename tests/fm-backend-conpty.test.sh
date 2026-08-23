@@ -800,9 +800,9 @@ exit
   # SHELL is what any tool in the session opens a shell with - `treehouse get`
   # run by hand, and anything else that consults it. An absent or unusable value
   # is replaced, a working one is the operator's and is left alone.
-  # Tagged and extracted, not read as the whole of stdout: a distribution's own
-  # /etc/bash.bashrc may print a banner into an interactive shell, and this file
-  # deliberately sources it.
+  # Tagged and extracted, not read as the whole of stdout: bash runs a
+  # distribution's own /etc/bash.bashrc for every interactive shell, ahead of
+  # this --rcfile, and that may print a banner.
   probe_shell() {  # <env-assignment>... -> the resulting SHELL
     # SC2016: the single quotes are deliberate - this is the child shell's
     # script, and $SHELL must expand there, not here.
@@ -911,6 +911,31 @@ PRE
   [ "$a_last" = "$a_prompts" ] \
     || fail "an operator's trailing array hook ran $a_last times across $a_prompts prompts; the flattened copy left the original array element in place, so it runs twice per prompt"
   pass "conpty shell integration: an operator's array-form prompt hooks survive arming without the trailing one running twice"
+
+  # A COMMENT IN A NON-FINAL ARRAY ELEMENT MUST NOT SWALLOW THE HOOKS AFTER IT.
+  # bash runs array elements as separate commands, so a trailing `#` comment ends
+  # at that element. Flattening them onto ONE line with `; ` would extend that
+  # comment over every element after it - the operator's later hooks vanish for
+  # the life of the session and of every nested shell that inherits the exported
+  # string. Same count discriminator: the leading hook keeps running, so only the
+  # trailing count separates a newline join from a `; ` join.
+  pre_comment="$CASE/pre-comment.bash"
+  cat > "$pre_comment" <<'PRE'
+PROMPT_COMMAND=('printf "FMC1\n" # keep this one' 'printf "FMCLAST\n"')
+PRE
+  printf '. %s\n' "$RC" >> "$pre_comment"
+  commented=$(printf 'true\nexit\n' \
+    | env -i HOME="$H" PATH="$PATH" bash --rcfile "$pre_comment" -i 2>&1)
+  c_prompts=$(printf '%s' "$commented" | grep -ao '133;D' | wc -l | tr -d ' ')
+  c_first=$(printf '%s' "$commented" | grep -ao 'FMC1' | wc -l | tr -d ' ')
+  c_last=$(printf '%s' "$commented" | grep -ao 'FMCLAST' | wc -l | tr -d ' ')
+  [ "$c_prompts" -gt 0 ] \
+    || fail "the comment-bearing array case drew no marked prompt, so it proved nothing about swallowed hooks"
+  [ "$c_first" = "$c_prompts" ] \
+    || fail "the hook carrying the comment ran $c_first times across $c_prompts prompts; once each was expected"
+  [ "$c_last" = "$c_prompts" ] \
+    || fail "the hook after the comment-bearing element ran $c_last times across $c_prompts prompts; the flattened list joined them onto one line, so the comment swallowed it"
+  pass "conpty shell integration: an operator's inline comment in one array hook does not swallow the hooks after it"
 
   # AN OPERATOR'S OWN PS0 MUST SURVIVE ARMING. PS0 is exported so nested shells
   # inherit the carrier, so clobbering it would cost the operator their value in
