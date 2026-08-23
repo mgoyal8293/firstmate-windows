@@ -599,8 +599,18 @@ fi
 # forge with nothing to ask about and settle `done` unasked - while the very
 # status log this same invocation had already read named the PR, and
 # bin/fm-inactive-reconcile.sh's pr_for_task then dug that url out and showed it
-# to the captain beside the word. Reading it here is the same lookup that
-# consumer already performs, done before the verdict rather than after it.
+# to the captain beside the word. Reading it here asks the forge about that url
+# before the verdict rather than after it.
+#
+# The two readers must agree on WHICH url, or the state word and the PR shown
+# beside it describe different pull requests: a first PR closed and a
+# replacement opened leaves two urls in one log, and a `done` confirmed against
+# the replacement presented beside the abandoned PR is the false landing this
+# whole change exists to stop. The shared rule is the NEWEST url the log names,
+# pull request or merge request alike, because the newest is the one that
+# answers "which PR is this crew's current one". pr_for_task was aligned to this
+# rule rather than the reverse; it previously took the FIRST url and matched
+# pull requests only.
 crew_pr_url() {
   local url=""
   [ "$RUN_SOURCE" = full ] && url=$(strip_quotes "$(nm_field pr)")

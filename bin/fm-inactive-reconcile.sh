@@ -288,11 +288,19 @@ meta_incarnation() { # <meta>
   printf 'legacy-%s\n' "$(sha256_text "$identity")"
 }
 
+# The PR url presented to the captain beside a task's terminal state word.
+#
+# The status-log fallback must select the SAME url crew_pr_url in
+# bin/fm-crew-state.sh selects, because that reader is what produced the state
+# word: the NEWEST url the log names, pull request or merge request alike. A
+# first PR closed and a replacement opened leaves two urls in one log, and
+# picking the older one here would present a `done` the forge confirmed against
+# the replacement beside the abandoned PR.
 pr_for_task() { # <meta> <status>
   local pr=$1 status=$2 value
   value=$(meta_field "$pr" pr)
   if [ -z "$value" ] && [ -f "$status" ]; then
-    value=$(grep -Eo 'https?://[^[:space:])"]+/pull/[0-9]+' "$status" 2>/dev/null | head -1 || true)
+    value=$(grep -Eo 'https?://[^[:space:])"]+/(pull|merge_requests)/[0-9]+' "$status" 2>/dev/null | tail -1 || true)
   fi
   clean_field "$value"
 }

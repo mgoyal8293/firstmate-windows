@@ -129,6 +129,56 @@ reap() { kill "$1" 2>/dev/null || true; wait "$1" 2>/dev/null || true; }
 
 # The main retains a terminal presentation receipt until the corresponding wake
 # is handled and acknowledged.
+# Two readers name a crew's PR: fm-crew-state.sh's crew_pr_url asks the forge
+# about it and so produces the state word, and pr_for_task puts a url beside that
+# word for the captain. When the task meta carries no `pr=` both fall back to the
+# status log, and they must pick the SAME url - the newest one. A first PR closed
+# and a replacement opened leaves two urls in one log, and presenting `done`
+# beside the abandoned PR is the false landing this change exists to stop.
+#
+# `pr=` in the fm-terminal-outcome.v1 record is the persisted contract this
+# asserts on; it is the same value report_to_parent puts on the wire.
+test_presented_pr_is_the_newest_url_the_status_log_names() {
+  local record pr
+  make_world newest-pr
+  fm_write_meta "$MAIN/state/child.meta" \
+    "window=firstmate:fm-child" "worktree=$MAIN/projects/child" "project=alpha" \
+    'harness=codex' 'kind=ship' 'mode=no-mistakes' 'yolo=off' \
+    "spawn_gen=s${BASHPID:-$$}.$RANDOM"
+  cat > "$MAIN/state/child.status" <<'EOF'
+working: https://example.test/owner/repo/pull/1 was closed unmerged after a rerun
+done: replacement https://example.test/owner/repo/pull/2 merged
+EOF
+  : > "$MAIN/state/child.turn-ended"
+  age "$MAIN/state/child.meta" "$MAIN/state/child.status" "$MAIN/state/child.turn-ended"
+  FM_FAKE_CREW_STATE='done' run_reconcile "$MAIN" --startup
+  record=$(find "$MAIN/state/terminal-outcomes" -type f -name '*.pending' 2>/dev/null | head -1)
+  [ -n "$record" ] || fail "the inactive terminal child produced no outcome record"
+  pr=$(sed -n 's/^pr=//p' "$record")
+  [ "$pr" = 'https://example.test/owner/repo/pull/2' ] ||
+    fail "the presented PR is not the newest url the status log names: '$pr'"
+
+  # crew_pr_url settles a GitLab crew's state from a merge request, so a reader
+  # that recognises pull requests only would print the state word with no url
+  # beside it for exactly those crews.
+  make_world newest-mr
+  fm_write_meta "$MAIN/state/child.meta" \
+    "window=firstmate:fm-child" "worktree=$MAIN/projects/child" "project=alpha" \
+    'harness=codex' 'kind=ship' 'mode=no-mistakes' 'yolo=off' \
+    "spawn_gen=s${BASHPID:-$$}.$RANDOM"
+  printf 'done: https://gitlab.test/owner/repo/-/merge_requests/7 merged\n' \
+    > "$MAIN/state/child.status"
+  : > "$MAIN/state/child.turn-ended"
+  age "$MAIN/state/child.meta" "$MAIN/state/child.status" "$MAIN/state/child.turn-ended"
+  FM_FAKE_CREW_STATE='done' run_reconcile "$MAIN" --startup
+  record=$(find "$MAIN/state/terminal-outcomes" -type f -name '*.pending' 2>/dev/null | head -1)
+  [ -n "$record" ] || fail "the inactive terminal GitLab child produced no outcome record"
+  pr=$(sed -n 's/^pr=//p' "$record")
+  [ "$pr" = 'https://gitlab.test/owner/repo/-/merge_requests/7' ] ||
+    fail "a merge request is not presented beside the state word it settled: '$pr'"
+  pass "the presented PR is the newest url the status log names"
+}
+
 test_main_direct_terminal_presentation_receipt() {
   local err seq generation
   make_world main-direct; write_child "$MAIN" child 'done: PR https://example.test/owner/repo/pull/1 checks green'
@@ -510,6 +560,7 @@ test_forge_bound_is_derived_from_the_remaining_budget() {
 }
 
 test_main_direct_terminal_presentation_receipt
+test_presented_pr_is_the_newest_url_the_status_log_names
 test_local_secondmate_reports_terminal_child
 test_local_secondmate_rejects_relative_parent_home
 test_invalid_secondmate_marker_blocks_routing

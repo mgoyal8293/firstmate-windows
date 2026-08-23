@@ -447,29 +447,35 @@ fm_crew_run_admits() {  # <worktree> <run-output> <run-head>
   # of this whole change, the second of which is the destructive direction.
   #
   # `outcome: checks-passed` is the tempting case, since the rest of this file
-  # models checks-passed as a still-monitoring state. Admitting it here walks
-  # back toward the fabricated-working defect removed in commit b8f36e4
+  # models checks-passed as a still-monitoring state. Admitting it here
+  # REPRODUCES the fabricated-working defect removed in commit b8f36e4
   # ("no-mistakes(review): gate every done path on ownership, kind and proven
   # liveness"), where a run that had genuinely FINISHED reported
   # `state: working` on every unconfirmed forge read, with no active step and
-  # no non-terminal status behind the claim. Widening this line would not
-  # reproduce that defect by itself today, and only because the SAME commit
-  # made crew_liveness a second, independent barrier - which is exactly why
-  # this one now looks redundant and is not. The guard is
+  # no non-terminal status behind the claim.
+  #
+  # Nothing downstream catches that, and the reason is exact: this gate and the
+  # downstream liveness check read the SAME table. crew_liveness in
+  # bin/fm-crew-state.sh tests fm_crew_active_step FIRST and answers `live`
+  # whenever it is non-empty, and a non-empty fm_crew_active_step is this
+  # override's own precondition on the line below. So every run a widened gate
+  # newly admits gets `live` from crew_liveness, never `terminated`. This gate
+  # is the ONLY barrier for exactly that set of runs. The guard is
   # test_a_terminated_checks_passed_run_does_not_borrow_a_live_crews_answer,
   # the defect is described under "Ruled: withholding a landing claim is not
-  # the same as knowing nothing" at docs/verification/crew-state-verdicts.md:297,
+  # the same as knowing nothing" at docs/verification/crew-state-verdicts.md:307,
   # and the ruling to keep this shut is that file's "Ruled: the liveness
   # override stays shut to a run bearing an outcome word".
   #
   # The residual is ACCEPTED, not overlooked. A `checks-passed` run whose head
-  # this checkout cannot resolve reads `unknown` even when an active `ci` row
-  # says it is executing. Reaching it needs a checks-passed run paired with a
-  # live ci step - a pairing never once recorded on this fork, see that file's
-  # Fixture provenance section on `run_checks_passed`, lines 400-408 - AND a
-  # head this checkout cannot resolve; and `unknown` is
-  # this reader's governing preference wherever the evidence does not settle
-  # it. A theoretical unknown does not buy back a regression already paid for.
+  # this checkout cannot resolve reads `unknown` even when an `active_steps`
+  # row says a step is executing. Reaching it needs a checks-passed run that
+  # ALSO carries an `active_steps` row, and no such record has been observed on
+  # this fork - `run_checks_passed`'s `ci,running` is a `steps` row, which is
+  # step history and not liveness - AND a head this checkout cannot resolve;
+  # and `unknown` is this reader's governing preference wherever the evidence
+  # does not settle it. A theoretical unknown does not buy back a regression
+  # already paid for.
   [ "$terminality" = live ] || return 1
   [ -n "$(fm_crew_active_step "$run_out")" ]
 }

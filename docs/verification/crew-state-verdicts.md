@@ -16,7 +16,7 @@ Branch: `fm/fm-crew-state-stale-run-masks-live`.
 $ bash tests/fm-crew-state.test.sh | grep -c '^ok'
 98
 $ bash tests/fm-inactive-reconcile.test.sh 2>/dev/null | grep -c '^ok'
-17
+18
 $ bash tests/fm-fleet-snapshot-view.test.sh 2>/dev/null | grep -c '^ok'
 16
 $ bash tests/fm-watch-triage.test.sh 2>/dev/null | grep -c '^ok'
@@ -24,7 +24,9 @@ $ bash tests/fm-watch-triage.test.sh 2>/dev/null | grep -c '^ok'
 ```
 
 The count is the evidence, not the exit status: a green step does not prove its assertions ran.
-The later suites are listed because four guards below belong to those callers and are pinned there: the bound the scan derives for this reader's forge read, the fixed per-task bound the snapshot chooses, and the per-crew bound the watcher's triage chooses.
+The later suites are listed because six guards below belong to those callers and are pinned there.
+Four are forge-read bounds: the bound the scan derives for this reader's forge read, the fixed per-task bound the snapshot chooses, and the per-crew bound the watcher's triage chooses.
+The other two are the scan's PR-url selection, which has to agree with the url this reader asked the forge about or the captain sees a state word beside the wrong pull request.
 
 ## Falsification matrix
 
@@ -89,10 +91,16 @@ Every row must fail, and must fail on the named assertion.
 | That crew stays `unknown` rather than `working` | pass `working` as `fm_crew_reported_done_verdict`'s unconfirmed state | the same case | fails: `missing: 'state: unknown'` |
 | And `crew_absorb_class` does not absorb it, which is what makes `unknown` safe | let the absorb whitelist admit `unknown` alongside `working` | the same case | fails: `a pre-validation crew must not be absorbed as provably working` |
 | Liveness on the full-path ci-ready route is DERIVED from the record, not asserted | pass the literal `live` from that call site again | `test_a_record_with_no_status_word_does_not_assert_liveness` | fails: `unexpected: 'state: working'` |
+| The url presented beside a terminal state word is the NEWEST one the status log names, matching the url this reader asked the forge about | restore `head -1` in `pr_for_task` | `test_presented_pr_is_the_newest_url_the_status_log_names` (`tests/fm-inactive-reconcile.test.sh`) | fails: `the presented PR is not the newest url the status log names: 'https://example.test/owner/repo/pull/1'` |
+| And a merge request counts as that url, since this reader settles a GitLab crew's state from one | narrow `pr_for_task` back to `/pull/` only | the same case | fails: `a merge request is not presented beside the state word it settled: ''` |
 
-56 of 56, re-derived in full on 2026-08-23 - once per fix round since the decay was found.
+56 of 56 re-derived in full on 2026-08-23 - once per fix round since the decay was found - and the two rows added after that date were derived when they were written, for 58 of 58.
 
-The last four rows were added by the round that separated the two ship-with-no-PR moments and stopped the ci-ready route asserting liveness it had not established.
+The last two rows were added by the round that aligned the scan's PR-url selection with this reader's.
+They are the only rows here that guard a CONSUMER's presentation rather than this reader's own answer, and they belong in this table because the two halves are one claim: a `done` this reader confirmed against a replacement PR, printed beside the PR it replaced, is the false landing this change exists to stop, reassembled at the boundary.
+Each half needs its own mutation because `pr_for_task` diverged from `crew_pr_url` in two independent ways at once, and a case exercising only a pull-request log cannot see the merge-request half.
+
+The four rows before those were added by the round that separated the two ship-with-no-PR moments and stopped the ci-ready route asserting liveness it had not established.
 
 Three of those four share one case, because the ruling they carry has three parts that only hold together: the pre-validation crew must NAME its moment, must stay `unknown`, and must not be ABSORBED.
 Each part is falsified by a different mutation - collapsing the phrase, reporting `working`, and widening the absorb whitelist - so the shared case is not a shared guard.
@@ -119,8 +127,10 @@ The strictness of the PR-URL rules themselves is not listed as a guard of this f
 The look-alike-host case above pins that reuse behaviourally, since a loosened parse would send `https://evil-github.com/o/r/pull/6` to the real forge.
 The unknown-not-parked row is pointed at the case that shows the HARM, not just the word: with `parked` restored, the answered `needs-decision:` line stops being reconciled as superseded, which is what let a resolved decision resurface as a captain demand.
 The 7-character floor in `fm_crew_sha_matches` is deliberately absent from the table: it is defensive against a degenerate abbreviation and has no observed trigger, so there is no honest case to pin it with.
-Four rows live in other suites because the bound belongs to those callers, and they are listed here because what those callers choose is what keeps this file's forge read affordable: two in `tests/fm-inactive-reconcile.test.sh` for the scan's derived share, one in `tests/fm-fleet-snapshot-view.test.sh` for the snapshot's fixed per-task bound, and one in `tests/fm-watch-triage.test.sh` for the watcher's per-crew bound.
-Four rows and three callers, which is why the Suite section counts four guards while naming three bounds: the scan's share is pinned twice, once for the third-of-budget ceiling and once for its refusal to shrink a budget too small to spare the read at all.
+Six rows live in other suites because what they guard belongs to those callers, and they are listed here because what those callers choose is what keeps this reader's answer affordable and honest once it is presented.
+Four are bounds: two in `tests/fm-inactive-reconcile.test.sh` for the scan's derived share, one in `tests/fm-fleet-snapshot-view.test.sh` for the snapshot's fixed per-task bound, and one in `tests/fm-watch-triage.test.sh` for the watcher's per-crew bound.
+Four bound rows across three callers, which is why the Suite section counts four bounds while naming three: the scan's share is pinned twice, once for the third-of-budget ceiling and once for its refusal to shrink a budget too small to spare the read at all.
+The last two are also in `tests/fm-inactive-reconcile.test.sh` and are not bounds at all: they pin the scan's PR-url selection to the url this reader asked the forge about, so four of the six live in that one file.
 The snapshot row is only falsifiable because that bound is TIGHTER than the library default.
 While the two coincided at 3s, removing the snapshot's override changed nothing and the row proved nothing - the same decay mode the ci-padding row taught, caught here before it was recorded rather than after.
 
@@ -147,9 +157,9 @@ The remaining rows all still falsify on their named assertion, including every r
 
 The mutations are ordinary one-line edits to a copy of `bin/`; nothing in the tree needs to change to re-derive them.
 For each row, copy the tree to a scratch directory, apply the mutation named above, run the one case, and confirm it fails on the named assertion.
-The case names are the functions in `tests/fm-crew-state.test.sh`, except the four rows whose cases live in the other suites named above.
-Those four are SCATTERED through the table rather than gathered at its end, so find them by the file named in their Case column and never by position - reading only the bottom of the table is how the watch-triage row gets silently skipped.
-Three of the four name the file outright; the fourth is the second `tests/fm-inactive-reconcile.test.sh` row, whose Case column reads `the same case` and inherits the file from the row above it.
+The case names are the functions in `tests/fm-crew-state.test.sh`, except the six rows whose cases live in the other suites named above.
+Those six are SCATTERED through the table rather than gathered at its end, so find them by the file named in their Case column and never by position - reading only the bottom of the table is how the watch-triage row gets silently skipped.
+Four of the six name the file outright; the other two read `the same case` and inherit the file from the row directly above them, and both of those inherit `tests/fm-inactive-reconcile.test.sh`.
 Running any of those files' whole runner list also works and is slower.
 
 ## Amended acceptance criterion: done by itself
@@ -320,19 +330,23 @@ The reason is that admission is ALL-OR-NOTHING.
 The file's own header limits what liveness may buy - "Liveness admits a non-terminal verdict on its own" - and with no partial admission available, refusing a run that already bears a terminal word is the only place that limit can be enforced.
 Widen it and a run this checkout cannot verify as its own can emit `failed` or `done` off one step row, which is reproduced failures 1 and 2 of this change, the second of them the destructive direction.
 
-For the `checks-passed` case specifically, admitting it here walks back toward the fabricated-working defect removed in commit b8f36e4, described in the section above: a run that had genuinely FINISHED reported `state: working` on every unconfirmed forge read, with no active step and no non-terminal status behind the claim.
-One thing must be said precisely rather than overstated: widening this single line would NOT reproduce that defect today, and only because the same commit made `crew_liveness` a second, independent barrier that would still answer `terminated`.
-That is exactly why the gate now looks redundant, and it is the same shape as the absorb row in the matrix - two independent gates protecting one property, where mutating either alone changes nothing visible.
+For the `checks-passed` case specifically, admitting it here REPRODUCES the fabricated-working defect removed in commit b8f36e4, described in the section above: a run that had genuinely FINISHED reported `state: working` on every unconfirmed forge read, with no active step and no non-terminal status behind the claim.
+This gate is the ONLY barrier for exactly the set of runs a widening would newly admit, and the reason is that the widening and the downstream liveness check read the SAME table.
+`crew_liveness` in `bin/fm-crew-state.sh` tests `fm_crew_active_step` first and answers `live` whenever that table is non-empty, and a non-empty `fm_crew_active_step` is the override's own precondition.
+The two are perfectly correlated, not independent: every run a widened gate newly admits gets `live` from `crew_liveness` and none of them can get `terminated`, so the widening lands as a fabricated `working` directly rather than being caught downstream.
+An earlier draft of this section claimed the opposite - two independent barriers, mutating either alone changing nothing visible - and that claim is recorded here as WRONG rather than quietly deleted, because it was wrong in the dangerous direction: it told the next reader this gate was redundant and safe to remove, which is the swing the ruling exists to prevent.
 The guard that pins the property itself is `test_a_terminated_checks_passed_run_does_not_borrow_a_live_crews_answer`.
 
 The residual is ACCEPTED rather than overlooked, and it is worth stating what it costs.
-A `checks-passed` run whose head this checkout cannot resolve reads `unknown` even when an active `ci` row says it is executing, which is a handling turn against acceptance criterion 4.
-Reaching it needs BOTH halves of a conjunction: a `checks-passed` run paired with a live ci step, a pairing never once recorded on this fork (see Fixture provenance below on `run_checks_passed`, whose `ci,running` row is explicitly a plausible shape rather than an observed one), AND a head this checkout cannot resolve.
+A `checks-passed` run whose head this checkout cannot resolve reads `unknown` even when an `active_steps` row says a step is executing, which is a handling turn against acceptance criterion 4.
+Reaching it needs BOTH halves of a conjunction: a `checks-passed` run that ALSO carries an `active_steps` row, and a head this checkout cannot resolve.
+No record with that pairing has been observed on this fork.
+`run_checks_passed` is not an instance of it and must not be read as one: its `ci,running` is a row of the `steps` table, which is step history, and `fm_crew_active_step` reads only `active_steps[N]{...}`, so that fixture has no liveness row at all.
 Against that, `unknown` is this reader's governing preference wherever the evidence does not settle it, and the alternative is buying back a regression already paid to remove.
 The trade is not worth taking, so the pendulum stays put.
 
-The trigger for revisiting is the same one the fixture note already records: the first time a real `outcome: checks-passed` run is observed, record the ci-step status that actually accompanies it.
-If that pairing turns out to be `ci,running` in the field AND the head geometry is routinely unresolvable at that moment, the conjunction above stops being theoretical and this ruling should be re-argued - by giving the override a way to admit a run for liveness ONLY, not by widening `fm_crew_terminality`, which would hand the terminal ranking the same run.
+The trigger for revisiting extends the one the fixture note already records: the first time a real `outcome: checks-passed` run is observed, record whether it carries an `active_steps` table at all, not only what its `steps` table says.
+If real checks-passed runs do carry a live `active_steps` row AND the head geometry is routinely unresolvable at that moment, the conjunction above stops being theoretical and this ruling should be re-argued - by giving the override a way to admit a run for liveness ONLY, not by widening `fm_crew_terminality`, which would hand the terminal ranking the same run.
 
 ## Ruled: a failed attribution discards the run record
 
