@@ -8,13 +8,13 @@ Refresh this record after any change to run selection, code binding, ownership p
 
 ## Suite
 
-Date: 2026-08-22.
+Date: 2026-08-23.
 Branch: `fm/fm-crew-state-stale-run-masks-live`.
 `no-mistakes` v1.48.0, `gh` 2.x, ShellCheck 0.11.0.
 
 ```
 $ bash tests/fm-crew-state.test.sh | grep -c '^ok'
-79
+81
 $ bash tests/fm-inactive-reconcile.test.sh 2>/dev/null | grep -c '^ok'
 17
 ```
@@ -56,13 +56,15 @@ Every row must fail, and must fail on the named assertion.
 | A terminal pass with no CI evidence reads unknown, never parked | return `parked` for that verdict again | `test_terminal_pass_without_ci_evidence_supersedes_a_stale_gate_log` | fails: `missing: 'status-log superseded'` |
 | The ci status column is read tolerant of padding and quoting | drop the trim, restoring the bare `[^,]*` capture | `test_padded_step_columns_do_not_change_the_verdict` | fails: `missing: 'state: done'` |
 | So is every `active_steps` column | drop the per-value trim in the row split | the same case | fails: `missing: 'test running'` |
-| A forge-confirmed landing settles a terminated run whatever the ci step says | drop the landing arm from the ranking | `test_forge_confirmed_merge_settles_a_ci_skipped_run` | fails: `missing: 'state: done'` |
+| A forge-confirmed MERGE settles a terminated run done whatever the ci step says | drop the merge arm from the ranking | `test_forge_confirmed_merge_settles_a_ci_skipped_run` | fails: `missing: 'state: done'` |
+| A forge-confirmed CLOSE settles it failed, because a closed-unmerged PR is not a landing | rank `closed` with `merged` on the done arm again | `test_forge_confirmed_close_is_failed_not_done` | fails: `missing: 'state: failed'` |
+| A host with no `gh` is a structural non-answer, not a transient one | report an absent client as `unverified` again | `test_absent_forge_client_is_structural_not_transient` | fails: `missing: 'no forge client for github'` |
 | Both terminal paths reach the same verdict on a forge-confirmed merge | restore the asymmetry, letting only the no-steps path use the landing | `test_both_paths_agree_on_a_forge_confirmed_merge` | fails: `the two paths disagree on one world state` |
 | And on an open PR with no ci evidence | give the no-steps path its own done arm whatever the forge said | `test_both_paths_agree_on_an_open_pr_with_no_ci_evidence` | fails: `missing: 'state: unknown'` |
 | The per-child forge bound is at most a third of the scan's remaining budget | pass the whole remaining budget as the bound | `test_forge_bound_is_derived_from_the_remaining_budget` (`tests/fm-inactive-reconcile.test.sh`) | fails: `forge bound exceeds a third of the 6s budget: '3\|'` |
 | A budget too small to spare the read skips it instead of shrinking it | take the bound arm unconditionally (`if true`) | the same case | fails: `a 2s budget cannot spare a whole second of forge read: '0\|'` |
 
-32 of 32.
+34 of 34.
 
 The first two rows share a case deliberately: both guards sit on the runs-list path, and the case needs both to hold - one stops the dead run being reached, the other makes the live run usable.
 Four later pairs share a mutation rather than a case, because one gate covers several distinct ways for the evidence to be absent and each way needs its own case to show it is covered.
@@ -94,12 +96,32 @@ On a repo with no CI checks configured every run records `ci,skipped`, so a merg
 Then an unrelated crew started a run in the same repo; `axi status` is repo-scoped, so it began answering for that other branch, the first crew fell to the coarse runs-list path, and the identical world state read `done - run completed: PR merged`.
 One world state resolving to opposite verdicts depending on whether an unrelated task happens to be running is the same nondeterminism this change exists to remove, and shipping it would have been worse than the bug it was guarding against.
 
-The structural answer is that `fm_crew_terminal_verdict` is now the ONE ranking both paths call, in one order: a forge-confirmed landing, then this run's own `ci,completed`, then unknown.
+The structural answer is that `fm_crew_terminal_verdict` is now the ONE ranking both paths call, in one order: a forge-confirmed merge or close, then this run's own `ci,completed`, then unknown.
 A path that cannot see a steps table says so by passing `FM_CREW_CI_NO_STEP_DETAIL`, which is missing evidence inside that single ranking rather than a second ranking.
 The two agreement cases in the matrix above assert the agreement directly - one compares the two paths' emitted lines for byte equality on a merged run - because per-path cases in isolation are exactly what let the two rankings drift apart.
 They cover those two world states and claim no more than that, because agreement is not general and the residual is accepted rather than unnoticed: only a path that can read a steps table can ever satisfy rule 2, so a run with `ci,completed` and no confirmed landing reads done on the full path and unknown on the coarse one.
 That is not the contradiction rule 1 fixed, and the distinction is the reason it is acceptable: there both paths held the same evidence and ranked it differently, while here they hold different evidence, so each answer is honest about what that path observed, the direction is conservative, and the cost is a delayed presentation receipt rather than a wrong verdict.
 The remedy is the filed runs-list upgrade named in `bin/fm-crew-state.sh`, not a second way for the ranking to guess at ci evidence; `fm_crew_terminal_verdict` records the same residual where the ranking is stated.
+
+## Ruled: a forge-confirmed close is not a landing
+
+The approved rule for the strongest arm of `fm_crew_terminal_verdict` said "a forge-confirmed landing", and the code implemented that wording faithfully by ranking `merged` and `closed` together as `done`.
+The wording was the imprecision, not the implementation: a closed-unmerged PR is the opposite of a landing, because the work will never land.
+Closed is not merged.
+
+The decisive consequence is downstream.
+`bin/fm-inactive-reconcile.sh` builds its captain presentation from the state word and the PR alone, so the detail line saying "PR closed" is dropped exactly at the captain-facing boundary, and ABANDONED work was presented to the captain as a success.
+A false success is the worst direction this tool can fail in.
+
+Rule 1 is therefore amended from "a forge-confirmed landing" to "a forge-confirmed MERGE", and a forge-confirmed close becomes a terminal NON-landing that ranks as `failed`.
+The amendment recorded in the section above is untouched by it: a confirmed merge still settles `done` whatever the ci step said, and only a confirmed close moved off that arm.
+
+The alternative was rejected, and the reason is worth recording.
+Keeping `done` and carrying the detail into the reconcile payload fixes one consumer and leaves the word itself lying, and a state word that lies while a payload tells the truth is a trap for the next reader.
+
+This is the third instance of one rule, now stated in `bin/fm-crew-run-verdict-lib.sh`'s header as the principle governing future state-word choices there: a state word must be honest STANDALONE, because consumers drop the detail at the captain-facing boundary.
+The three are `parked` reused for a terminated run, `done` for a terminated run with no CI evidence, and `done` for a forge-confirmed close.
+When a word carries a false implication once its detail is stripped, the fix is to make the word honest, never to teach one more consumer to read the fine print.
 
 ## Forge-read bound
 

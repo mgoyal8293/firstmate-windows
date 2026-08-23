@@ -218,6 +218,39 @@ make_no_timeout_toolbin() {  # <dir> -> echoes toolbin path
   printf '%s\n' "$tb"
 }
 
+# A PATH with no `gh` reachable on it, for the host-has-no-forge-client case,
+# which cannot be faked from inside a fake `gh` - the reader asks whether the
+# binary EXISTS.
+#
+# Only the PATH entries that actually provide `gh` are mirrored; every other entry
+# is left pointing at the real directory. That keeps the mirror small, and it is
+# also what keeps the MSYS/MINGW runtime-DLL search working for the untouched
+# entries, for the reason make_no_timeout_toolbin above records: PATH is Windows'
+# last-resort DLL location, so a wholesale mirror strands each tool's DLLs.
+make_ghless_path() {  # <case-dir> -> echoes a PATH with no gh on it
+  local dir=$1 out="" entry mirror n=0 f base
+  local -a parts
+  IFS=: read -r -a parts <<< "$PATH"
+  for entry in "${parts[@]}"; do
+    [ -n "$entry" ] || continue
+    if [ -x "$entry/gh" ] || [ -x "$entry/gh.exe" ]; then
+      n=$((n + 1))
+      mirror="$dir/ghless$n"
+      mkdir -p "$mirror"
+      for f in "$entry"/*; do
+        [ -e "$f" ] || continue
+        base=${f##*/}
+        case "$base" in gh|gh.exe) continue ;; esac
+        [ -e "$mirror/$base" ] && continue
+        ln -s "$f" "$mirror/$base" 2>/dev/null || true
+      done
+      entry=$mirror
+    fi
+    out="${out:+$out:}$entry"
+  done
+  printf '%s\n' "$out"
+}
+
 # Run the helper for one case dir. FM_FAKE_* env (run output, busy flag) are read
 # from the caller's environment by the fakes above.
 run_crew_state() {  # <case-dir> <id>
@@ -2284,6 +2317,57 @@ test_forge_confirmed_merge_settles_a_ci_skipped_run() {
   pass "a forge-confirmed merge settles a ci-skipped run"
 }
 
+# The other half of that ranking, and the opposite outcome. A closed-unmerged PR
+# is the OPPOSITE of a landing: the work will never land. It used to be ranked
+# with the merge as one "landing" and read `done`, with the truth surviving only
+# in the detail line - and bin/fm-inactive-reconcile.sh builds its captain
+# presentation from the state word and the PR alone, so that detail is dropped
+# exactly at the captain-facing boundary and abandoned work was presented as a
+# success. Asserted in both directions, because the word is the whole point.
+test_forge_confirmed_close_is_failed_not_done() {
+  reset_fakes
+  local d out
+  d=$(new_case close-not-a-landing)
+  make_repo_on_branch "$d/wt" fm/feat-closed
+  make_fakebin "$d" >/dev/null
+  fm_write_meta "$d/state/closed.meta" "window=fm:fm-closed" "worktree=$d/wt" "kind=ship" "harness=claude"
+  # A genuine pass with its ci step completed, so nothing but the close can be
+  # what settles this away from done.
+  FM_FAKE_AXI_STATUS="$(run_passed_ci_completed fm/feat-closed)"
+  FM_FAKE_GH_PR='{"mergeStateStatus":"UNKNOWN","state":"CLOSED","url":"https://github.com/o/r/pull/9"}'
+  out=$(run_crew_state "$d" closed)
+  assert_contains "$out" "state: failed" "an abandoned PR is a terminal non-landing"
+  assert_not_contains "$out" "state: done" "closed is not merged, and the state word must say so alone"
+  assert_contains "$out" "PR closed without merging" "the detail names the close for what it is"
+  assert_not_contains "$out" "PR merged" "a close is never rendered as a merge"
+  pass "a forge-confirmed close is failed, not done"
+}
+
+# A host with no `gh` cannot query GitHub, ever, and that is as permanent as an
+# unsupported provider - it was reported with the TRANSIENT word, so on the coarse
+# path, where a completed row reads done only on a forge-confirmed merge, every
+# finished run on a gh-less host read `PR state unverified` forever with no way to
+# tell it from a call that would succeed on the next heartbeat.
+test_absent_forge_client_is_structural_not_transient() {
+  reset_fakes
+  local d ghless out
+  d=$(new_case no-forge-client)
+  make_repo_on_branch "$d/wt" fm/feat-noclient
+  make_fakebin "$d" >/dev/null
+  rm -f "$d/fakebin/gh"
+  ghless=$(make_ghless_path "$d")
+  ( PATH="$ghless"; hash -r; command -v gh >/dev/null 2>&1 ) &&
+    fail "fixture broken: gh is still reachable on the stripped PATH"
+  fm_write_meta "$d/state/noclient.meta" "window=fm:fm-noclient" "worktree=$d/wt" "kind=ship" "harness=claude"
+  FM_FAKE_AXI_STATUS="$(run_passed_ci_skipped fm/feat-noclient)"
+  out=$(PATH="$d/fakebin:$ghless" FM_STATE_OVERRIDE="$d/state" "$CREW_STATE" noclient)
+  assert_contains "$out" "state: unknown" "with no client and no ci evidence nothing settles the run"
+  assert_contains "$out" "no forge client for github" "the absent client is named as the permanent condition it is"
+  assert_not_contains "$out" "PR state unverified" "a permanent condition must not read as a transient forge failure"
+  assert_not_contains "$out" "PR merged" "a client that never ran can confirm no landing"
+  pass "an absent forge client is structural, not a transient failure"
+}
+
 # The property that actually failed: the full `axi status` path and the coarse
 # runs-list path ranked this evidence separately, so ONE world state read `done`
 # or `unknown` depending only on whether an unrelated crew happened to have a run
@@ -2420,6 +2504,8 @@ test_branch_sync_gate_status_does_not_park_a_running_run
 test_terminal_pass_without_ci_evidence_supersedes_a_stale_gate_log
 test_padded_step_columns_do_not_change_the_verdict
 test_forge_confirmed_merge_settles_a_ci_skipped_run
+test_forge_confirmed_close_is_failed_not_done
+test_absent_forge_client_is_structural_not_transient
 test_both_paths_agree_on_a_forge_confirmed_merge
 test_both_paths_agree_on_an_open_pr_with_no_ci_evidence
 test_terminal_pass_with_no_steps_table_and_no_landing_is_not_done

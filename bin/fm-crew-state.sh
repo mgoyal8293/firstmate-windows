@@ -32,12 +32,14 @@
 #      checks-passed -> done, since that word is itself a statement about the
 #      checks. `passed` is not: it says only that the PIPELINE completed, so every
 #      terminated run goes through one ranking (fm_crew_terminal_verdict) - a
-#      forge-confirmed merge or close reads done whatever the ci step says, else
-#      this run's own `ci,completed` reads done, else unknown, because a
-#      terminated run whose validation cannot be established is exactly "I cannot
-#      tell", not a gate anyone can respond to. The coarse runs-list path carries
-#      no steps table at all, and passes that into the same ranking as missing
-#      evidence rather than ranking the evidence a second way. EXCEPT: while
+#      forge-confirmed merge reads done whatever the ci step says, a
+#      forge-confirmed close reads failed because a closed-unmerged PR is the
+#      opposite of a landing, else this run's own `ci,completed` reads done, else
+#      unknown, because a terminated run whose validation cannot be established
+#      is exactly "I cannot tell", not a gate anyone can respond to. The coarse
+#      runs-list path carries no steps table at all, and passes that into the
+#      same ranking as missing evidence rather than ranking the evidence a
+#      second way. EXCEPT: while
 #      the active step is ci, `axi status` alone cannot tell "still waiting on
 #      checks" from "checks green, waiting on merge" (see nm_ci_checks_state) -
 #      a ci-step log-tail check overrides working -> done once checks read
@@ -474,9 +476,10 @@ fi
 
 # --- run-step authoritative path -------------------------------------------
 
-# The forge's own word on this run's PR: merged, closed, open or unverified
-# (optionally with the forge's merge-state qualifier). This is the ONLY source a
-# merged-or-closed claim may come from. Run state cannot supply it: a run reached
+# The forge's own word on this run's PR: merged, closed, open, unverified, or one
+# of the two structural non-answers (optionally with the forge's merge-state
+# qualifier). This is the ONLY source a merged-or-closed claim may come from.
+# Run state cannot supply it: a run reached
 # `outcome: passed` on a PR that was open, conflicted and carried zero checks,
 # and the old "PR merged/closed" reason was pure invention (see
 # fm-crew-run-verdict-lib.sh's header). Called only on a terminal pass, so a
@@ -547,9 +550,10 @@ if [ "$HAVE_RUN" = 1 ]; then
         passed)
           # `outcome: passed` means the PIPELINE completed, not that CI passed, so
           # it never settles this on its own. fm_crew_terminal_verdict owns the ONE
-          # ranking every terminated run goes through - forge-confirmed landing,
-          # then this run's own `ci,completed`, then unknown - and the coarse path
-          # below calls the same function so the two cannot disagree.
+          # ranking every terminated run goes through - a forge-confirmed merge
+          # (done) or close (failed), then this run's own `ci,completed`, then
+          # unknown - and the coarse path below calls the same function so the two
+          # cannot disagree.
           pass_verdict=$(fm_crew_terminal_verdict "$ci_step_recorded" "$(crew_forge_answer)")
           RUN_STATE=${pass_verdict%%|*}
           RUN_DETAIL=${pass_verdict#*|}

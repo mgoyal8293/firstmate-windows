@@ -656,8 +656,8 @@ main_inventory_json() {  # <backlog-json> <tasks-json>
 # loses nothing, and the honest word for a home containing an unassessable child
 # is not a confident one. Fixing the label would mean new precedence machinery in
 # a second place; the verdict ranking in bin/fm-crew-run-verdict-lib.sh is where
-# an unassessable child gets narrowed, and a forge-confirmed landing already reads
-# `done` there rather than reaching this list.
+# an unassessable child gets narrowed, and a forge-confirmed merge already reads
+# `done` there - a forge-confirmed close, `failed` - rather than reaching this list.
 secondmate_home_summary_json() {  # <backlog-json> <tasks-json>
   jq -n \
     --arg generated "$SNAPSHOT_NOW" \
