@@ -297,6 +297,7 @@ if [ -z "${FM_SESSION_START_STAGE_FILE:-}" ]; then
   # under MSYS than on Linux. bin/fm-session-start-bound-lib.sh owns that
   # resolution, its evidence, and the unusable-value fallback.
   SESSION_START_BUDGET=$(fm_session_start_resolve_budget "${FM_SESSION_START_TIMEOUT:-}")
+  fm_session_start_budget_advisory "${FM_SESSION_START_TIMEOUT:-}" "$SESSION_START_BUDGET"
   SESSION_START_STAGE_FILE=$(mktemp "${TMPDIR:-/tmp}/fm-session-start-stage.XXXXXX" 2>/dev/null) || SESSION_START_STAGE_FILE=
   if [ -z "$SESSION_START_STAGE_FILE" ]; then
     # Without a breadcrumb the bound still holds; only the banner's precision
@@ -341,6 +342,10 @@ if [ -z "${FM_SESSION_START_STAGE_FILE:-}" ]; then
     printf '●  Rerun bin/fm-session-start.sh now to finish taking the helm. If it truncates\n'
     printf '●  again, raise FM_SESSION_START_TIMEOUT and report the slow stage - a stage that\n'
     printf '●  cannot finish inside the bound is a fleet problem, not a reporting detail.\n'
+    # Names the ceiling that advice stops at, so following it cannot walk the
+    # operator past the harness hook timeout, where the hook is killed outright
+    # and none of this banner is printed at all.
+    fm_session_start_ceiling_advice
     fm_session_stage_render "$SESSION_START_STAGE_FILE" "$SESSION_START_BUDGET"
     printf '%s\n' "$BAR"
   fi

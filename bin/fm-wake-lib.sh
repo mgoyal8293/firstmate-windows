@@ -321,18 +321,47 @@ fm_lock_owner_dir() {
   mktemp -d "${lock_abs}.owner.XXXXXX" 2>/dev/null
 }
 
+# Reads an owner-directory `pid` file into FM_LOCK_OWNER_PID, empty when it
+# cannot be read. Always succeeds, because every caller below treats an
+# unreadable pid file as "not mine" rather than as an error.
+#
+# `$(<f)` rather than `$(cat f)`: bash reads the file itself for that form with
+# no subprocess at all. Every lock acquisition reads this file back and a session
+# start acquires fourteen locks, so the `cat` here was paid twenty-eight times.
+#
+# THE TWO REDIRECTIONS ARE BOTH DELIBERATE AND NEITHER IS INTERCHANGEABLE.
+# `$(<f 2>/dev/null)` is not the same thing: the redirection defeats bash's
+# special case, so it costs two forks per call, and it does not suppress the
+# error anyway (measured - see docs/verification/session-start-fork-profile.md).
+# So the readable case is decided by `[ -r ]`, a builtin. But `[ -r f ]` and the
+# read are two steps, and the file between them is one ANOTHER PROCESS deletes:
+# a stale-lock steal calls fm_lock_remove_path on the victim's lock, which
+# resolves the symlink to the victim's owner directory and hands it to
+# fm_lock_discard_owner -> fm_lock_clean_known_files, and that `rm -f` names
+# `pid` first. FM_LOCK_STALE_AFTER defaults to 2 s, so the window is real and not
+# theoretical, and the victim can be inside its own fm_lock_release reading the
+# very file being removed.
+# Lose that race and bash writes its own "No such file or directory" to stderr,
+# which bin/fm-session-start.sh harvests with `2>&1` - landing a raw shell error
+# in the middle of the digest. The `2>/dev/null` therefore sits on the enclosing
+# GROUP, where it is a plain fd save and restore rather than a subshell, so the
+# spill is suppressed and the zero-fork property is kept. This is one function
+# rather than three copies precisely because getting that placement wrong is
+# invisible until the race is lost.
+FM_LOCK_OWNER_PID=
+fm_lock_read_owner_pid() {  # <owner-dir>
+  FM_LOCK_OWNER_PID=
+  [ -r "$1/pid" ] || return 0
+  { FM_LOCK_OWNER_PID=$(<"$1/pid"); } 2>/dev/null || FM_LOCK_OWNER_PID=
+  return 0
+}
+
 fm_lock_prepare_owner() {
-  local ownerdir=$1 mypid back
+  local ownerdir=$1 mypid
   mypid=${BASHPID:-$$}
   printf '%s\n' "$mypid" > "$ownerdir/pid" 2>/dev/null || return 1
-  # `[ -r ] && $(<f)` rather than `$(cat f)`: bash reads the file itself for the
-  # `$(<f)` form with no subprocess at all, but only WITHOUT a redirection on it,
-  # so the unreadable case is handled by the test instead of by `2>/dev/null`.
-  # Every lock acquisition reads this file back, and a session start acquires
-  # fourteen locks.
-  back=
-  [ -r "$ownerdir/pid" ] && back=$(<"$ownerdir/pid")
-  [ "$back" = "$mypid" ]
+  fm_lock_read_owner_pid "$ownerdir"
+  [ "$FM_LOCK_OWNER_PID" = "$mypid" ]
 }
 
 fm_lock_link_owner() {
@@ -397,15 +426,14 @@ fm_lock_claim_blocked_by_steal() {
 }
 
 fm_lock_claim() {
-  local lockdir=$1 ownerdir=$2 allowed_steal_owner=${3:-} mypid back
+  local lockdir=$1 ownerdir=$2 allowed_steal_owner=${3:-} mypid
   mypid=${BASHPID:-$$}
   if ! { printf '%s\n' "$mypid" > "$ownerdir/pid"; } 2>/dev/null; then
     fm_lock_discard_owner "$ownerdir"
     return 1
   fi
-  back=
-  [ -r "$ownerdir/pid" ] && back=$(<"$ownerdir/pid")
-  if [ "$back" != "$mypid" ]; then
+  fm_lock_read_owner_pid "$ownerdir"
+  if [ "$FM_LOCK_OWNER_PID" != "$mypid" ]; then
     fm_lock_discard_owner "$ownerdir"
     return 1
   fi
@@ -857,9 +885,8 @@ fm_lock_release() {
   if [ -L "$lockdir" ]; then
     ownerdir=$(fm_lock_link_owner "$lockdir" 2>/dev/null || true)
     [ -n "$ownerdir" ] || return 0
-    pid=
-    [ -r "$ownerdir/pid" ] && pid=$(<"$ownerdir/pid")
-    [ "$pid" = "$current" ] || return 0
+    fm_lock_read_owner_pid "$ownerdir"
+    [ "$FM_LOCK_OWNER_PID" = "$current" ] || return 0
     fm_lock_points_to_owner "$lockdir" "$ownerdir" || return 0
     rm -f "$lockdir" 2>/dev/null || return 0
     fm_lock_discard_owner "$ownerdir"

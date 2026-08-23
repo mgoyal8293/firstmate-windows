@@ -60,6 +60,8 @@ One run of that same empty home with a test lane competing for CPU took 123 s an
 So the default bound is now per platform: 120 s as before, and 300 s under MSYS, MINGW and Cygwin.
 [`../bin/fm-session-start-bound-lib.sh`](../bin/fm-session-start-bound-lib.sh) is the one owner of that resolution and records the reasoning behind the number, which is a margin over a censored observation and not a measured maximum.
 An explicit `FM_SESSION_START_TIMEOUT` still wins on every platform, including a value below the raised default; an unusable one falls back to the platform default rather than to a portable constant, because `timeout 0` disables the deadline outright.
+The one thing it does not win against is the harness: a value above the shortest registered session-start hook timeout is CLAMPED just under it, and the digest says so by name, because above that line the harness kills the hook outright and prints none of the banner - which is what the truncation banner's own "raise `FM_SESSION_START_TIMEOUT`" advice used to invite.
+The ceiling is read from the registrations rather than written down, so raising the hook timeouts raises it too and the operator's larger value is then honoured; the clamp only ever refuses time the machine will not give.
 `bin/fm-startup-network.sh` resolves its inline-delivery window through that same owner, so the worker keeps offering its result for exactly as long as the digest it reports to might still be running.
 Raising this bound also raised every registered run-tier hook timeout to sit strictly above it, because a harness that kills the hook first takes the parent with the child and there is no truncation banner at all - which is worse than truncating, and is asserted by [`../tests/fm-session-start-hook-nesting.test.sh`](../tests/fm-session-start-hook-nesting.test.sh) against a ceiling derived from the platform arms rather than a quoted number.
 
@@ -74,7 +76,8 @@ The script's own setup is now a named stage too, because it was outside every st
 
 Raising the bound bought margin; it did not make the work cheaper.
 A session start on an empty home - no tasks, no projects, an absent backlog - created 1012 subprocesses on the blocking path, which at the 42 ms a fork costs under MSYS is most of that 72 s floor.
-[`verification/session-start-fork-profile.md`](verification/session-start-fork-profile.md) records the method, the ranked profile and the before/after counts; the reductions bring that to 817, a 19.6% cut, with 127 more removed from the concurrent network stage that shares the same libraries.
+[`verification/session-start-fork-profile.md`](verification/session-start-fork-profile.md) records the method, the ranked profile and the before/after counts; the reductions bring that to 817, 195 fewer and a 19.3% cut against the 1012 above, with 127 more removed from the concurrent network stage that shares the same libraries.
+The profile quotes the same reductions as 199 forks and 19.6% because it measures them against the 1016 the bound change itself cost, not against `main`'s 1012; both figures are exact and they are not the same baseline.
 
 The profile's own finding is that there was no single hot loop.
 The dominant cost was **libraries re-sourced from inside functions on poll paths**, each re-running its prologue: 158 library source events per session start, with `bin/fm-proc-lib.sh` alone sourced 42 times and paying its `uname` every time.

@@ -72,6 +72,158 @@ fm_session_start_default_budget() {
   esac
 }
 
+# The wrappers whose registration RUNS the bounded digest, and therefore whose
+# hook timeout has to outlive the bound. bin/fm-sessionstart-nudge.sh is
+# deliberately absent: it prints one short instruction and returns, so its 10 s
+# registration is correct and must never be allowed to lower the ceiling below.
+# tests/fm-session-start-hook-nesting.test.sh reads this list rather than keeping
+# a second copy, because two copies drift the day a fourth transport lands.
+FM_SESSION_START_DIGEST_WRAPPERS='fm-session-start.sh fm-sessionstart-run.sh fm-sessionstart-cursor.sh'
+
+# The margin, in seconds, between the digest's own bound and the shortest harness
+# hook timeout that has to outlive it. It is 1 because the nesting invariant is a
+# STRICT inequality: at equal deadlines which process dies first is a race, and
+# losing that race loses the whole banner.
+# tests/fm-session-start-hook-nesting.test.sh asserts that same strictness, so
+# this is the one place the margin is written down.
+FM_SESSION_START_NESTING_MARGIN=1
+
+# The highest bound the harness will actually let a session start reach: the
+# SHORTEST timeout any registered digest-tier session-start hook declares, minus
+# the nesting margin. Prints nothing and returns non-zero when no registration
+# could be read, because refusing to guess is the only safe answer for a number
+# whose job is to bound someone else's explicit request.
+#
+# WHY IT IS DERIVED AND NOT A CONSTANT. The harness kills the hook process, which
+# takes this script's PARENT along with the bounded child, so a bound above the
+# hook timeout produces no STARTUP TRUNCATED banner, no named stage and no
+# reconcile list - the silent non-supervision the bound exists to prevent. A
+# hardcoded ceiling would freeze that relationship: an operator who raises the
+# hook timeouts must see the ceiling rise with them and get the time they asked
+# for. Reading the registrations is what makes the clamp only ever refuse time
+# the machine will not give.
+#
+# WHAT IS READ. The tracked harness registration files, DISCOVERED by glob rather
+# than listed, so a fourth harness that lands its own .foo/hooks.json is honoured
+# the day it appears. Harness registration directories are dot directories by
+# convention - .claude, .codex, .cursor, .grok - and the glob covers one and two
+# levels inside them, which is where every one of them sits.
+# tests/fm-session-start-hook-nesting.test.sh discovers registrations
+# independently, with git, over every tracked JSON file in the checkout, and fails
+# if this glob has stopped seeing one of them.
+#
+# WHY awk AND NOT jq. This runs on the session-start path, where jq is not a
+# dependency at all and is genuinely absent on some Git Bash installs - which is
+# the platform this whole clamp protects. awk is already required by
+# fm_session_stage_render below, so the scanner adds no new dependency and no
+# extra process: one awk reads every registration. It is string-aware, so braces
+# and escaped quotes inside a command string cannot confuse the depth count, and
+# it only reads timeouts from hook objects nested under a `sessionStart` key
+# (matched case-insensitively, since Claude and Codex spell it `SessionStart`).
+fm_session_start_hook_ceiling() {
+  local root dir min f
+  local -a regs=()
+  if [ -n "${FM_SESSION_START_REGISTRATION_ROOT:-}" ]; then
+    root=$FM_SESSION_START_REGISTRATION_ROOT
+  else
+    # The registrations live with the CODE, not with the home, so the root is
+    # derived from this file's own path and deliberately not from FM_ROOT: a
+    # session pointed at a throwaway home still runs the checkout's hooks.
+    dir=${BASH_SOURCE[0]%/*}
+    [ "$dir" = "${BASH_SOURCE[0]}" ] && dir=.
+    case "$dir" in
+      */*) root=${dir%/*}; [ -n "$root" ] || root=/ ;;
+      *) root=$dir/.. ;;
+    esac
+  fi
+  # Cached per root: the banner asks for this number after the resolver already
+  # did, and neither should pay a second scan.
+  if [ "${_FM_SESSION_START_CEILING_ROOT:-}" = "$root" ]; then
+    [ "${_FM_SESSION_START_CEILING:-none}" != none ] || return 1
+    printf '%s\n' "$_FM_SESSION_START_CEILING"
+    return 0
+  fi
+  _FM_SESSION_START_CEILING_ROOT=$root
+  _FM_SESSION_START_CEILING=none
+  for f in "$root"/.[!.]*/*.json "$root"/.[!.]*/*/*.json; do
+    [ -f "$f" ] && [ -r "$f" ] && regs[${#regs[@]}]=$f
+  done
+  [ "${#regs[@]}" -gt 0 ] || return 1
+  min=$(awk -v wrappers="$FM_SESSION_START_DIGEST_WRAPPERS" '
+    function is_digest(cmd,   i, n, parts) {
+      n = split(wrappers, parts, " ")
+      for (i = 1; i <= n; i++)
+        if (parts[i] != "" && index(cmd, parts[i]) > 0) return 1
+      return 0
+    }
+    function close_object(d,   t) {
+      if (!inss || cmd[d] == "" || to[d] == "" || !is_digest(cmd[d])) return
+      t = to[d] + 0
+      if (t > 0 && (min == 0 || t < min)) min = t
+    }
+    # A JSON string never spans a line, so the scan carries its depth across
+    # lines and needs no slurp.
+    FNR == 1 { depth = 0; inss = 0; ssdepth = -1; key = ""; delete cmd; delete to }
+    {
+      line = $0
+      len = length(line)
+      i = 1
+      while (i <= len) {
+        ch = substr(line, i, 1)
+        if (ch == "\"") {
+          s = ""
+          i++
+          while (i <= len) {
+            c = substr(line, i, 1)
+            if (c == "\\") { s = s substr(line, i + 1, 1); i += 2; continue }
+            if (c == "\"") { i++; break }
+            s = s c
+            i++
+          }
+          j = i
+          while (j <= len && substr(line, j, 1) ~ /^[ \t]$/) j++
+          if (j <= len && substr(line, j, 1) == ":") { key = s; i = j + 1; continue }
+          if (tolower(key) == "command") cmd[depth] = s
+          key = ""
+          continue
+        }
+        if (ch == "{" || ch == "[") {
+          if (!inss && tolower(key) == "sessionstart") { inss = 1; ssdepth = depth }
+          key = ""
+          depth++
+          if (ch == "{") { cmd[depth] = ""; to[depth] = "" }
+          i++
+          continue
+        }
+        if (ch == "}" || ch == "]") {
+          if (ch == "}") close_object(depth)
+          depth--
+          if (inss && depth <= ssdepth) { inss = 0; ssdepth = -1 }
+          key = ""
+          i++
+          continue
+        }
+        if (ch ~ /^[-0-9]$/) {
+          num = ""
+          while (i <= len && substr(line, i, 1) ~ /^[-+.0-9eE]$/) {
+            num = num substr(line, i, 1)
+            i++
+          }
+          if (tolower(key) == "timeout") to[depth] = num
+          key = ""
+          continue
+        }
+        i++
+      }
+    }
+    END { if (min > 0) printf "%d\n", min }
+  ' "${regs[@]}" 2>/dev/null) || return 1
+  case "$min" in ''|*[!0-9]*|0) return 1 ;; esac
+  [ "$min" -gt "$FM_SESSION_START_NESTING_MARGIN" ] || return 1
+  _FM_SESSION_START_CEILING=$((min - FM_SESSION_START_NESTING_MARGIN))
+  printf '%s\n' "$_FM_SESSION_START_CEILING"
+}
+
 # The effective runtime bound, given the operator's explicit
 # FM_SESSION_START_TIMEOUT (empty when unset).
 #
@@ -83,13 +235,68 @@ fm_session_start_default_budget() {
 # A non-positive or non-numeric bound is not a bound at all - `timeout 0` and the
 # perl fallback's `alarm 0` both DISABLE the deadline - so an unusable value must
 # resolve to a real default rather than removing the bound.
+#
+# The one thing an explicit value does NOT win against is the harness. A usable
+# value above fm_session_start_hook_ceiling is CLAMPED to that ceiling, because
+# above it the harness kills the hook first and the operator gets nothing printed
+# at all - strictly less than the truncation banner they were trying to avoid. It
+# is clamped rather than rejected: someone who asked for MORE time must not be
+# handed LESS than the machine can safely give, so an over-ceiling request lands
+# on the ceiling and never back on the platform default.
+# fm_session_start_budget_advisory below is what says so on the digest.
+#
+# The ceiling is only derived when there IS an explicit value, which keeps the
+# default path - every ordinary session start - at exactly the subprocess count
+# it had before. The defaults are guarded instead by
+# tests/fm-session-start-hook-nesting.test.sh, which asserts every platform arm
+# nests under every registration.
 fm_session_start_resolve_budget() {  # [explicit-seconds]
-  local explicit=${1:-} fallback
-  fallback=$(fm_session_start_default_budget)
+  local explicit=${1:-} fallback ceiling
   case "$explicit" in
-    ''|*[!0-9]*|0) printf '%s\n' "$fallback" ;;
-    *) printf '%s\n' "$explicit" ;;
+    ''|*[!0-9]*|0)
+      fallback=$(fm_session_start_default_budget)
+      printf '%s\n' "$fallback"
+      return 0
+      ;;
   esac
+  if ceiling=$(fm_session_start_hook_ceiling) && [ "$explicit" -gt "$ceiling" ]; then
+    printf '%s\n' "$ceiling"
+    return 0
+  fi
+  printf '%s\n' "$explicit"
+}
+
+# The digest line a clamp owes the operator. Never clamps silently: it names what
+# was asked for, what was applied, and what would have happened otherwise, so the
+# operator is not left believing a bound that is not in force.
+#
+# Takes both numbers rather than re-deriving the ceiling, so it costs no
+# subprocess and cannot disagree with the bound that is actually running.
+fm_session_start_budget_advisory() {  # <requested> <effective>
+  local requested=${1:-} effective=${2:-}
+  case "$requested" in ''|*[!0-9]*|0) return 0 ;; esac
+  case "$effective" in ''|*[!0-9]*|0) return 0 ;; esac
+  [ "$requested" -gt "$effective" ] || return 0
+  printf '●  FM_SESSION_START_TIMEOUT=%ss was CLAMPED to %ss.\n' "$requested" "$effective"
+  printf '●  A registered session-start hook is killed by the harness after %ss, which\n' \
+    "$((effective + FM_SESSION_START_NESTING_MARGIN))"
+  printf '●  would take this script with the digest and print no truncation banner at\n'
+  printf '●  all. Raise the hook timeouts in the harness registrations to go higher.\n'
+}
+
+# The cap the truncation banner names right after it tells the operator to raise
+# FM_SESSION_START_TIMEOUT, so the printed remedy cannot walk them past the
+# harness hook timeout - where the hook is killed outright and this banner never
+# prints, which is the one outcome worse than truncating.
+#
+# Prints nothing when no ceiling could be derived: saying nothing is honest, and
+# naming a number this shell could not read would not be.
+fm_session_start_ceiling_advice() {
+  local ceiling
+  ceiling=$(fm_session_start_hook_ceiling) || return 0
+  printf '●  Raise it to at most %ss. Above that the harness kills this hook after %ss\n' \
+    "$ceiling" "$((ceiling + FM_SESSION_START_NESTING_MARGIN))"
+  printf '●  and there is no banner at all, so the bound is clamped there anyway.\n'
 }
 
 # Append the entry instant of <stage> to <file>. Never fails the caller: a

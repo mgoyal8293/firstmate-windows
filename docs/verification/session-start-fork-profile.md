@@ -49,6 +49,7 @@ An empty home is the floor: no tasks, no projects, an absent backlog, nothing to
 
 The bound change costs 4 forks: one `uname` for the platform default and its command substitution.
 The reductions remove 199 forks from the blocking path, 19.6%, and 127 more from the concurrent stage, which shares the same libraries.
+Both of those figures are against the 1016 row - the tree the reductions were actually applied to - and not against `main`; against `main`'s 1012 the same end state is 195 fewer forks and 19.3%.
 
 At the 42 ms measured under MSYS, 199 forks is about 8 s off a 72 s floor.
 That is a real improvement and it is not a fix on its own, which is why the bound was raised as well.
@@ -96,6 +97,9 @@ Two results decide how the reductions are written.
 A command substitution forks even around a shell builtin, so `$(...)` is never free.
 And `$(<f)` is free only *without* a redirection on it: `$(<f 2>/dev/null)` measured 2 forks per call, because the redirection defeats bash's special case, and it does not suppress the error either.
 So an unreadable file is handled by testing `[ -r f ]` first - a builtin - rather than by redirecting stderr.
+The test and the read are two steps, so a file deleted between them still spills bash's own error; that is suppressed by putting the `2>/dev/null` on the enclosing `{ ...; }` group, where it is an fd save and restore, and `{ x=$(<f); } 2>/dev/null` measured 0 forks per call on this same instrument.
+
+The harness-timeout ceiling that clamps an explicit `FM_SESSION_START_TIMEOUT` costs one `awk` over the registrations, and it is derived only when such an override is set, so every count above - all taken with no override - is unchanged by it.
 
 ## On the Windows box itself
 

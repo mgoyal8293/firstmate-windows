@@ -23,6 +23,13 @@
 # over every platform arm (tests/session-start-bound-helpers.sh owns that one
 # derivation), never written down.
 #
+# It then nearly shipped inverted a SECOND time by the same mechanism one level
+# up: sections 1 and 2 only asked what the resolver picks by DEFAULT, while
+# FM_SESSION_START_TIMEOUT overrides the default and the truncation banner's own
+# remedy invites the operator to raise it. Section 3 covers that override path,
+# because "the defaults nest" is not the invariant - "the bound in force nests"
+# is.
+#
 # WHAT CONTRACT IS BEING READ. These hook registrations are machine-consumed
 # declarative artifacts whose real consumer is the harness itself, which is not
 # available in CI. They are therefore parsed into a normalized model - one entry
@@ -49,15 +56,27 @@ command -v jq >/dev/null 2>&1 \
 # returns, so Grok's 10 s registration is correct and must not be raised.
 # bin/fm-sessionstart-cursor.sh is digest tier because it is a thin transport
 # that calls bin/fm-sessionstart-run.sh and waits for the whole digest.
-DIGEST_WRAPPERS='fm-session-start.sh fm-sessionstart-run.sh fm-sessionstart-cursor.sh'
+#
+# The digest list is READ FROM THE LIBRARY, not restated: the clamp in
+# fm_session_start_resolve_budget takes its ceiling from the same tier decision,
+# so a second copy here would let the two disagree about which registration
+# bounds the operator - and the guard would still be green.
+DIGEST_WRAPPERS=$FM_SESSION_START_DIGEST_WRAPPERS
 NUDGE_WRAPPERS='fm-sessionstart-nudge.sh'
 
 # Every tracked JSON registration in the checkout, DISCOVERED rather than listed,
 # so a fourth harness that lands its own .foo/hooks.json is read the day it
 # appears instead of the day someone remembers to add it here.
+#
+# Scoped to TRACKED material with git rather than swept with find, because the
+# unparseable-JSON arm below is a hard failure and this suite must only fail on
+# files the repo owns: an operator's untracked .claude/settings.local.json is not
+# gitignored here, and a scratch JSON file in it would fail a suite named for
+# tracked registrations. Discovery is unchanged in the direction that matters - a
+# newly added registration is tracked material, so it is still found the day it
+# lands, at any depth, without being listed here.
 tracked_json_registrations() {
-  find "$ROOT" -mindepth 2 -maxdepth 4 -type f -name '*.json' \
-    -not -path "$ROOT/.git/*" -not -path '*/node_modules/*' -print 2>/dev/null | LC_ALL=C sort
+  git -C "$ROOT" ls-files -z -- '*.json' 2>/dev/null | tr '\0' '\n' | LC_ALL=C sort
 }
 
 # One line per registered session-start hook in <file>: "<timeout><TAB><command>",
@@ -122,18 +141,18 @@ test_the_ceiling_covers_every_arm_the_resolver_can_pick() {
 # --- 2. every registered digest hook outlives that ceiling -------------------
 
 test_every_registered_digest_hook_outlives_the_startup_bound() {
-  local ceiling reg rel line timeout cmd tier
+  local ceiling rel abs line timeout cmd tier
   local seen=0 digest_hooks=0 digest_files=0 had_digest_here
   ceiling=$(fm_test_max_session_start_bound) \
     || fail "the session-start bound ceiling could not be derived"
 
-  while IFS= read -r reg; do
-    [ -n "$reg" ] || continue
-    rel=${reg#"$ROOT"/}
+  while IFS= read -r rel; do
+    [ -n "$rel" ] || continue
+    abs="$ROOT/$rel"
     # A tracked registration that no longer parses is a FAILURE, not a skip: the
     # harness would silently run with no registration at all, and this suite
     # would report ok while covering nothing.
-    jq -e . "$reg" >/dev/null 2>&1 \
+    jq -e . "$abs" >/dev/null 2>&1 \
       || fail "$rel does not parse as JSON, so whatever it registers cannot be verified"
     had_digest_here=0
     while IFS=$'\t' read -r timeout cmd; do
@@ -159,7 +178,7 @@ test_every_registered_digest_hook_outlives_the_startup_bound() {
         [ "$timeout" -gt "$ceiling" ] \
           || fail "$rel kills the session-start hook after ${timeout}s while the digest may bound itself at ${ceiling}s: the harness preempts the STARTUP TRUNCATED banner, so an over-budget startup loses its wake-queue drain and supervision instructions with nothing printed"
       fi
-    done < <(session_start_hooks_in "$reg")
+    done < <(session_start_hooks_in "$abs")
     [ "$had_digest_here" -eq 0 ] || digest_files=$((digest_files + 1))
   done < <(tracked_json_registrations)
 
@@ -173,5 +192,116 @@ test_every_registered_digest_hook_outlives_the_startup_bound() {
   pass "hook nesting: all $digest_hooks digest-running session-start hook(s) across $digest_files registration(s) outlive the ${ceiling}s startup bound, so firstmate's own bound always bites first"
 }
 
+# --- 3. and so does an EXPLICIT override, which is where this got through -----
+#
+# Sections 1 and 2 only ever ask what the resolver picks by DEFAULT. That is
+# exactly how the hazard survived the first round: FM_SESSION_START_TIMEOUT
+# overrides the default, the resolver accepted any positive integer, and the
+# truncation banner's own remedy told the operator to raise it - so following the
+# printed advice past the shortest registration killed the hook outright and
+# printed nothing, which is the failure the whole suite exists to prevent.
+#
+# The number these cases nest under is read with jq, independently of the awk
+# scanner the library uses, so the two implementations have to agree.
+
+# The shortest timeout any tracked registration declares for a DIGEST-tier
+# session-start hook. This is the deadline that actually kills the hook first.
+min_registered_digest_timeout() {
+  local rel timeout cmd min=
+  while IFS= read -r rel; do
+    [ -n "$rel" ] || continue
+    while IFS=$'\t' read -r timeout cmd; do
+      [ -n "$cmd" ] || continue
+      [ "$(hook_tier "$cmd")" = digest ] || continue
+      case "$timeout" in ''|ABSENT|*[!0-9]*|0) continue ;; esac
+      [ -n "$min" ] && [ "$timeout" -ge "$min" ] || min=$timeout
+    done < <(session_start_hooks_in "$ROOT/$rel")
+  done < <(tracked_json_registrations)
+  [ -n "$min" ] || return 1
+  printf '%s\n' "$min"
+}
+
+test_an_explicit_override_is_clamped_below_the_shortest_registration() {
+  local harness cap got plat
+  harness=$(min_registered_digest_timeout) \
+    || fail "no digest-tier session-start timeout could be read at all, so the override cases below would verify nothing"
+
+  # The library derives the same cap from the same registrations by its own
+  # route. If the two disagree, one of them is reading a registration the other
+  # cannot see - most likely the library's dot-directory glob has stopped finding
+  # one - and the clamp would then be computed from the wrong deadline.
+  cap=$(fm_session_start_hook_ceiling) \
+    || fail "fm_session_start_hook_ceiling derived no cap from the checkout's registrations, so an explicit FM_SESSION_START_TIMEOUT is not clamped at all"
+  [ "$cap" -eq "$((harness - FM_SESSION_START_NESTING_MARGIN))" ] \
+    || fail "the library's cap ${cap}s does not match the ${harness}s shortest registration minus the ${FM_SESSION_START_NESTING_MARGIN}s nesting margin: the two discoveries disagree, so check the dot-directory glob in bin/fm-session-start-bound-lib.sh against what git ls-files finds"
+
+  # THE GUARD. An operator following the banner's advice past the shortest
+  # registration must still end up with a bound that bites first, on every
+  # platform arm - the Windows one especially, since its default is already the
+  # closest to the registrations.
+  for plat in $FM_TEST_SESSION_START_PLATFORMS; do
+    got=$(FM_PLATFORM_UNAME_OVERRIDE="$plat" fm_session_start_resolve_budget "$((harness * 10))")
+    case "$got" in ''|*[!0-9]*|0) fail "an over-cap override on '$plat' resolved to '$got', which is not a usable bound" ;; esac
+    [ "$got" -lt "$harness" ] \
+      || fail "FM_SESSION_START_TIMEOUT=$((harness * 10)) on '$plat' resolves to ${got}s, at or above the ${harness}s harness hook timeout: the harness kills the hook first, so there is no STARTUP TRUNCATED banner, no named stage and no reconcile list"
+  done
+
+  # Clamped, never reduced to the default and never rejected: an operator who
+  # asked for MORE time must not be handed LESS than the machine can give.
+  got=$(FM_PLATFORM_UNAME_OVERRIDE=MINGW64_NT-10.0-26200 fm_session_start_resolve_budget "$((harness * 10))")
+  [ "$got" -eq "$cap" ] \
+    || fail "an over-cap override must land ON the ${cap}s cap, got ${got}s"
+  [ "$got" -gt "$(FM_PLATFORM_UNAME_OVERRIDE=MINGW64_NT-10.0-26200 fm_session_start_default_budget)" ] \
+    || fail "an over-cap override resolved to ${got}s, no more than the Windows default: asking for more time must not yield less"
+
+  # And the clamp must not become a floor or eat a usable value: anything at or
+  # below the cap is honoured exactly.
+  got=$(FM_PLATFORM_UNAME_OVERRIDE=Linux fm_session_start_resolve_budget "$cap")
+  [ "$got" -eq "$cap" ] \
+    || fail "an override exactly AT the ${cap}s cap must be honoured, got ${got}s"
+  got=$(FM_PLATFORM_UNAME_OVERRIDE=Linux fm_session_start_resolve_budget 45)
+  [ "$got" -eq 45 ] \
+    || fail "an override well below the cap must be honoured exactly, got ${got}s"
+
+  # An UNUSABLE value still resolves to the platform default. `timeout 0`
+  # disables the deadline outright, so the clamp must not turn a garbage value
+  # into the cap either.
+  got=$(FM_PLATFORM_UNAME_OVERRIDE=MINGW64_NT-10.0-26200 fm_session_start_resolve_budget abc)
+  [ "$got" -eq "$(FM_PLATFORM_UNAME_OVERRIDE=MINGW64_NT-10.0-26200 fm_session_start_default_budget)" ] \
+    || fail "an unusable override must still fall back to the platform default, got ${got}s"
+
+  pass "hook nesting: an explicit FM_SESSION_START_TIMEOUT above the cap is clamped to ${cap}s on every platform arm, strictly under the ${harness}s shortest registration, and a usable value at or below it is untouched"
+}
+
+# The clamp is not allowed to be silent: a bound the operator does not know is in
+# force is how they conclude the cap did not apply and raise the value again.
+test_a_clamp_says_so_on_the_digest() {
+  local harness cap out
+  harness=$(min_registered_digest_timeout) || fail "no digest-tier timeout could be read"
+  cap=$(fm_session_start_hook_ceiling) || fail "no cap could be derived"
+  out=$(fm_session_start_budget_advisory "$((harness * 10))" "$cap")
+  case "$out" in
+    *"$((harness * 10))"*) : ;;
+    *) fail "the clamp advisory must name the value that was requested, got: $out" ;;
+  esac
+  case "$out" in
+    *"$cap"*) : ;;
+    *) fail "the clamp advisory must name the cap that was applied, got: $out" ;;
+  esac
+  case "$out" in
+    *CLAMPED*) : ;;
+    *) fail "the clamp advisory must say plainly that it clamped, got: $out" ;;
+  esac
+  # And it stays quiet when nothing was clamped, so the digest does not carry a
+  # warning about a bound that is in force exactly as asked.
+  out=$(fm_session_start_budget_advisory 45 45)
+  [ -z "$out" ] || fail "an unclamped bound must produce no advisory, got: $out"
+  out=$(fm_session_start_budget_advisory '' 300)
+  [ -z "$out" ] || fail "an unset FM_SESSION_START_TIMEOUT must produce no advisory, got: $out"
+  pass "hook nesting: a clamped bound names the requested value, the cap applied and why, and an unclamped one stays silent"
+}
+
 test_the_ceiling_covers_every_arm_the_resolver_can_pick
 test_every_registered_digest_hook_outlives_the_startup_bound
+test_an_explicit_override_is_clamped_below_the_shortest_registration
+test_a_clamp_says_so_on_the_digest

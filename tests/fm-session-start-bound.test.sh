@@ -230,18 +230,18 @@ test_render_is_quiet_when_it_has_nothing_to_say() {
   # substitutes the origin or the budget for a missing stamp invents a timing
   # that reads as measured, which is worse than printing nothing. An earlier
   # version of this case only rejected elapsed=0 and passed against a mutation
-  # that fabricated elapsed=10000.
+  # that fabricated elapsed=10000. Emptiness is the whole assertion and it is
+  # made once - a further grep for `elapsed=` after this line could only ever run
+  # against a string already known to be empty.
   [ -z "$out" ] \
     || fail "an unstamped run must render nothing, got: $out"
-  printf '%s\n' "$out" | grep -q 'elapsed=' \
-    && fail "an unstamped run must not report any elapsed figure, got: $out"
   pass "fm_session_stage_render: stays silent on an empty, missing, or unstamped record rather than inventing timings"
 }
 
 # --- 5. end to end: the real script, really truncated -----------------------
 
 test_truncated_startup_names_the_stage_and_attributes_its_time() {
-  local world root home fakebin out
+  local world root home fakebin out ceiling
   world=$(new_world truncated) || fail "could not build a world"
   root=${world%%|*}; world=${world#*|}
   home=${world%%|*}; fakebin=${world#*|}
@@ -269,7 +269,16 @@ test_truncated_startup_names_the_stage_and_attributes_its_time() {
   # substring match would pass against a window that is still unattributed.
   printf '%s\n' "$out" | grep -qE 'startup +start=\+[0-9]+ +elapsed=[0-9]+' \
     || fail "the pre-lock setup window must be attributed with its own elapsed time, got: $out"
-  pass "fm-session-start.sh: a truncated startup names the stage it died in AND attributes its elapsed time per stage"
+  # The banner tells the operator to raise FM_SESSION_START_TIMEOUT, and above
+  # the shortest registered hook timeout the harness kills the hook outright and
+  # prints none of this - so the advice has to carry its own ceiling, by number,
+  # or the printed remedy leads into a strictly worse failure. Asserted against
+  # the ceiling the library derives, never against a literal.
+  ceiling=$(fm_session_start_hook_ceiling) \
+    || fail "no harness hook ceiling could be derived from the checkout, so the banner has no cap to name"
+  printf '%s\n' "$out" | grep -qE "Raise it to at most ${ceiling}s" \
+    || fail "the banner told the operator to raise the bound without naming the ${ceiling}s ceiling the harness enforces, got: $out"
+  pass "fm-session-start.sh: a truncated startup names the stage it died in, attributes its elapsed time per stage, and caps its own remedy at the ${ceiling}s harness ceiling"
 }
 
 # first_line_matching <text> <extended-regex>: the 1-based number of the first
