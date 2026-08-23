@@ -3,8 +3,9 @@
 # bound: its per-platform default, its stage breadcrumbs, and how a truncated
 # startup attributes the time it spent.
 #
-# Sourced, never executed. bin/fm-session-start.sh owns the digest and the nine
-# stage names; this file owns only the bound around them.
+# Sourced, never executed. bin/fm-session-start.sh owns the digest and the ten
+# stage names in its SESSION_START_STAGES; this file owns only the bound around
+# them.
 #
 # WHY THIS EXISTS. bin/fm-session-start.sh runs its whole digest as one bounded
 # child. When that bound is hit the digest truncates, and a truncated startup has

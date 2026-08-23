@@ -61,6 +61,7 @@ So the default bound is now per platform: 120 s as before, and 300 s under MSYS,
 [`../bin/fm-session-start-bound-lib.sh`](../bin/fm-session-start-bound-lib.sh) is the one owner of that resolution and records the reasoning behind the number, which is a margin over a censored observation and not a measured maximum.
 An explicit `FM_SESSION_START_TIMEOUT` still wins on every platform, including a value below the raised default; an unusable one falls back to the platform default rather than to a portable constant, because `timeout 0` disables the deadline outright.
 `bin/fm-startup-network.sh` resolves its inline-delivery window through that same owner, so the worker keeps offering its result for exactly as long as the digest it reports to might still be running.
+Raising this bound also raised every registered run-tier hook timeout to sit strictly above it, because a harness that kills the hook first takes the parent with the child and there is no truncation banner at all - which is worse than truncating, and is asserted by [`../tests/fm-session-start-hook-nesting.test.sh`](../tests/fm-session-start-hook-nesting.test.sh) against a ceiling derived from the platform arms rather than a quoted number.
 
 Raising a bound does not make the subprocess count that forced it acceptable, so the truncation banner now attributes its own time.
 It already named the stage it died in and every stage it never reached; it also asked the operator to "report the slow stage" while nothing measured a stage.

@@ -71,7 +71,7 @@ fake_msys_proc() {  # <root> <pid> <ppid> <pgid> <sid> <exename> <arg>...
 # assigns and seeing whether a re-source restores it. That needs no fork counter
 # and no platform.
 test_proc_lib_source_guard_skips_repeats_without_blinding_the_platform_seam() {
-  local out
+  local out cleared
   out=$(
     cd "$ROOT" || exit 1
     . bin/fm-proc-lib.sh
@@ -91,6 +91,12 @@ test_proc_lib_source_guard_skips_repeats_without_blinding_the_platform_seam() {
     printf 'seam_changed=%s windows=%s\n' "$FM_PROC_UNAME_S" \
       "$(fm_platform_is_windows && printf yes || printf no)"
     # Clearing it must return to the real host value rather than sticking.
+    # The value cleared FROM is an override no host ever reports, so "did it
+    # stick?" is answerable on every platform: a literal MINGW prefix would be
+    # unfalsifiable on Linux, where the host value could never look stuck, and
+    # would FAIL on a real Git Bash host, whose true uname IS MINGW64_NT-*.
+    FM_PLATFORM_UNAME_OVERRIDE=MINGW64_NT-0.0-fmtest-override
+    . bin/fm-proc-lib.sh
     unset FM_PLATFORM_UNAME_OVERRIDE
     . bin/fm-proc-lib.sh
     printf 'seam_cleared=%s\n' "$FM_PROC_UNAME_S"
@@ -102,9 +108,12 @@ test_proc_lib_source_guard_skips_repeats_without_blinding_the_platform_seam() {
     'setting FM_PLATFORM_UNAME_OVERRIDE must re-resolve the platform, or every Windows arm here is vacuous'
   assert_contains "$out" 'seam_changed=Linux windows=no' \
     'changing the seam again must re-resolve, not just the first transition'
-  case "$out" in
-    *'seam_cleared=MINGW'*) fail 'clearing the seam must return to the host value, not stick on the override' ;;
-  esac
+  cleared=${out##*seam_cleared=}
+  cleared=${cleared%%$'\n'*}
+  [ -n "$cleared" ] \
+    || fail 'clearing the seam must leave a resolved host platform, not an empty one'
+  [ "$cleared" != 'MINGW64_NT-0.0-fmtest-override' ] \
+    || fail "clearing the seam must re-resolve to the host value, not stick on the override ($cleared)"
   pass "fm-proc-lib.sh: the source guard skips repeat sources without blinding FM_PLATFORM_UNAME_OVERRIDE"
 }
 

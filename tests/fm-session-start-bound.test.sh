@@ -272,8 +272,35 @@ test_truncated_startup_names_the_stage_and_attributes_its_time() {
   pass "fm-session-start.sh: a truncated startup names the stage it died in AND attributes its elapsed time per stage"
 }
 
+# first_line_matching <text> <extended-regex>: the 1-based number of the first
+# line of <text> matching <regex>, or nothing when it never matches.
+first_line_matching() {
+  printf '%s\n' "$1" | grep -n -m1 -E -- "$2" | cut -d: -f1
+}
+
+# assert_header_precedes_body <text> <header-re> <body-re> <label>: the stage's
+# own header line must come BEFORE the first line of the stage's own output.
+#
+# Presence was not enough, and that is the whole point of this helper. The
+# earlier version of this case asserted only that each header string appeared
+# somewhere in the digest, so moving `subsection "WAKE QUEUE"` back BELOW the
+# drain output - the exact defect being fixed - left it green. Both patterns are
+# anchored for the same reason: bare substrings collide, with 'LOCK' inside
+# 'BLOCKED' and 'CONTEXT' inside surrounding prose.
+assert_header_precedes_body() {
+  local out=$1 header_re=$2 body_re=$3 label=$4 header_line body_line
+  header_line=$(first_line_matching "$out" "$header_re")
+  [ -n "$header_line" ] \
+    || fail "stage '$label': no header line matching /$header_re/ was printed at all"
+  body_line=$(first_line_matching "$out" "$body_re")
+  [ -n "$body_line" ] \
+    || fail "stage '$label': no output line matching /$body_re/ was printed, so the ordering is unprovable"
+  [ "$header_line" -lt "$body_line" ] \
+    || fail "stage '$label': its header is on line $header_line but the stage had already printed on line $body_line, so the header was emitted when the stage FINISHED and a long stage is a silent wait"
+}
+
 test_every_stage_prints_its_header_before_the_stage_runs() {
-  local world root home fakebin out sect
+  local world root home fakebin out
   world=$(new_world headers) || fail "could not build a world"
   root=${world%%|*}; world=${world#*|}
   home=${world%%|*}; fakebin=${world#*|}
@@ -288,17 +315,32 @@ test_every_stage_prints_its_header_before_the_stage_runs() {
   # which the READ-ONCE CONTRACT section quotes in prose on a completed run.
   printf '%s\n' "$out" | grep -q 'HIT ITS .* RUNTIME BOUND' \
     && fail "the digest truncated, so a missing header below would be a truncation and not a defect"
-  # A stage that runs without first printing its header is a silent wait that
-  # reads as a wedge, and leaves a truncation with no printed context. Every
-  # header the digest owns is listed: LOCK through NEXT STEP is the whole
-  # printed contract, and the tenth stage - `startup` - is the pre-lock window
-  # that by construction runs before any header can be printed, so it is
-  # asserted by the truncation case above instead.
-  for sect in 'LOCK' 'BOOTSTRAP' 'WAKE QUEUE' 'SUPERVISION INSTRUCTIONS' \
-              'READ-ONCE CONTRACT' 'FLEET STATE' 'NETWORK CHECKS' 'CONTEXT' 'NEXT STEP'; do
-    assert_contains "$out" "$sect" "stage header '$sect' must be printed"
-  done
-  pass "fm-session-start.sh: every one of the nine printed stages emits a header, so a long stage is attributable rather than silent"
+  # Every header the digest owns, each paired with a line only its OWN stage
+  # emits. LOCK through NEXT STEP is the whole printed contract; the tenth stage
+  # - `startup` - is the pre-lock window that by construction runs before any
+  # header can be printed, so it is asserted by the truncation case above
+  # instead. Where a stage has more than one shape in this hermetic world, the
+  # body pattern covers each of them, so the case pins ordering and not the
+  # fixture's incidental content.
+  assert_header_precedes_body "$out" '^LOCK$' \
+    '^lock (acquired|held)' lock
+  assert_header_precedes_body "$out" '^BOOTSTRAP$' \
+    '^(MISSING: |\(silent - all good\)$)' bootstrap
+  assert_header_precedes_body "$out" '^WAKE QUEUE$' \
+    '^(\(no queued wakes\)$|WAKE_|inactive outcome reconciliation:|skipped \(read-only session\))' wake-queue
+  assert_header_precedes_body "$out" '^SUPERVISION INSTRUCTIONS$' \
+    '^SUPERVISION OPERATING INSTRUCTIONS' supervision-instructions
+  assert_header_precedes_body "$out" '^READ-ONCE CONTRACT$' \
+    '^Do NOT re-read any of them' read-once
+  assert_header_precedes_body "$out" '^FLEET STATE$' \
+    '^Work under way \(state/\*\.meta\)$' fleet-state
+  assert_header_precedes_body "$out" '^NETWORK CHECKS$' \
+    '^(completed off the startup path|IN PROGRESS -|not started -|skipped \(read-only session\))' network-checks
+  assert_header_precedes_body "$out" '^CONTEXT$' \
+    '^data/projects\.md$' context
+  assert_header_precedes_body "$out" '^NEXT STEP$' \
+    '^The digest above is complete for this session start\.' next-step
+  pass "fm-session-start.sh: each of the nine printed stages emits its header BEFORE its own output, so a long stage is attributable rather than silent"
 }
 
 test_windows_platforms_raise_the_default_bound

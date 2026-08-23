@@ -25,6 +25,8 @@ set -u
 
 # shellcheck source=tests/lib.sh
 . "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
+# shellcheck source=tests/session-start-bound-helpers.sh
+. "$(dirname "${BASH_SOURCE[0]}")/session-start-bound-helpers.sh"
 
 TMP_ROOT=$(fm_test_tmproot fm-cursor-primary)
 fm_git_identity fmtest fmtest@example.invalid
@@ -607,7 +609,7 @@ test_sessionstart_silent_in_child_worktree() {
 # --- registration ------------------------------------------------------------
 
 test_tracked_registration_covers_the_primary_events() {
-  local reg
+  local reg bound
   reg="$ROOT/.cursor/hooks.json"
   [ -f "$reg" ] || fail "firstmate must ship a tracked project-scope .cursor/hooks.json"
   jq -e '.hooks.stop and .hooks.sessionStart and .hooks.preToolUse' "$reg" >/dev/null 2>&1 \
@@ -616,8 +618,15 @@ test_tracked_registration_covers_the_primary_events() {
     || fail "preCompact staging is deliberately deferred to a follow-up and must stay unregistered"
   jq -e '[.hooks.stop[] | select(.loop_limit != null and .loop_limit > 0)] | length == 1' "$reg" >/dev/null 2>&1 \
     || fail "the stop registration needs an explicit positive loop_limit: without it Cursor's default is unlimited"
-  jq -e '[.hooks.sessionStart[]] | all(.timeout > 120)' "$reg" >/dev/null 2>&1 \
-    || fail "the session-open timeout must sit above bin/fm-session-start.sh's own 120s budget"
+  # DERIVED, never a literal: this assertion read `.timeout > 120` while the
+  # Windows arm resolved to 300s, so a 180s registration stayed green the whole
+  # time it was preempting the truncation banner on MSYS.
+  # tests/fm-session-start-hook-nesting.test.sh owns the same invariant across
+  # every registration; this keeps the Cursor one honest where it is registered.
+  bound=$(fm_test_max_session_start_bound) \
+    || fail "could not derive bin/fm-session-start.sh's highest default budget"
+  jq -e --argjson bound "$bound" '[.hooks.sessionStart[]] | all(.timeout > $bound)' "$reg" >/dev/null 2>&1 \
+    || fail "the session-open timeout must sit strictly above bin/fm-session-start.sh's highest default budget (${bound}s), or Cursor kills the hook before the truncation banner is printed"
   pass "cursor registration: covers every primary event with a bounded stop loop"
 }
 
