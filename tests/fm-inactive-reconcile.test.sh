@@ -455,12 +455,12 @@ test_reconciliation_never_calls_forge() {
 # it visits. A per-child bound equal to that whole budget is a starvation bug: one
 # hung `gh` and the pass advances a single child. So the bound comes from what the
 # budget still has left, at most a third of it, and the read is skipped outright
-# when what remains cannot spare it - safe, because an unverified merge state is
-# reported as unverified and never as a landing.
+# when what remains cannot spare it - safe, because a skipped read is a TRANSIENT
+# non-answer, and no path resolves one to `done`, let alone to a landing.
 test_forge_bound_is_derived_from_the_remaining_budget() {
   local recorded bound skipped
-  # Full default budget: the read is affordable, and the bound never exceeds the
-  # reader's own default of 3s.
+  # Full default budget: the read is affordable, and the share is what binds -
+  # a third of 10s, well under the reader's own looser default.
   make_world forge-bound; write_child "$MAIN" child 'done: green'
   FM_FAKE_FORGE_ENV_LOG="$WORLD/forge-env.log"
   export FM_FAKE_FORGE_ENV_LOG
@@ -473,7 +473,7 @@ test_forge_bound_is_derived_from_the_remaining_budget() {
     ''|*[!0-9]*) fail "no whole-second forge bound was passed for the child: '$recorded'" ;;
   esac
   [ "$bound" -ge 1 ] || fail "a full 10s budget can spare a forge read: '$recorded'"
-  [ "$bound" -le 3 ] || fail "forge bound exceeds the reader's own default: '$recorded'"
+  [ "$bound" -le 3 ] || fail "forge bound exceeds a third of the full 10s budget: '$recorded'"
   [ -z "$skipped" ] || fail "the forge read was skipped with budget to spare: '$recorded'"
 
   # A budget small enough for the share to bind: at most a third of it, so a hung

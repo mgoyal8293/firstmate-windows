@@ -66,18 +66,33 @@
 # FM_CREW_STATE_NO_FORGE is truthy, which reports the merge state as unverified
 # and never as a landing.
 #
-# WHERE that read happens is the invariant, and it is worth stating as one rule
-# rather than a list of arms: this reader never emits `done` without having asked
-# the forge where the PR ended up. Every `done` is a claim a consumer may act on
-# with the DETAIL STRIPPED - bin/fm-inactive-reconcile.sh presents the state word
-# and the PR alone - so a `done` that never asked is how abandoned work reaches a
-# captain as a success. A crew reported working, parked, failed or unknown makes
-# no forge call at all; the paths that can say done are mutually exclusive, so
-# one invocation never makes two calls. A caller running this script inside a
-# budget of its own (bin/fm-inactive-reconcile.sh) narrows that bound to a share
-# of what it has left, or skips the read, through those same two knobs. Always
-# exits 0 on a successful read regardless of state; exit 2 only on a usage error
-# (no id).
+# THE FORGE-READ INVARIANT, owned here and pointed at from everywhere else that
+# needs it. It is a rule about PATHS, not about words:
+#
+#   Every path that COULD emit `done` reads the forge first. No other path reads
+#   it at all.
+#
+# The word finally emitted does not tell you whether the call happened, and
+# reading it that way is how the earlier wording of this paragraph came to be
+# false: a path that asked can still resolve to `failed` (the forge confirmed a
+# close) or to `unknown` (it did not answer, so a close cannot be ruled out).
+# Those words are PRODUCED by the call, not evidence that none was made. What is
+# true is the converse - a crew whose run never reaches a terminal or
+# green-checks shape never asks, so a routine heartbeat over a crew that is
+# validating, parked at a gate, or already failed on its own outcome makes no
+# forge call at all.
+#
+# Why the invariant is worth its cost: every `done` is a claim a consumer may act
+# on with the DETAIL STRIPPED - bin/fm-inactive-reconcile.sh presents the state
+# word and the PR alone - so a `done` that never asked is how abandoned work
+# reaches a captain as a success.
+#
+# The done-capable paths are mutually exclusive, so one invocation never makes
+# two calls. A caller running this script inside a budget of its own
+# (bin/fm-inactive-reconcile.sh) narrows that bound to a share of what it has
+# left, or skips the read, through those same two knobs; bin/fm-fleet-snapshot.sh
+# narrows it to a fixed per-task bound. Always exits 0 on a successful read
+# regardless of state; exit 2 only on a usage error (no id).
 set -u
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -125,18 +140,29 @@ case "$FM_CREW_STATE_RUNS_LIMIT" in ''|*[!0-9]*) FM_CREW_STATE_RUNS_LIMIT=200 ;;
 # FM_CREW_STATE_NO_FORGE=1 skips it, which reports the merge state as
 # unverified rather than asserting a landing - never as a landing.
 #
-# 3s, because this reader's callers are budgeted. `gh pr view --json
-# state,mergeStateStatus` against a real GitHub PR measured 0.53s 0.59s 0.59s
-# 0.61s 0.53s over five consecutive runs on 2026-08-22, worst case 0.61s, so 3s
-# is roughly five times the worst observed call. That figure is from ONE host
-# with warm `gh` auth: it is a headroom choice, not a latency guarantee. What the
-# choice is really protecting is the caller - bin/fm-inactive-reconcile.sh runs
-# this script inside a 10s AGGREGATE budget for its whole scan, so a bound equal
-# to that budget lets one hung call starve every remaining child. At 3s a fully
-# hung call still leaves that scan most of its budget, and that caller narrows
-# the bound further from whatever it has left.
-FM_CREW_STATE_FORGE_TIMEOUT=${FM_CREW_STATE_FORGE_TIMEOUT:-3}
-case "$FM_CREW_STATE_FORGE_TIMEOUT" in ''|*[!0-9]*|0) FM_CREW_STATE_FORGE_TIMEOUT=3 ;; esac
+# 10s here, and DELIBERATELY LOOSER than any budgeted caller uses. This default
+# serves the interactive single-task read, where the whole cost is one person
+# waiting for one answer and a slow answer is cheaper than a wrong one - the
+# answer this read produces is what stops abandoned work reading as a success.
+# Every caller with more than one task to get through narrows it: 3s in
+# bin/fm-fleet-snapshot.sh, and a share of what remains in
+# bin/fm-inactive-reconcile.sh, each recorded where it is chosen.
+#
+# The call itself is nowhere near either figure. `gh pr view --json
+# state,mergeStateStatus` against a real GitHub PR in this repo measured 0.53s
+# 0.59s 0.59s 0.61s 0.53s over five consecutive runs on 2026-08-22 (worst 0.61s),
+# and 0.55s to 0.96s over fifteen on 2026-08-23 (worst 0.96s, typical ~0.60s).
+# Both are ONE host with warm `gh` auth, so these are headroom choices, not
+# latency guarantees, and the spread between the two sessions is why the headroom
+# is a multiple of the worst observation rather than a margin on it. Re-measure
+# before changing either figure.
+#
+# Nothing is lost by waiting: a read that runs out of time is a TRANSIENT
+# non-answer, and no path resolves one to `done` (see fm_crew_terminal_verdict),
+# so a tighter bound trades a delayed answer for a delayed receipt, never for a
+# false one.
+FM_CREW_STATE_FORGE_TIMEOUT=${FM_CREW_STATE_FORGE_TIMEOUT:-10}
+case "$FM_CREW_STATE_FORGE_TIMEOUT" in ''|*[!0-9]*|0) FM_CREW_STATE_FORGE_TIMEOUT=10 ;; esac
 SEP=' · '
 
 # Emit the one canonical line and exit 0. Detail is optional.
@@ -496,8 +522,8 @@ fi
 # `outcome: passed` on a PR that was open, conflicted and carried zero checks,
 # and the old "PR merged/closed" reason was pure invention (see
 # fm-crew-run-verdict-lib.sh's header). Called on exactly the paths that can emit
-# `done` and nowhere else, so a routine heartbeat over working, parked or failed
-# crews makes no forge call at all, and no single invocation makes two.
+# `done` and nowhere else; this file's header owns that invariant and states why
+# the emitted word is not a way to tell whether the call happened.
 crew_forge_answer() {
   local url
   case "$(printf '%s' "${FM_CREW_STATE_NO_FORGE:-}" | tr '[:upper:]' '[:lower:]')" in
@@ -507,7 +533,7 @@ crew_forge_answer() {
   url=""
   [ "$RUN_SOURCE" = full ] && url=$(strip_quotes "$(nm_field pr)")
   [ -n "$url" ] || url=$COARSE_PR
-  [ -n "$url" ] || { printf 'unverified'; return; }
+  [ -n "$url" ] || { printf 'unrecorded'; return; }
   fm_crew_forge_pr_state "$url" "$FM_CREW_STATE_FORGE_TIMEOUT"
 }
 

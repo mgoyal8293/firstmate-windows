@@ -779,7 +779,90 @@ test_parked_scout_decision_stays_pending() {
   pass "a scout still parked at a decision stays pending (terminal clear does not over-fire)"
 }
 
+# The snapshot narrows bin/fm-crew-state.sh's per-task forge bound rather than
+# inheriting it, and this asserts the bound that reader actually hands its timeout
+# mechanism for the `gh pr view` call.
+#
+# It matters because the set of paths that make that call widened to every path
+# that could report `done` - `outcome: checks-passed` and the green-checks routes
+# included - which per AGENTS.md section 7 is the long steady state of a crew
+# waiting on merge, not a rare terminal moment. This snapshot is the one caller
+# with no aggregate budget of its own, so the per-task bound is all that stands
+# between a fleet of merge-waiting tasks and a slow captain-facing read.
+test_snapshot_narrows_the_per_task_forge_bound() {
+  local home fb wt log bound
+  home=$(make_home forge-bound)
+  mkdir -p "$home/projects/bound-worktree"
+  wt="$home/projects/bound-worktree"
+  cat > "$home/data/backlog.md" <<'EOF'
+## In flight
+- [ ] bound-task - Bound Task https://github.com/o/r/pull/1 (repo: alpha) (kind: ship) (since 2026-07-07)
+EOF
+  git -C "$wt" init -q
+  git -C "$wt" commit -q --allow-empty -m init
+  git -C "$wt" checkout -q -b fm/feat-bound
+  fm_write_meta "$home/state/bound-task.meta" \
+    "window=firstmate:fm-bound-task" \
+    "worktree=$wt" \
+    "project=alpha" \
+    "harness=claude" \
+    "kind=ship" \
+    "mode=ship"
+  fb=$(make_fakebin "$home")
+  log="$home/timeout.log"
+  : > "$log"
+  # `outcome: checks-passed` is a done-capable path, so the reader consults the
+  # forge; the fake gh answers so nothing depends on a real network.
+  cat > "$fb/no-mistakes" <<SH
+#!/usr/bin/env bash
+set -u
+[ "\${1:-}" = axi ] || exit 0
+[ "\${2:-}" = status ] || exit 0
+cat <<'TOON'
+run:
+  id: "01BOUND"
+  branch: fm/feat-bound
+  status: running
+  head: "$(git -C "$wt" rev-parse HEAD)"
+  pr: "https://github.com/o/r/pull/1"
+  steps[1]{step,status,findings,duration_ms}:
+    ci,running,0,0
+outcome: checks-passed
+TOON
+exit 0
+SH
+  cat > "$fb/gh" <<'SH'
+#!/usr/bin/env bash
+printf '{"mergeStateStatus":"CLEAN","state":"OPEN","url":"https://github.com/o/r/pull/1"}\n'
+SH
+  # bin/fm-timeout-lib.sh is the one owner of the bound, and it reaches `timeout`
+  # in two shapes - bare `<secs> <cmd>` and `-k 1 <secs> bash -c ...` - so this
+  # skips any leading -k pair rather than assuming a position. It records only the
+  # forge call's bound and then runs every command unchanged, so the rest of the
+  # read stays real.
+  cat > "$fb/timeout" <<'SH'
+#!/usr/bin/env bash
+set -u
+args=("$@")
+i=0
+while [ "${args[$i]:-}" = "-k" ]; do i=$((i + 2)); done
+bound=${args[$i]}
+cmd=("${args[@]:$((i + 1))}")
+case "${cmd[*]}" in *"gh pr view"*) printf '%s\n' "$bound" >> "${FM_FAKE_TIMEOUT_LOG:?}" ;; esac
+exec "${cmd[@]}"
+SH
+  chmod +x "$fb/no-mistakes" "$fb/gh" "$fb/timeout"
+  PATH="$fb:$PATH" FM_HOME="$home" FM_FAKE_TIMEOUT_LOG="$log" \
+    FM_SNAPSHOT_NOW=2026-07-11T18:00:00Z "$SNAPSHOT" >/dev/null 2>&1 || true
+  bound=$(head -1 "$log")
+  [ -n "$bound" ] || fail "the snapshot never reached the forge read, so the bound is untested"
+  [ "$bound" = 3 ] \
+    || fail "the snapshot must narrow the per-task forge bound to 3s, got '$bound'"
+  pass "the snapshot narrows the per-task forge bound"
+}
+
 test_empty_fleet_json
+test_snapshot_narrows_the_per_task_forge_bound
 test_fixture_snapshot_json
 test_main_inventory_orphan_and_unstructured_disclosure
 test_normalized_roles_and_plural_blocker_readiness

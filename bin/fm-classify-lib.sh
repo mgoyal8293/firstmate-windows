@@ -16,7 +16,7 @@
 # There are two documented exceptions. The absorb classification
 # (crew_absorb_class and its working/paused wrappers) is NOT a pure status-file
 # read: it reuses bin/fm-crew-state.sh, which may make a bounded no-mistakes call
-# and, for a run that reached a terminal pass, one bounded outbound forge read
+# and, on any path that could report `done`, one bounded outbound forge read
 # (`gh pr view`, the only source a merged-or-closed claim may come from), to
 # decide whether a crew that just stopped its turn or went stale is working,
 # deliberately paused, or neither. Callers run it ONLY on no-verb signal handling
@@ -1101,9 +1101,13 @@ signal_reason_is_actionable() {  # <file> ...
 # authoritatively (not the status log) is what keeps run-step precedence: a crew
 # that appended paused: but then STARTED a run reports working, never paused.
 # NOT a pure read: fm-crew-state.sh may make a bounded no-mistakes call, plus one
-# bounded forge read (`gh pr view`, FM_CREW_STATE_FORGE_TIMEOUT) when the run it
-# finds reached a terminal pass - a path reachable from here - so callers run it
-# only on no-verb signal and first-sighting stale paths, never every wake.
+# forge read (`gh pr view`, bounded by FM_CREW_STATE_FORGE_TIMEOUT, which this
+# caller leaves at that reader's own default) on any path that could report
+# `done`. That is wider than a terminal pass: `outcome: checks-passed`, the
+# ci-log-green override and a ci-ready status log all qualify, and those are the
+# steady state of a crew waiting on merge rather than rare terminal moments, so
+# callers run this only on no-verb signal and first-sighting stale paths, never
+# every wake. bin/fm-crew-state.sh's header owns the invariant behind that scope.
 # FM_CREW_STATE_BIN lets tests stub the verdict.
 crew_absorb_class() {  # <id>
   local id=$1 line state src

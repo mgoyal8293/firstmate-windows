@@ -48,9 +48,11 @@
 # would reach the captain as a success.
 # That read is bounded by a share of the aggregate budget this scan still has
 # left (crew_state_forge_bound, at most a third of it) and is skipped entirely
-# when what remains cannot spare it, because an unverified merge state is only
-# ever reported as unverified, never as a landing - so skipping it costs a
-# handling turn while a hung call would cost every remaining child its scan.
+# when what remains cannot spare it. Skipping is safe because an unread merge
+# state is TRANSIENTLY unverified, and a transient non-answer never reads `done`
+# at all, let alone as a landing - so skipping costs this pass its receipt for
+# that child and nothing else, while a hung call would cost every remaining child
+# its scan.
 set -u
 export LC_ALL=C
 
@@ -343,8 +345,8 @@ report_to_parent() { # <self-id> <task> <state> <outcome-key> <fingerprint> <pr>
 # of all of it. 0 means "cannot spare it": the caller skips the read, which
 # reports the merge state as unverified, and unverified is never a landing.
 crew_state_forge_bound() { # <remaining-secs>
-  local remaining=$1 share bound=${FM_CREW_STATE_FORGE_TIMEOUT:-3}
-  case "$bound" in ''|*[!0-9]*|0) bound=3 ;; esac
+  local remaining=$1 share bound=${FM_CREW_STATE_FORGE_TIMEOUT:-10}
+  case "$bound" in ''|*[!0-9]*|0) bound=10 ;; esac
   share=$((remaining / 3))
   [ "$share" -lt "$bound" ] && bound=$share
   printf '%s' "$bound"

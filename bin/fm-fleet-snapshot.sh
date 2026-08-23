@@ -197,16 +197,50 @@ last_nonempty_line() {  # <file>
   grep -v '^[[:space:]]*$' "$1" 2>/dev/null | tail -1
 }
 
-# One bin/fm-crew-state.sh read per task, deliberately unbounded here beyond that
-# reader's own bounds, and deliberately WITHOUT FM_CREW_STATE_NO_FORGE.
+# The per-task bound this snapshot allows bin/fm-crew-state.sh for its one
+# `gh pr view`. 3 seconds, from measurement rather than preference:
+#
+#   2026-08-23, 15 sequential calls of the exact shape fm_crew_forge_pr_state
+#   makes (`gh pr view <n> --repo <owner/repo> --json state,mergeStateStatus`,
+#   GH_PROMPT_DISABLED=1 GH_NO_UPDATE_NOTIFIER=1) against this repo: 0.55s-0.96s,
+#   worst observed 0.96s, typical ~0.60s.
+#   2026-08-22, an INDEPENDENT run of the same call against this repo: 0.53s-0.61s,
+#   worst observed 0.61s.
+#
+# 3s is about 3x the higher of the two worst observations and 5x typical. The
+# SPREAD between the two sessions is the argument for that headroom: a bound set
+# to ~1.5x either session's own worst would have been tight against the other.
+# Re-measure before changing it rather than guessing.
+#
+# REVISIT TRIGGER, so this is checkable rather than a feeling. The ruling was made
+# at a fleet of 3 tasks: worst case 3 x 3s = 9s of serial forge reads, typical
+# ~1.8s. If a fleet routinely runs enough concurrent merge-waiting tasks that the
+# snapshot itself becomes slow, an aggregate cap is the answer AT THAT POINT - not
+# before, because an aggregate cap is machinery for a fleet size this does not
+# have.
+FM_SNAPSHOT_CREW_FORGE_TIMEOUT=3
+
+# One bin/fm-crew-state.sh read per task, with that reader's forge bound narrowed
+# to FM_SNAPSHOT_CREW_FORGE_TIMEOUT above, and deliberately WITHOUT
+# FM_CREW_STATE_NO_FORGE.
 #
 # That reader costs up to two 10s-bounded `no-mistakes` calls per task, plus one
-# 3s-bounded `gh pr view` for a task whose run reached a terminal pass. Keeping
-# the forge read is a ruling, not an oversight, and two reasons hold it:
+# forge read - bounded at 3s here, at that reader's own default elsewhere - for a
+# task on any path that could report `done`. That is NOT just a terminal pass: it
+# covers `outcome: checks-passed`, the ci-log-green override and a ci-ready status
+# log, which per AGENTS.md section 7 are the LONG steady state of a crew waiting
+# on merge, not rare terminal moments. bin/fm-crew-state.sh's header owns the
+# invariant that decides which paths read the forge.
+#
+# Keeping the forge read is a ruling, not an oversight, and two reasons hold it:
 # this snapshot is the captain-facing surface, which is exactly where a false
 # "merged" claim does its damage, so a live merge state is worth a bounded read
 # here; and the marginal cost is noise beside the no-mistakes calls each task
-# already pays. Answer both before optimising it away.
+# already pays. Answer both before optimising it away. Note the second reason is
+# the one the widened scope pressures, which is why the bound above is narrowed
+# and measured rather than inherited - blinding this reader with
+# FM_CREW_STATE_NO_FORGE would reintroduce exactly the false success it exists to
+# remove, so it waits less rather than not asking.
 crew_state_json() {  # <id>
   local id=$1 raw rest state source detail sep
   raw=$(
@@ -216,6 +250,7 @@ crew_state_json() {  # <id>
       FM_DATA_OVERRIDE="$DATA" \
       FM_PROJECTS_OVERRIDE="$PROJECTS" \
       FM_CONFIG_OVERRIDE="$CONFIG" \
+      FM_CREW_STATE_FORGE_TIMEOUT="$FM_SNAPSHOT_CREW_FORGE_TIMEOUT" \
       "$SCRIPT_DIR/fm-crew-state.sh" "$id" 2>/dev/null || true
   )
   raw=$(printf '%s\n' "$raw" | head -1)

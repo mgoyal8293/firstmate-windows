@@ -298,6 +298,19 @@ reset_fakes() {
   export FM_FAKE_GH_PR FM_FAKE_GH_CALL_FAILS
 }
 
+# A forge answer that settles the PR's fate as OPEN and says nothing else.
+#
+# Cases whose guard is about something OTHER than where the PR ended up use this,
+# so that question is answered and cannot be what carries their verdict. Leaving
+# it unanswered is not neutral: an unanswered forge is the TRANSIENT non-answer,
+# which no path may resolve to `done`, so a case that means to assert `done` about
+# ci evidence would instead be asserting the forge gate. That coupling is how the
+# ci-padding guard silently stopped falsifying anything once a later ruling gave
+# its fixture a second route to `done`.
+forge_answers_open() {
+  FM_FAKE_GH_PR='{"mergeStateStatus":"CLEAN","state":"OPEN","url":"https://github.com/o/r/pull/1"}'
+}
+
 # --- run-object fixtures (TOON, as `no-mistakes axi status` emits) -----------
 
 run_running() {  # <branch>
@@ -791,6 +804,7 @@ test_ci_ready_done_log_beats_monitoring_run() {
   fm_write_meta "$d/state/feat-ci.meta" "window=fm:fm-feat-ci" "worktree=$d/wt" "kind=ship"
   printf 'done: PR https://github.com/o/r/pull/2 checks green\n' > "$d/state/feat-ci.status"
   FM_FAKE_AXI_STATUS="$(run_ci_monitoring fm/feat-ci)"
+  forge_answers_open
   local out; out=$(run_crew_state "$d" feat-ci)
   assert_contains "$out" "state: done" "ci-ready status log -> done"
   assert_contains "$out" "source: status-log" "ci-ready state comes from the status log"
@@ -817,6 +831,7 @@ CI checks running, waiting for results...
 all CI checks passed - still monitoring until merged or closed
 EOF
 )
+  forge_answers_open
   local out; out=$(run_crew_state "$d" feat-cigreen)
   assert_contains "$out" "state: done" "green ci-monitor run -> done"
   assert_contains "$out" "source: run-step" "green ci-monitor -> run-step source"
@@ -833,6 +848,7 @@ test_top_level_ci_checks_green_surfaces_done() {
   fm_write_meta "$d/state/feat-topcigreen.meta" "window=fm:fm-feat-topcigreen" "worktree=$d/wt" "kind=ship"
   FM_FAKE_AXI_STATUS="$(run_top_level_ci fm/feat-topcigreen)"
   FM_FAKE_CI_LOGS="all CI checks passed - still monitoring until merged or closed"
+  forge_answers_open
   local out; out=$(run_crew_state "$d" feat-topcigreen)
   assert_contains "$out" "state: done" "top-level ci with green log -> done"
   assert_contains "$out" "source: run-step" "top-level ci green -> run-step source"
@@ -849,6 +865,7 @@ test_ci_monitoring_no_checks_terminal_surfaces_done() {
   fm_write_meta "$d/state/feat-cinochecks.meta" "window=fm:fm-feat-cinochecks" "worktree=$d/wt" "kind=ship"
   FM_FAKE_AXI_STATUS="$(run_ci_monitoring fm/feat-cinochecks)"
   FM_FAKE_CI_LOGS="no CI checks reported - still monitoring until merged or closed"
+  forge_answers_open
   local out; out=$(run_crew_state "$d" feat-cinochecks)
   assert_contains "$out" "state: done" "terminal no-checks ci-monitor run -> done"
   assert_contains "$out" "checks green" "terminal no-checks ci-monitor detail mentions checks green"
@@ -1007,6 +1024,7 @@ test_terminal_passed() {
   make_fakebin "$d" >/dev/null
   fm_write_meta "$d/state/feat-d.meta" "window=fm:fm-feat-d" "worktree=$d/wt" "kind=ship"
   FM_FAKE_AXI_STATUS="$(run_passed fm/feat-d)"
+  forge_answers_open
   local out; out=$(run_crew_state "$d" feat-d)
   assert_contains "$out" "state: done" "passed run -> done"
   assert_contains "$out" "source: run-step" "passed -> run-step source"
@@ -1401,6 +1419,7 @@ test_dead_window_still_reports_terminal_run_step() {
   fm_write_meta "$d/state/feat-dead-done.meta" "window=fm:fm-feat-dead-done" "worktree=$d/wt" "kind=ship"
   printf 'done: PR https://github.com/o/r/pull/3 checks green\n' > "$d/state/feat-dead-done.status"
   FM_FAKE_AXI_STATUS="$(run_passed fm/feat-dead-done)"
+  forge_answers_open
   FM_FAKE_TMUX_MISSING=1   # the crew's window has closed
   local out; out=$(run_crew_state "$d" feat-dead-done)
   assert_contains "$out" "state: done" "closed pane still reports terminal run-step done"
@@ -1990,6 +2009,7 @@ test_checks_passed_outcome_is_done_without_a_completed_ci_row() {
   make_fakebin "$d" >/dev/null
   fm_write_meta "$d/state/checksgreen.meta" "window=fm:fm-checksgreen" "worktree=$d/wt" "kind=ship"
   FM_FAKE_AXI_STATUS="$(run_checks_passed fm/feat-checksgreen)"
+  forge_answers_open
   out=$(run_crew_state "$d" checksgreen)
   assert_contains "$out" "state: done" "checks-passed is its own CI evidence"
   assert_contains "$out" "checks green: PR ready for review" "the captain gets the ready-for-review signal"
@@ -2407,6 +2427,8 @@ test_forge_confirmed_close_defeats_a_checks_passed_run() {
   assert_contains "$out" "state: failed" "an abandoned PR is not a ready-for-review success"
   assert_not_contains "$out" "state: done" "green checks cannot settle where the PR ended up"
   assert_contains "$out" "PR closed without merging" "the detail names the close for what it is"
+  assert_contains "$out" "checks green: PR closed" "the lead claims only the green checks"
+  assert_not_contains "$out" "run passed" "this run reached no outcome and passed nothing"
   assert_not_contains "$out" "ready for review" "nothing here should send the captain to review it"
   pass "a forge-confirmed close defeats a checks-passed run"
 }
@@ -2449,6 +2471,8 @@ test_forge_confirmed_close_defeats_a_green_ci_log() {
   assert_contains "$out" "state: failed" "a closed PR ends the monitor as an abandonment"
   assert_not_contains "$out" "state: done" "a green ci log cannot settle where the PR ended up"
   assert_contains "$out" "PR closed without merging" "the detail names the close"
+  assert_contains "$out" "checks green: PR closed" "the lead claims only the green checks"
+  assert_not_contains "$out" "run passed" "this run is still running and passed nothing"
   pass "a forge-confirmed close defeats a green ci log"
 }
 
@@ -2470,7 +2494,67 @@ test_forge_confirmed_close_defeats_a_ci_ready_status_log() {
   assert_contains "$out" "state: failed" "a closed PR is not a ready-for-review success"
   assert_not_contains "$out" "state: done" "the crew's own log cannot settle where the PR ended up"
   assert_contains "$out" "PR closed without merging" "the detail names the close"
+  assert_contains "$out" "checks green: PR closed" "the lead claims only the green checks"
+  assert_not_contains "$out" "run passed" "this run is still running and passed nothing"
   pass "a forge-confirmed close defeats a ci-ready status log"
+}
+
+# The precondition for a tight forge bound. A TRANSIENT non-answer - the read
+# timed out, gh was unauthenticated, or a budgeted caller skipped it - cannot tell
+# an open PR from a closed one, so no path may resolve it to `done`. Shortening
+# the wait must degrade to honesty, never to the false success this whole change
+# removes, and both routes to `done` are pinned here because both are reachable
+# from the snapshot that now waits less.
+test_a_transient_forge_non_answer_never_reads_done() {
+  reset_fakes
+  local d out
+  d=$(new_case transient-non-answer)
+  make_repo_on_branch "$d/wt" fm/feat-transient
+  make_fakebin "$d" >/dev/null
+  fm_write_meta "$d/state/transient.meta" "window=fm:fm-transient" "worktree=$d/wt" "kind=ship"
+  # A genuine pass carrying its OWN ci,completed evidence: only the unanswered
+  # forge stands between it and done.
+  FM_FAKE_AXI_STATUS="$(run_passed_ci_completed fm/feat-transient)"
+  FM_FAKE_GH_CALL_FAILS=1
+  out=$(run_crew_state "$d" transient)
+  assert_not_contains "$out" "state: done" "an unread merge state cannot rule out a close"
+  assert_contains "$out" "state: unknown" "the honest word while the forge is unread"
+  assert_contains "$out" "cannot rule out a close" "the detail says which half is missing"
+  assert_contains "$out" "run passed" "the ci evidence it does have is still reported"
+  # The green-checks route reaches done by its own evidence, and is bounded the
+  # same way.
+  FM_FAKE_AXI_STATUS="$(run_checks_passed fm/feat-transient)"
+  out=$(run_crew_state "$d" transient)
+  assert_not_contains "$out" "state: done" "green checks cannot rule out a close either"
+  assert_contains "$out" "state: unknown" "the green-checks route degrades the same way"
+  assert_contains "$out" "checks green: cannot rule out a close" "and claims only its own evidence"
+  pass "a transient forge non-answer never reads done"
+}
+
+# The other half of that rule, and the reason it is a SPLIT rather than a blanket
+# refusal. A STRUCTURAL non-answer - no forge client on this host, or a PR url
+# this reader cannot recognise - is never cleared by a later read, so refusing
+# `done` would refuse it forever: every GitLab project and every host without
+# `gh` would lose the ready-for-review signal permanently. That is a worse failure
+# than the one the transient rule guards against, so the run's own evidence still
+# settles done there.
+test_a_structural_forge_non_answer_still_reads_done() {
+  reset_fakes
+  local d no_gh_path out
+  d=$(new_case structural-non-answer)
+  make_repo_on_branch "$d/wt" fm/feat-structural
+  make_fakebin "$d" >/dev/null
+  rm -f "$d/fakebin/gh"
+  no_gh_path=$(make_path_with_no_gh_binary "$d")
+  ( PATH="$no_gh_path"; hash -r; command -v gh >/dev/null 2>&1 ) &&
+    fail "fixture broken: gh is still reachable on the stripped PATH"
+  fm_write_meta "$d/state/structural.meta" "window=fm:fm-structural" "worktree=$d/wt" "kind=ship"
+  FM_FAKE_AXI_STATUS="$(run_passed_ci_completed fm/feat-structural)"
+  out=$(PATH="$d/fakebin:$no_gh_path" FM_STATE_OVERRIDE="$d/state" "$CREW_STATE" structural)
+  assert_contains "$out" "state: done" "the run's own ci evidence still settles it"
+  assert_contains "$out" "no forge client for github" "the permanent condition is named"
+  assert_not_contains "$out" "cannot rule out a close" "no later read would ever clear this one"
+  pass "a structural forge non-answer still reads done"
 }
 
 # The property that actually failed: the full `axi status` path and the coarse
@@ -2614,6 +2698,8 @@ test_forge_confirmed_close_defeats_a_checks_passed_run
 test_checks_passed_keeps_ready_for_review_unless_the_pr_was_closed
 test_forge_confirmed_close_defeats_a_green_ci_log
 test_forge_confirmed_close_defeats_a_ci_ready_status_log
+test_a_transient_forge_non_answer_never_reads_done
+test_a_structural_forge_non_answer_still_reads_done
 test_absent_forge_client_is_structural_not_transient
 test_both_paths_agree_on_a_forge_confirmed_merge
 test_both_paths_agree_on_an_open_pr_with_no_ci_evidence

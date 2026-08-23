@@ -14,13 +14,15 @@ Branch: `fm/fm-crew-state-stale-run-masks-live`.
 
 ```
 $ bash tests/fm-crew-state.test.sh | grep -c '^ok'
-85
+87
 $ bash tests/fm-inactive-reconcile.test.sh 2>/dev/null | grep -c '^ok'
 17
+$ bash tests/fm-fleet-snapshot-view.test.sh 2>/dev/null | grep -c '^ok'
+16
 ```
 
 The count is the evidence, not the exit status: a green step does not prove its assertions ran.
-The second suite is listed because one guard below - the bound the scan derives for this reader's forge read - belongs to that caller and is pinned there.
+The second and third suites are listed because three guards below belong to those callers and are pinned there: the bound the scan derives for this reader's forge read, and the fixed per-task bound the snapshot chooses.
 
 ## Falsification matrix
 
@@ -63,12 +65,18 @@ Every row must fail, and must fail on the named assertion.
 | So does the ci-log-green override, which reaches done by a different route | the same short-circuit on that arm | `test_forge_confirmed_close_defeats_a_green_ci_log` | fails: `missing: 'state: failed'` |
 | So does a ci-ready status log, which reaches done with a different source | emit `done` from `emit_checks_green` without consulting the owner | `test_forge_confirmed_close_defeats_a_ci_ready_status_log` | fails: `missing: 'state: failed'` |
 | A confirmed merge is named on the checks-green path | drop the merge suffix from `fm_crew_checks_green_verdict` | `test_checks_passed_keeps_ready_for_review_unless_the_pr_was_closed` | fails: `missing: 'PR merged'` |
+| The checks-green lead claims only green checks, never a pass | pass `verified` to the closed detail again, restoring the "run passed" lead | `test_forge_confirmed_close_defeats_a_green_ci_log` | fails: `missing: 'checks green: PR closed'` |
+| A TRANSIENT non-answer never reads done on the terminal path | drop the transient arm from `fm_crew_terminal_verdict` | `test_a_transient_forge_non_answer_never_reads_done` | fails: `unexpected: 'state: done'` |
+| Nor on the checks-green path | drop the transient arm from `fm_crew_checks_green_verdict` | the same case | fails: `unexpected: 'state: done'` |
+| A STRUCTURAL non-answer still reads done, because no read will ever clear it | class the structural words as transient | `test_a_structural_forge_non_answer_still_reads_done` | fails: `missing: 'state: done'` |
+| A run record with no PR url is a structural non-answer, not a transient one | report the absent url as `unverified` again | `test_coarse_run_does_not_probe_other_branch_ci_log_for_ready_status` | fails: `missing: 'state: done'` |
+| The fleet snapshot narrows the per-task forge bound rather than inheriting it | drop the `FM_CREW_STATE_FORGE_TIMEOUT` it passes | `test_snapshot_narrows_the_per_task_forge_bound` (`tests/fm-fleet-snapshot-view.test.sh`) | fails: `the snapshot must narrow the per-task forge bound to 3s, got '10'` |
 | Both terminal paths reach the same verdict on a forge-confirmed merge | restore the asymmetry, letting only the no-steps path use the landing | `test_both_paths_agree_on_a_forge_confirmed_merge` | fails: `the two paths disagree on one world state` |
 | And on an open PR with no ci evidence | give the no-steps path its own done arm whatever the forge said | `test_both_paths_agree_on_an_open_pr_with_no_ci_evidence` | fails: `missing: 'state: unknown'` |
-| The per-child forge bound is at most a third of the scan's remaining budget | pass the whole remaining budget as the bound | `test_forge_bound_is_derived_from_the_remaining_budget` (`tests/fm-inactive-reconcile.test.sh`) | fails: `forge bound exceeds a third of the 6s budget: '3\|'` |
+| The per-child forge bound is at most a third of the scan's remaining budget | pass the whole remaining budget as the bound | `test_forge_bound_is_derived_from_the_remaining_budget` (`tests/fm-inactive-reconcile.test.sh`) | fails: `forge bound exceeds a third of the full 10s budget: '10\|'` |
 | A budget too small to spare the read skips it instead of shrinking it | take the bound arm unconditionally (`if true`) | the same case | fails: `a 2s budget cannot spare a whole second of forge read: '0\|'` |
 
-38 of 38, re-derived in full on 2026-08-23.
+44 of 44, re-derived in full on 2026-08-23 - twice, once per fix round.
 
 The first two rows share a case deliberately: both guards sit on the runs-list path, and the case needs both to hold - one stops the dead run being reached, the other makes the live run usable.
 Four later pairs share a mutation rather than a case, because one gate covers several distinct ways for the evidence to be absent and each way needs its own case to show it is covered.
@@ -77,7 +85,9 @@ The strictness of the PR-URL rules themselves is not listed as a guard of this f
 The look-alike-host case above pins that reuse behaviourally, since a loosened parse would send `https://evil-github.com/o/r/pull/6` to the real forge.
 The unknown-not-parked row is pointed at the case that shows the HARM, not just the word: with `parked` restored, the answered `needs-decision:` line stops being reconciled as superseded, which is what let a resolved decision resurface as a captain demand.
 The 7-character floor in `fm_crew_sha_matches` is deliberately absent from the table: it is defensive against a degenerate abbreviation and has no observed trigger, so there is no honest case to pin it with.
-The last two rows live in `tests/fm-inactive-reconcile.test.sh` because the budget belongs to that caller, and they are listed here because the bound it derives is what keeps this file's forge read affordable.
+Three rows live in other suites because the bound belongs to those callers, and they are listed here because what those callers choose is what keeps this file's forge read affordable: two in `tests/fm-inactive-reconcile.test.sh` for the scan's derived share, and one in `tests/fm-fleet-snapshot-view.test.sh` for the snapshot's fixed per-task bound.
+The snapshot row is only falsifiable because that bound is TIGHTER than the library default.
+While the two coincided at 3s, removing the snapshot's override changed nothing and the row proved nothing - the same decay mode the ci-padding row taught, caught here before it was recorded rather than after.
 
 ### Matrix decay, and the re-audit that found it
 
@@ -166,22 +176,52 @@ A confirmed close settles `failed`; every other answer keeps the ready-for-revie
 
 The cost changed and is recorded honestly.
 The forge read used to happen only on a terminal pass, so a crew monitoring a green PR made no forge call; it now costs one bounded `gh pr view` per heartbeat while that crew waits.
-The paths that can say `done` are mutually exclusive, so no single invocation makes two calls, and a crew reported working, parked, failed or unknown still makes none.
+The paths that can say `done` are mutually exclusive, so no single invocation makes two calls.
+Which paths call the forge is decided by the path, not by the word it produces: `bin/fm-crew-state.sh`'s header owns that invariant, and states why a `failed` or an `unknown` is often the RESULT of a call rather than evidence that none was made.
 That is the price of the invariant, and it is the right way round: the read is cheap and bounded, while presenting abandoned work to a captain as a success is not.
+
+## Ruled: a transient non-answer never reads done
+
+Making the forge bound TIGHTER is only safe if failing to read the forge produces honesty rather than the false success this change removes.
+That is the precondition, not a separate nicety, so it is recorded next to the bound it licenses.
+
+A non-answer now splits two ways, and `fm_crew_forge_answer_class` owns the split.
+
+A TRANSIENT non-answer is `unverified`: the read timed out, `gh` was unauthenticated, or a budgeted caller skipped it with `FM_CREW_STATE_NO_FORGE`.
+It cannot tell an open PR from a closed one, so no path resolves it to `done` - the run's own `ci,completed` row and its green checks both degrade to `unknown` with a detail saying the checks are proven and a close cannot be ruled out.
+The next read clears it, so the cost is one heartbeat.
+
+A STRUCTURAL non-answer is `unqueryable <provider>`, `unparseable`, or `unrecorded` when the run record carries no PR url at all.
+No later read of the same record will ever answer, so refusing `done` would refuse it forever: every GitLab project and every host without `gh` would permanently lose both the ready-for-review signal and any terminal receipt.
+That is a worse failure than the one the transient rule guards against - the same failure the amended criterion above already rejected once - so the run's own evidence still settles `done` there.
+A record with no PR is the clearest case of all: there is no PR whose fate could be hiding behind the unread answer.
+
+The two rules are one idea, which is why they share an owner: withhold a verdict exactly as long as waiting can change the answer, and no longer.
+
+This also changed what the test fixtures must say.
+A case that means to assert `done` about ci evidence now has to answer the forge question explicitly, or it is really asserting the forge gate; `forge_answers_open` in `tests/fm-crew-state.test.sh` exists for that, and its comment records the coupling.
+That is the same lesson the ci-padding row taught, arriving from the other direction: a fixture that leaves a second input unpinned stops testing the input it names.
 
 ## Forge-read bound
 
 `fm_crew_forge_pr_state` is the only outbound call this reader makes, and `FM_CREW_STATE_FORGE_TIMEOUT` bounds it.
-The default is 3 seconds, from this measurement on 2026-08-22:
+The library default is 10 seconds and every caller with a fleet to get through narrows it: 3 seconds in `bin/fm-fleet-snapshot.sh`, and at most a third of what remains in `bin/fm-inactive-reconcile.sh`.
+The loose default is for the interactive single-task read, where one person is waiting for one answer and a slow answer is cheaper than a wrong one.
+Deliberately keeping the default and the narrowed bound at DIFFERENT numbers is also what makes the snapshot's choice falsifiable at all, as the matrix note above records.
+
+The measurements both bounds rest on, on 2026-08-22:
 
 Command: `gh pr view <n> --repo <owner/repo> --json state,mergeStateStatus`, against a real GitHub PR, five consecutive runs.
 Elapsed: 0.53s, 0.59s, 0.59s, 0.61s, 0.53s.
 
 Worst case 0.61s, so 3s is roughly five times the worst observed call.
+An independent re-measurement on 2026-08-23, 15 sequential calls of the same shape against this repo, ranged 0.55s to 0.96s with a worst observed call of 0.96s and a typical ~0.60s, which 3s still covers at about 3x.
+The spread between the two sessions is why the headroom is a multiple of the worst observation rather than a small margin on it, and `bin/fm-fleet-snapshot.sh` records the same two figures where it pins its own per-task bound.
 That is one host with warm `gh` auth: the figure is a headroom choice, not a latency guarantee, and a cold or unauthenticated `gh` is exactly the case the bound exists for.
 What the choice protects is the caller, not the call: `bin/fm-inactive-reconcile.sh` runs `bin/fm-crew-state.sh` inside a 10-second aggregate budget for a whole scan, so a bound equal to that budget lets one hung call starve every remaining child.
 At 3 seconds a fully hung call leaves that scan most of its budget, and the scan narrows the bound further to at most a third of what it has left, skipping the read entirely when the remainder cannot spare a whole second.
-Skipping is safe by construction: an unread merge state is reported as unverified, and unverified is never rendered as a landing.
+Skipping is safe by construction: an unread merge state is a TRANSIENT non-answer, and no path resolves one to `done` at all, let alone to a landing.
+That is the precondition recorded above, and it is what makes any of these bounds safe to tighten - shortening the wait trades a delayed receipt for a delayed one, never for a false one.
 
 ## Fixture provenance
 
