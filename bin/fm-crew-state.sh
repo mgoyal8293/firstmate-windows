@@ -814,20 +814,35 @@ if [ "$HAVE_RUN" = 1 ]; then
   # second one: the log proves the checks, and only the forge can say where the
   # PR ended up. Routing this through it is what makes the invariant complete -
   # this reader never emits `done` without having asked - and it costs no extra
-  # call, because these paths and the two above are mutually exclusive.
-  # `live` is asserted rather than derived here, and the guard is the caller's:
-  # every call sits under `[ "$RUN_STATE" = working ]`, which on both the full
-  # and the coarse path means the record reported a non-terminal status word.
-  emit_checks_green() {  # <source> <detail>
+  # call, because the answer is MEMOISED (crew_ask_forge). It is NOT because
+  # these paths and the two above are mutually exclusive: they are not, and that
+  # disproved belief is what quietly doubled every budgeted caller's bound. The
+  # reachable overlap is a checks-passed run whose read came back unconfirmed,
+  # which stays `working` and then falls into this very block.
+  #
+  # <liveness> is the CALLER'S to establish, because the two callers can prove it
+  # in ways the other cannot see. The full path derives it from the run record
+  # (crew_liveness); the coarse path asserts `live` because its own admission
+  # test was COARSE_STATUS=running, which is genuine liveness that crew_liveness
+  # cannot read - a coarse row carries no steps table and no `status:` key.
+  #
+  # Asserting `live` for both was wrong for one full-path record shape, and
+  # wrong in the permissive direction: the absent-`status:` arm below maps a
+  # record with no status word to working/"run active", while crew_liveness rules
+  # that same record `terminated` on the ground that an absent status is no
+  # evidence at all. Two functions in one reader disagreeing about one record is
+  # the self-contradiction this whole change exists to remove, so the full path
+  # now asks the one owner instead of restating its own answer.
+  emit_checks_green() {  # <source> <detail> <liveness: live|terminated>
     local verdict
     crew_ask_forge
-    verdict=$(fm_crew_checks_green_verdict "$CREW_FORGE_ANSWER" "$2" live)
+    verdict=$(fm_crew_checks_green_verdict "$CREW_FORGE_ANSWER" "$2" "$3")
     emit "${verdict%%|*}" "$1" "${verdict#*|}"
   }
 
   if [ "$RUN_STATE" = working ] && log_reports_ci_ready; then
     if [ "$RUN_SOURCE" = coarse ]; then
-      emit_checks_green status-log "$(status_line_note "$LOG_LINE")${SEP}run still monitoring PR"
+      emit_checks_green status-log "$(status_line_note "$LOG_LINE")${SEP}run still monitoring PR" live
     fi
     [ -n "$CI_STEP_STATUS" ] || CI_STEP_STATUS=$(nm_effective_ci_step_status)
     if [ "$RUN_STATUS" = fixing ]; then
@@ -838,7 +853,8 @@ if [ "$HAVE_RUN" = 1 ]; then
       CI_LOG_STATE=not-ready
     fi
     if [ "$CI_LOG_STATE" != not-ready ]; then
-      emit_checks_green status-log "$(status_line_note "$LOG_LINE")${SEP}run still monitoring PR"
+      emit_checks_green status-log \
+        "$(status_line_note "$LOG_LINE")${SEP}run still monitoring PR" "$(crew_liveness)"
     fi
   fi
 

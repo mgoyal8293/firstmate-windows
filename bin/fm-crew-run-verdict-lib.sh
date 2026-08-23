@@ -664,13 +664,56 @@ fm_crew_no_pr_class() {  # <task-kind>
 # split: a reader told "PR state unverified" waits for a state that will never
 # arrive, and a ship crew told "no PR to land" is being handed the scout's
 # exemption in prose.
-fm_crew_no_pr_phrase() {  # <task-kind>
+#
+# The kind decides the WORDING here exactly as it decides the CLASS in
+# fm_crew_no_pr_class, and every recorded kind is spelled out for the same
+# reason. Only the ship arm needs the evidence level too, and why is recorded
+# there.
+fm_crew_no_pr_phrase() {  # <task-kind> <ci-evidence>
   case "$1" in
     scout)      printf 'no PR to land, a scout delivers a report' ;;
     secondmate) printf 'no PR to land, a secondmate owns no branch' ;;
-    ship)       printf 'no PR recorded anywhere, and a ship task exists to land one' ;;
+    ship)       fm_crew_ship_no_pr_phrase "${2:-unverified}" ;;
     '')         printf 'no PR recorded anywhere, and no task kind recorded either' ;;
     *)          printf 'no PR recorded anywhere for a task of kind %s' "$1" ;;
+  esac
+}
+
+# The ship arm of the phrase above, split on WHICH MOMENT produced the claim,
+# because a ship task with no PR is two different situations and acceptance
+# criterion 1 requires they read differently.
+#
+# `reported` is the self-report with no run behind it, and it is the ordinary
+# PRE-VALIDATION moment: a crew appends `done: implementation complete, ready to
+# validate` before firstmate hands it to no-mistakes, so no PR exists yet
+# anywhere and none should. That is a HEALTHY task at a known point in its
+# lifecycle, and the detail must say what the moment IS and what it invites.
+# The wording it replaced - "no PR recorded anywhere, and a ship task exists to
+# land one" - read as a defect report about a healthy task and sent a reader
+# hunting for a PR that was never due. In practice firstmate learns of this
+# moment from the worker's own status line and steers it into validation, so the
+# detail confirms that reading rather than contradicting it.
+#
+# The verdict itself is NOT softened by that, and the split is only about words.
+# `unknown` remains the state, on a ruling with two halves: not `working`,
+# because crew_absorb_class in bin/fm-classify-lib.sh absorbs `working` from
+# run-step or pane, so that word would suppress the very signal firstmate needs
+# and let the task disappear from supervision; and not `done`, because this repo
+# defines a ship's done as "PR <url> checks green", so a pre-validation done is a
+# DIFFERENT EVENT WEARING THE SAME WORD - the exact confusion this file exists to
+# end. The crew has claimed completion and nothing has been verified, which is
+# what `unknown` says.
+#
+# Every other evidence token comes from a RUN - `verified` from a `ci,completed`
+# row, `checks-green` from green checks, `unverified` from a terminated run whose
+# ci evidence is missing - so the remaining arm is the run-backed side named as
+# such, not a fallthrough. A run that recorded no PR has genuinely landed
+# nothing, and saying "not yet validated" there would credit a finished run with
+# a validation still to come.
+fm_crew_ship_no_pr_phrase() {  # <ci-evidence>
+  case "$1" in
+    reported) printf 'reported complete, not yet validated' ;;
+    *)        printf 'no PR recorded by this run, so nothing has landed' ;;
   esac
 }
 
@@ -698,7 +741,7 @@ fm_crew_done_detail() {  # <forge-answer> <ci-evidence>
     unparseable)
       printf '%s: merge state unreadable, PR url not recognized' "$lead" ;;
     no-pr)
-      printf '%s: %s' "$lead" "$(fm_crew_no_pr_phrase "$rest")" ;;
+      printf '%s: %s' "$lead" "$(fm_crew_no_pr_phrase "$rest" "${2:-unverified}")" ;;
     *)      printf '%s: merge state unverified' "$lead" ;;
   esac
 }
@@ -725,8 +768,14 @@ fm_crew_closed_detail() {  # <forge-answer> <ci-evidence>
 # never turns a non-answer or an open PR into a landing. The two structural
 # non-answers are spelled apart from the transient one, because a reader who
 # cannot tell them apart waits for a state that will never arrive.
-fm_crew_forge_suffix() {  # <forge-answer>
-  local answer=$1 word=${1%% *} rest=""
+#
+# <ci-evidence> is carried only for the `no-pr` arm, which is the one answer
+# whose wording depends on WHICH MOMENT is being described rather than on what
+# the forge said - see fm_crew_ship_no_pr_phrase. Every caller already holds the
+# level, so passing it costs nothing; a caller that omits it gets the run-backed
+# wording, which is the conservative half of that split.
+fm_crew_forge_suffix() {  # <forge-answer> [<ci-evidence>]
+  local answer=$1 evidence=${2:-unverified} word=${1%% *} rest=""
   case "$answer" in *' '*) rest=${answer#* } ;; esac
   case "$word" in
     merged) printf ', PR merged' ;;
@@ -739,7 +788,7 @@ fm_crew_forge_suffix() {  # <forge-answer>
       printf ', PR url not recognized as a PR or MR'
       return 0 ;;
     no-pr)
-      printf ', %s' "$(fm_crew_no_pr_phrase "$rest")"
+      printf ', %s' "$(fm_crew_no_pr_phrase "$rest" "$evidence")"
       return 0 ;;
     *)      printf ', PR state unverified' ;;
   esac
@@ -769,7 +818,7 @@ fm_crew_ci_evidence_gap() {  # <ci-step-status>
 # and appends the forge's own answer about the PR. A reader loses nothing.
 fm_crew_no_ci_evidence_detail() {  # <gap> <forge-answer>
   printf 'run terminated with %s: no CI evidence, cannot tell whether it passed' "$1"
-  fm_crew_forge_suffix "$2"
+  fm_crew_forge_suffix "$2" unverified
 }
 
 # Verdict detail for a path whose OWN evidence would have earned `done` - a
@@ -782,7 +831,7 @@ fm_crew_no_ci_evidence_detail() {  # <gap> <forge-answer>
 # one, and appends the forge's own word for why it could not answer.
 fm_crew_unconfirmed_detail() {  # <ci-evidence> <forge-answer>
   printf '%s: cannot rule out a close' "$(fm_crew_evidence_lead "$1")"
-  fm_crew_forge_suffix "$2"
+  fm_crew_forge_suffix "$2" "$1"
 }
 
 # Verdict detail for a path whose own evidence would have earned `done` but whose
@@ -791,7 +840,7 @@ fm_crew_unconfirmed_detail() {  # <ci-evidence> <forge-answer>
 # the landing question has an answer, and the answer is that no landing exists.
 fm_crew_no_landing_detail() {  # <ci-evidence> <forge-answer>
   printf '%s: nothing to land' "$(fm_crew_evidence_lead "$1")"
-  fm_crew_forge_suffix "$2"
+  fm_crew_forge_suffix "$2" "$1"
 }
 
 # Sentinel <ci-step-status> for a path that carries NO steps table at all, so it
@@ -988,7 +1037,7 @@ fm_crew_done_claim_verdict() {  # <forge-answer> <detail> <unconfirmed-state> <e
   case "$(fm_crew_forge_answer_class "$answer")" in
     unconfirmed|no-landing) state=$unconfirmed_state ;;
   esac
-  printf '%s|%s%s' "$state" "$detail" "$(fm_crew_forge_suffix "$answer")"
+  printf '%s|%s%s' "$state" "$detail" "$(fm_crew_forge_suffix "$answer" "$evidence")"
 }
 
 # The done-claim ranking for a run whose CHECKS are GREEN but which has not

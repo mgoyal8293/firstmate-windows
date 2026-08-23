@@ -270,6 +270,13 @@ run_crew_state() {  # <case-dir> <id>
   PATH="$1/fakebin:$PATH" FM_STATE_OVERRIDE="$1/state" "$CREW_STATE" "$2"
 }
 
+# crew_is_provably_working over the REAL reader for one case dir, with the same
+# fakebin PATH run_crew_state uses. Lives beside it so the PATH composition has
+# one owner, and so a caller further down the file does not have to re-derive it.
+run_provably_working() {  # <case-dir> <id>
+  PATH="$1/fakebin:$PATH" FM_STATE_OVERRIDE="$1/state" crew_is_provably_working "$2"
+}
+
 new_case() {  # <name> -> echoes case dir with an empty state/
   local d="$TMP_ROOT/$1"
   mkdir -p "$d/state"
@@ -472,6 +479,45 @@ run:
     push,completed,0,0
     ci,running,0,0
 outcome: checks-passed
+EOF
+}
+
+# A terminal pass carrying its own `ci,completed` evidence and NO PR url, for the
+# ship-task-with-a-run half of the no-PR split. The run exists and finished; what
+# is absent is any PR it could have landed.
+run_passed_no_pr() {  # <branch>
+  cat <<EOF
+run:
+  id: "01RUN"
+  branch: $1
+  status: completed
+  head: "${FM_FAKE_RUN_HEAD:-abc1234}"
+  pr: ""
+  findings: none
+  steps[3]{step,status,findings,duration_ms}:
+    intent,completed,0,0
+    push,completed,0,0
+    ci,completed,0,0
+outcome: passed
+EOF
+}
+
+# A run record with NO `status:` key at all, and no active step. The reader's own
+# arms disagreed about this one shape: the status dispatch maps an absent status
+# to working/"run active", while crew_liveness rules the same record `terminated`
+# because an absent status is no evidence of liveness. Nothing else in the suite
+# produced a record without a status word.
+run_no_status_word() {  # <branch>
+  cat <<EOF
+run:
+  id: "01RUN"
+  branch: $1
+  head: "${FM_FAKE_RUN_HEAD:-abc1234}"
+  pr: "https://github.com/o/r/pull/4"
+  findings: none
+  steps[2]{step,status,findings,duration_ms}:
+    intent,completed,0,0
+    push,completed,0,0
 EOF
 }
 
@@ -2839,7 +2885,10 @@ EOF
 #
 # The detail is asserted too, not just the word: the reader must name WHICH case
 # it is rather than implying an unread or unverifiable PR, which is what the
-# transient wording it used to borrow implied.
+# transient wording it used to borrow implied. WHICH phrase names it belongs to
+# test_a_pre_validation_ship_reads_differently_from_a_run_that_landed_nothing;
+# this case only requires that the moment be named rather than glossed as an
+# unread forge answer.
 test_a_ship_task_with_no_pr_anywhere_is_not_done() {
   reset_fakes
   local d out
@@ -2853,7 +2902,7 @@ test_a_ship_task_with_no_pr_anywhere_is_not_done() {
   out=$(run_crew_state "$d" shipnopr)
   assert_not_contains "$out" "state: done" "a ship task that never opened a PR has landed nothing"
   assert_contains "$out" "state: unknown" "and unknown is the honest word for it"
-  assert_contains "$out" "a ship task exists to land one" "the detail names which case this is"
+  assert_contains "$out" "reported complete, not yet validated" "the detail names which case this is"
   assert_not_contains "$out" "PR state unverified" "nothing here is unread, so nothing is pending"
   pass "a ship task with no PR anywhere is not done"
 }
@@ -2944,6 +2993,82 @@ test_an_open_pr_names_its_merge_state_on_the_checks_green_path() {
   assert_contains "$out" "PR still open" "the forge answer this path paid for is reported"
   assert_contains "$out" "(DIRTY)" "including the merge state that says it cannot land as it is"
   pass "an open PR names its merge state on the checks-green path"
+}
+
+# A ship task with no PR is TWO situations, and acceptance criterion 1 requires
+# they read differently.
+#
+# The PRE-VALIDATION moment is the ordinary one: a crew appends `done:
+# implementation complete, ready to validate` before firstmate hands it to
+# no-mistakes, so no PR exists anywhere yet and none is due. That is a HEALTHY
+# task at a known point in its lifecycle, and the detail has to say so - the
+# wording it replaced read as a defect report and sent a reader hunting for a PR
+# that was never owed.
+#
+# The RUN-BACKED moment is not that at all: a run exists, it finished, and it
+# recorded no PR, so nothing has landed and there is no validation still to come.
+# One phrase for both would credit a finished run with a pending validation.
+#
+# The state word is `unknown` for both, and that is the ruling rather than an
+# accident, so the last assertion pins the property that makes `unknown`
+# acceptable: crew_absorb_class does NOT absorb it. Reading a pre-validation crew
+# `working` would let it disappear from supervision, which is the worst failure in
+# this whole set.
+test_a_pre_validation_ship_reads_differently_from_a_run_that_landed_nothing() {
+  reset_fakes
+  local d pre backed
+  d=$(new_case prevalidation-ship)
+  make_repo_on_branch "$d/wt" fm/feat-prevalidate
+  make_fakebin "$d" >/dev/null
+  fm_write_meta "$d/state/prevalidate.meta" "window=fm:fm-prevalidate" "worktree=$d/wt" "kind=ship" "harness=claude"
+  printf 'done: implementation complete, ready to validate\n' > "$d/state/prevalidate.status"
+  # No run anywhere for this branch: the pre-validation state by construction.
+  FM_FAKE_BUSY=0
+  arm_idle_record "$d/state" prevalidate
+  pre=$(run_crew_state "$d" prevalidate)
+  assert_contains "$pre" "state: unknown" "nothing has been verified yet, so nothing is settled"
+  assert_contains "$pre" "reported complete, not yet validated" "the detail names the moment and what it invites"
+  assert_not_contains "$pre" "state: done" "a ship's done is a PR with checks green, not this"
+  assert_not_contains "$pre" "exists to land one" "a healthy task is not reported as a missing PR"
+  # The same kind, the same absent PR, but a run that finished and landed nothing.
+  FM_FAKE_AXI_STATUS="$(run_passed_no_pr fm/feat-prevalidate)"
+  backed=$(run_crew_state "$d" prevalidate)
+  assert_contains "$backed" "state: unknown" "a run that landed nothing settles nothing either"
+  assert_contains "$backed" "no PR recorded by this run" "and its detail names the run, not a pending validation"
+  assert_not_contains "$backed" "not yet validated" "this run already ran, so nothing is awaiting validation"
+  [ "$pre" != "$backed" ] ||
+    fail "a pre-validation ship and a run that landed nothing must not read alike"$'\n'"--- output ---"$'\n'"$pre"
+  # The property that makes `unknown` the safe word here: not absorbed, so the
+  # signal still reaches firstmate. The run-backed half above set
+  # FM_FAKE_AXI_STATUS, so it goes back to the pre-validation shape first.
+  FM_FAKE_AXI_STATUS=""
+  run_provably_working "$d" prevalidate &&
+    fail "a pre-validation crew must not be absorbed as provably working"
+  pass "a pre-validation ship reads differently from a run that landed nothing"
+}
+
+# The absent-`status:` record, and the one shape on which this reader contradicted
+# itself. The status dispatch maps a record with no status word to
+# working/"run active"; crew_liveness rules the same record `terminated`, because
+# an absent status is no evidence of liveness at all. emit_checks_green asserted
+# `live` on the strength of the first, so an unconfirmed forge answer emitted a
+# liveness claim the record does not support - the same defect just closed one arm
+# over, on the permissive side.
+test_a_record_with_no_status_word_does_not_assert_liveness() {
+  reset_fakes
+  local d out
+  d=$(new_case no-status-word)
+  make_repo_on_branch "$d/wt" fm/feat-nostatus
+  make_fakebin "$d" >/dev/null
+  fm_write_meta "$d/state/nostatus.meta" "window=fm:fm-nostatus" "worktree=$d/wt" "kind=ship" "harness=claude"
+  printf 'done: PR https://github.com/o/r/pull/4 checks green\n' > "$d/state/nostatus.status"
+  FM_FAKE_AXI_STATUS="$(run_no_status_word fm/feat-nostatus)"
+  FM_FAKE_GH_CALL_FAILS=1
+  out=$(run_crew_state "$d" nostatus)
+  assert_not_contains "$out" "state: working" "a record with no status word proves no liveness"
+  assert_not_contains "$out" "state: done" "and an unread merge state still cannot rule out a close"
+  assert_contains "$out" "state: unknown" "neither the landing nor the liveness is established"
+  pass "a record with no status word does not assert liveness"
 }
 
 test_active_run_is_authoritative
@@ -3042,5 +3167,7 @@ test_a_ship_task_with_no_pr_anywhere_is_not_done
 test_a_terminated_checks_passed_run_does_not_borrow_a_live_crews_answer
 test_one_invocation_makes_at_most_one_forge_read
 test_an_open_pr_names_its_merge_state_on_the_checks_green_path
+test_a_pre_validation_ship_reads_differently_from_a_run_that_landed_nothing
+test_a_record_with_no_status_word_does_not_assert_liveness
 
 echo "all fm-crew-state tests passed"

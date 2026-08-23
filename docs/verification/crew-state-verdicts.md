@@ -14,7 +14,7 @@ Branch: `fm/fm-crew-state-stale-run-masks-live`.
 
 ```
 $ bash tests/fm-crew-state.test.sh | grep -c '^ok'
-96
+98
 $ bash tests/fm-inactive-reconcile.test.sh 2>/dev/null | grep -c '^ok'
 17
 $ bash tests/fm-fleet-snapshot-view.test.sh 2>/dev/null | grep -c '^ok'
@@ -85,10 +85,24 @@ Every row must fail, and must fail on the named assertion.
 | A TERMINATED checks-passed run does not borrow the live crew's unconfirmed answer | hardcode `working` in `fm_crew_checks_green_verdict` again, ignoring `<liveness>` | `test_a_terminated_checks_passed_run_does_not_borrow_a_live_crews_answer` | fails: `unexpected: 'state: working'` |
 | One invocation makes at most one outbound forge read | drop the memo, letting `crew_ask_forge` re-read on every call | `test_one_invocation_makes_at_most_one_forge_read` | fails: `one invocation made 2 forge reads, and every caller's bound assumes 1` |
 | The merge state the forge read already paid for is reported on the green-checks path | return the done arm of `fm_crew_done_claim_verdict` without its forge suffix | `test_an_open_pr_names_its_merge_state_on_the_checks_green_path` | fails: `missing: 'PR still open'` |
+| A pre-validation ship names the moment, distinctly from a run that landed nothing | drop the `reported` arm from `fm_crew_ship_no_pr_phrase`, leaving one phrase for both moments | `test_a_pre_validation_ship_reads_differently_from_a_run_that_landed_nothing` | fails: `missing: 'reported complete, not yet validated'` |
+| That crew stays `unknown` rather than `working` | pass `working` as `fm_crew_reported_done_verdict`'s unconfirmed state | the same case | fails: `missing: 'state: unknown'` |
+| And `crew_absorb_class` does not absorb it, which is what makes `unknown` safe | let the absorb whitelist admit `unknown` alongside `working` | the same case | fails: `a pre-validation crew must not be absorbed as provably working` |
+| Liveness on the full-path ci-ready route is DERIVED from the record, not asserted | pass the literal `live` from that call site again | `test_a_record_with_no_status_word_does_not_assert_liveness` | fails: `unexpected: 'state: working'` |
 
-52 of 52, re-derived in full on 2026-08-23 - once per fix round since the decay was found.
+56 of 56, re-derived in full on 2026-08-23 - once per fix round since the decay was found.
 
-The last five rows were added by the round that closed the sibling-PR leak, the kind-blind `no-pr` settlement, the borrowed liveness claim and the duplicated forge read.
+The last four rows were added by the round that separated the two ship-with-no-PR moments and stopped the ci-ready route asserting liveness it had not established.
+
+Three of those four share one case, because the ruling they carry has three parts that only hold together: the pre-validation crew must NAME its moment, must stay `unknown`, and must not be ABSORBED.
+Each part is falsified by a different mutation - collapsing the phrase, reporting `working`, and widening the absorb whitelist - so the shared case is not a shared guard.
+
+The absorb row is worth reading closely, because the obvious mutation does NOT falsify it and that is informative rather than a gap.
+Reporting the crew `working` leaves it unabsorbed anyway, since `crew_absorb_class` absorbs `working` only from `run-step` or `pane` and this verdict carries `source: status-log`.
+Two independent gates therefore protect the same property, and only mutating the absorb predicate itself can show the assertion has teeth - which it does.
+The row records the mutation that actually falsifies it rather than the one that looks like it should, since a row naming a mutation that changes nothing is the decay mode this table exists to catch.
+
+The five rows before those were added by the round that closed the sibling-PR leak, the kind-blind `no-pr` settlement, the borrowed liveness claim and the duplicated forge read.
 Three of them are paired with a case that must STAY GREEN under the same mutation, and that pairing is the point rather than a courtesy: each fix narrows a rule that a previous ruling had deliberately widened, so a mutation that only shows the new case failing cannot show the old ruling survived.
 Under the kind-blind mutation `test_a_task_with_no_pr_anywhere_still_reads_done` still passes, so the SCOUT exemption is intact and only the ship case moved.
 Under the hardcoded-`working` mutation `test_an_unconfirmed_answer_keeps_a_live_crew_working` still passes, so a demonstrably live crew still reads `working` on an unconfirmed answer - reproduced failure (3) is not reintroduced, and what was removed is only the TERMINATED run's ability to borrow that answer.
@@ -139,6 +153,10 @@ The case names are the functions in `tests/fm-crew-state.test.sh`, except the la
 The criterion this branch started from read "a skipped ci step never reads as done".
 It was AMENDED, by the same authority that set it, to "a skipped ci step never reads as done BY ITSELF".
 Recorded here because a future reader will otherwise find the code contradicting the older wording and try to restore it.
+
+That reader is likely to find the older wording in the branch's OWN intent text, which restates criterion 1 in its superseded form.
+The restatement is an error in composing the intent, not a defect in the code, and it has already sent one review round back to this settled ruling.
+A forge-confirmed merge settles `done` on its own and must keep doing so; the amendment above is the governing wording wherever the two disagree.
 
 The reasoning: a forge-confirmed merge is stronger evidence than ci completion for the question actually being asked.
 The merge proves the work LANDED, while ci completion only proves that checks ran.
@@ -232,6 +250,26 @@ The rendering carried the same conflation: `no-pr` fell through to the transient
 
 The rules are one idea, which is why they share an owner: withhold a verdict exactly as long as an answer could still arrive, and no longer.
 
+### Ruled: a ship with no PR is two moments, and only the words differ
+
+Refusing `done` for every ship task with no PR reaches further than the false landing claim it was aimed at.
+It also reaches the ordinary PRE-VALIDATION moment: a crew appends `done: implementation complete, ready to validate` before firstmate hands it to no-mistakes, so no PR exists in the run record, the coarse row, the task meta or the log, and none is due yet.
+
+The verdict for that moment was RULED to stay `unknown`, and both alternatives were rejected on the record.
+Not `working`, because `crew_absorb_class` in `bin/fm-classify-lib.sh` absorbs `working` from `run-step` or `pane`, so that word would suppress the very signal firstmate needs and let the task disappear from supervision - the worst failure in this whole set.
+Not `done`, because this repo defines a ship's done as "PR <url> checks green", so a pre-validation done is a DIFFERENT EVENT WEARING THE SAME WORD, which is the confusion this branch exists to end.
+The crew has claimed completion and nothing has been verified, which is exactly what `unknown` says.
+
+What did change is the DETAIL, and only the detail.
+"No PR recorded anywhere, and a ship task exists to land one" reads as a defect report about a healthy task and sends a reader hunting for a PR that was never owed.
+"Reported complete, not yet validated" says what the moment IS and what it invites, which is what firstmate does with it in practice: it learns of the moment from the worker's own status line and steers the task into validation.
+
+That rewording could not be applied to the ship arm alone, and the reason is the point.
+A ship task with no PR is TWO situations - the self-report above, and a run that FINISHED and recorded no PR - and one phrase for both would credit a finished run with a validation still to come.
+So `fm_crew_no_pr_phrase` now takes the evidence level that already distinguishes them: `reported` is the self-report with no run behind it, and every other token in the vocabulary comes from a run.
+`fm_crew_forge_suffix` carries that level for the one answer whose wording depends on which moment is being described, and every caller already held it.
+Acceptance criterion 1 requires the two read differently, and the matrix row above falsifies exactly that.
+
 This also changed what the test fixtures must say.
 A case that means to assert `done` about ci evidence now has to answer the forge question explicitly, or it is really asserting the forge gate; `forge_answers_open` in `tests/fm-crew-state.test.sh` exists for that, and its comment records the coupling.
 That is the same lesson the ci-padding row taught, arriving from the other direction: a fixture that leaves a second input unpinned stops testing the input it names.
@@ -258,6 +296,15 @@ Liveness is now an argument rather than an assumption, and `crew_liveness` in `b
 The correction above is NOT withdrawn by that, and the falsification row is paired with a case that proves it: under the mutation that hardcodes `working` again, `test_an_unconfirmed_answer_keeps_a_live_crew_working` still passes.
 A demonstrably live crew still reads `working` on an unconfirmed answer.
 What was removed is only the terminated run's ability to borrow that answer, and where it lands is `unknown` - the governing preference wherever the evidence does not settle it.
+
+Making liveness an argument left one caller still asserting it, and that caller was wrong on exactly one record shape.
+`emit_checks_green` passed the literal `live`, justified by the claim that every call sits under a record that "reported a non-terminal status word".
+The absent-`status:` arm falsifies that claim: it maps a record with NO status word to working/"run active", while `crew_liveness` rules the same record `terminated`, on the ground that an absent status is no evidence of liveness at all.
+Two functions in one reader disagreeing about one record is the self-contradiction this branch exists to remove, and the asserted side was the permissive one - an unconfirmed forge answer emitted a liveness claim the record does not support.
+
+The full path now asks the one owner instead of restating its own answer.
+The COARSE caller still passes `live`, and that is not the same mistake: its admission test was `COARSE_STATUS=running`, which is genuine liveness that `crew_liveness` cannot read, because a coarse runs-list row carries no steps table and no `status:` key at all.
+The rule the two callers now share is that whoever can prove liveness states it, and nobody infers it from a control-flow position.
 
 ## Ruled: a failed attribution discards the run record
 
