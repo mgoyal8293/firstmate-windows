@@ -1,0 +1,34 @@
+#!/usr/bin/env bash
+set -u
+# Only the conpty CLIENT is faked. fm-spawn also runs node as a plain JSON
+# reader (the lease-release helper), and that must be the real interpreter.
+if [ "${1:-}" = -e ]; then exec "/usr/bin/node" "$@"; fi
+cmd=${2:-}
+case "$cmd" in
+  doctor) printf 'ok\n'; exit 0 ;;
+  exists)
+    # The first probe must miss (create_task refuses a live duplicate), every
+    # later one must hit (the daemon has bound its pipe).
+    n=0
+    [ -f "${FM_EXISTS_COUNT:?}" ] && n=$(cat "${FM_EXISTS_COUNT}")
+    n=$((n + 1)); printf '%s\n' "$n" > "${FM_EXISTS_COUNT}"
+    [ "$n" -gt 1 ] && { printf 'present\n'; exit 0; }
+    printf 'absent\n'; exit 1 ;;
+  cwd) printf '%s\n' "On branch master
+nothing to commit, working tree clean
+/tmp/fm-spawn-worktree-settle.NGHSul/acquire-conpty-unknown/not-a-worktree"; exit 0 ;;
+  send)
+    prev=
+    for a in "$@"; do
+      if [ "$prev" = --text-file ]; then
+        # The adapter hands the client a NATIVE path, so translate back when
+        # this host has a translator (WSL and MSYS both do).
+        f=$a
+        [ -f "$f" ] || f=$(wslpath -u "$a" 2>/dev/null || cygpath -u "$a" 2>/dev/null || printf '%s' "$a")
+        cat "$f" >> "${FM_SENT_LOG:?}"; printf '\n' >> "${FM_SENT_LOG}"
+      fi
+      prev=$a
+    done
+    exit 0 ;;
+esac
+exit 0

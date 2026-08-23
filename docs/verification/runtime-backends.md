@@ -724,6 +724,7 @@ The 2026-08-19 block that precedes it is retained as history and is **superseded
 The Windows CI lane in `.github/workflows/windows-ci.yml` carries only the portable regression `tests/fm-backend-conpty.test.sh` - which now covers the adapter with a faked session client, the liveness decision table with real node, and the mark chain with real bash - so this live evidence stays a recorded manual pass rather than a gate that reruns on every change.
 The backend capability matrix is covered portably by `tests/fm-control.test.sh`, and the real-harness half of the liveness proof is the opt-in `tests/fm-conpty-liveness-live-e2e.test.sh`.
 The later whole-system pass on this backend - session lock, spawn, supervision, landing, teardown, and restart in one run - is recorded in [`../windows.md`](../windows.md#run-end-to-end-on-windows) and is not repeated here.
+**That pass predates Candidate B**, which moves the session shell's own working directory into the leased worktree, so it does not cover the shipped topology and must not be read as covering it; the part of it Candidate B changed - teardown having to clear the session shell itself before the pool return - is covered instead by the targeted measurement in "(2d) Teardown under the lease" below, on the same host and after the change.
 
 Detachment and reattach:
 

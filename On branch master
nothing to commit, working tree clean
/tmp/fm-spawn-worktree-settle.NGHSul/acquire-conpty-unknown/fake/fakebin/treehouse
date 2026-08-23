@@ -1,0 +1,23 @@
+#!/usr/bin/env bash
+set -u
+{ printf 'treehouse'; for a in "$@"; do printf '\x1f%s' "$a"; done; printf '\n'; } >> "${FM_TREEHOUSE_LOG:?}"
+case "${1:-}" in
+  status)
+    # An unreadable pool is the other half of the abort path: the release cannot
+    # tell "nothing was leased" from "cannot say" without it.
+    if [ -n "${FM_FAKE_STATUS_UNREADABLE:-}" ]; then
+      printf 'treehouse: no pool here\n' >&2
+      exit 1
+    fi
+    # A payload that parses but is not the array of rows the probe expects: it
+    # answers nothing about this holder, so it must not read as an empty pool.
+    if [ "${FM_FAKE_STATUS_SHAPE:-}" = object ]; then
+      printf '{"error":"pool is locked"}\n'
+      exit 0
+    fi
+    printf '[{"name":"1","path":"%s","status":"leased","lease_holder":"%s","processes":[]}]\n' \
+      "${FM_FAKE_LEASED_PATH:-}" "${FM_FAKE_LEASE_HOLDER:-}"
+    exit 0 ;;
+  return) exit "${FM_FAKE_RETURN_EXIT:-0}" ;;
+esac
+exit 0

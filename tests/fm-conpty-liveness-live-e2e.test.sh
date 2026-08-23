@@ -124,6 +124,32 @@ winpath() { cygpath -w "$1" 2>/dev/null || printf '%s' "$1"; }
 # like a POSIX path, and `/exit` becomes an absolute Windows path.
 fmpty() { MSYS2_ARG_CONV_EXCL='*' MSYS_NO_PATHCONV=1 node "$(winpath "$CLIENT")" "$@" --state "$(winpath "$STATE")"; }
 verdict() { fmpty state --id "$1" --plain 2>/dev/null; }
+# client_field: one field of a client answer, DECODED as JSON rather than sed out
+# of the raw bytes. Anything carrying a native Windows path has every separator
+# JSON-escaped, so a pattern match over the response lifts `C:\\Users\\...` -
+# a value nothing can open - and a check that cannot resolve its input is not a
+# check. node is already a hard requirement of this guard, so it does the
+# decoding.
+client_field() {  # <id> <command> <key>
+  fmpty "$2" --id "$1" 2>/dev/null | node -e '
+    let s = "";
+    process.stdin.on("data", function (d) { s += d; });
+    process.stdin.on("end", function () {
+      try {
+        const lines = s.split("\n").filter(function (l) { return l.trim() !== ""; });
+        const o = JSON.parse(lines[lines.length - 1]);
+        const v = o && o[process.argv[1]];
+        process.stdout.write(v == null ? "" : String(v));
+      } catch (e) { process.stdout.write(""); }
+    });
+  ' "$3"
+}
+# The reverse of winpath: a native path the daemon reports, mapped back to
+# something this shell can open.
+posix_path() {
+  [ -n "${1:-}" ] || return 0
+  cygpath -u "$1" 2>/dev/null || printf '%s' "$1"
+}
 # The daemon reports its running mark count in the JSON state, which is how a
 # harness emitting marks of its own becomes visible without sending it a prompt.
 prompt_marks() {  # <id>
@@ -379,13 +405,26 @@ for harness in claude codex opencode grok kimi pi cursor-agent muse; do
     || fail "$harness stopped reading alive while it was still in the foreground (now '$(verdict "$id")')"
 
   # 4. No harness may emit an untagged OSC 133 mark of its own.
-  tr=$(fmpty state --id "$id" 2>/dev/null | sed -n 's/.*"transcript":"\([^"]*\)".*/\1/p')
-  [ -n "$tr" ] || tr="$STATE/$id/transcript.log"
-  if [ -f "$tr" ]; then
-    stray=$(grep -ao $'\033\]133;[^\a]*' "$tr" 2>/dev/null | grep -vc 'fmpty=1' || true)
-    [ "${stray:-0}" -eq 0 ] \
-      || fail "$harness emitted $stray OSC 133 mark(s) without firstmate's tag; switch to a private marker"
-  fi
+  #
+  # THIS CHECK MUST NOT SKIP. It is the only thing here that can see a vendor
+  # starting to write marks of its own, and the `pass` line below claims exactly
+  # that negative - so a transcript this cannot read has to FAIL the guard, the
+  # way every other synchronisation point in this file already does. Skipping it
+  # quietly reports the one regression this file exists to catch as checked on
+  # the one kind of run that cannot be cheaply repeated.
+  #
+  # The path is asked of the op that actually reports it - `info`, not `state` -
+  # and decoded, then mapped back to a form this shell can open. The state
+  # directory this guard owns is the second candidate, and it is a candidate
+  # rather than a silent default: either one has to resolve to a transcript with
+  # bytes in it, or there is nothing to search.
+  tr=$(posix_path "$(client_field "$id" info transcript)")
+  [ -n "$tr" ] && [ -s "$tr" ] || tr="$STATE/$id/transcript.log"
+  [ -s "$tr" ] \
+    || fail "no readable transcript for $harness (last tried '$tr'), so the untagged-mark check would have proved nothing"
+  stray=$(grep -ao $'\033\]133;[^\a]*' "$tr" 2>/dev/null | grep -vc 'fmpty=1' || true)
+  [ "${stray:-0}" -eq 0 ] \
+    || fail "$harness emitted $stray OSC 133 mark(s) without firstmate's tag; switch to a private marker"
 
   fmpty kill --id "$id" >/dev/null 2>&1 || true
   CHECKED=$((CHECKED + 1))

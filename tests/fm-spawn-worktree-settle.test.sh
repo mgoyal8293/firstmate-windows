@@ -318,6 +318,14 @@ make_conpty_binroot() {  # -> echoes the fm-spawn to run
   printf '%s\n' "$root/bin/fm-spawn.sh"
 }
 
+# THE FAKE POOL'S CONFIGURATION IS THE CALLER'S LOCALS, and the defaults below
+# are what a case that says nothing gets. A case declares the FM_FAKE_* names it
+# needs with `local`, so bash's dynamic scope makes them visible here and they
+# die with the case - where `export` put them in the test shell's own
+# environment, and the suite then passed only because every later case happened
+# to overwrite the path or take a branch that never read it. Order-dependent
+# green is not green: reordering the calls at the bottom of this file, or adding
+# a case that forgets one name, would have run it against a previous case's slot.
 run_acquire_spawn() {  # <case-dir> <fakebin> <spawn> <id> [extra spawn args...]
   local case_dir=$1 fakebin=$2 spawn=$3 id=$4; shift 4
   FM_ROOT_OVERRIDE='' FM_HOME="$case_dir/home" \
@@ -398,9 +406,10 @@ treehouse_return_call() {  # <treehouse-log>
 
 test_aborted_conpty_spawn_returns_its_own_lease() {
   local case_dir id fakebin spawn out status call us
+  local FM_FAKE_LEASED_PATH FM_FAKE_LEASE_HOLDER FM_FAKE_RETURN_EXIT
   id=acquire-conpty-abort-z3
   case_dir=$(make_abort_case acquire-conpty-abort "$id")
-  export FM_FAKE_LEASED_PATH="$case_dir/leased-slot" FM_FAKE_LEASE_HOLDER="firstmate-$id" FM_FAKE_RETURN_EXIT=0
+  FM_FAKE_LEASED_PATH="$case_dir/leased-slot" FM_FAKE_LEASE_HOLDER="firstmate-$id" FM_FAKE_RETURN_EXIT=0
   fakebin=$(make_conpty_fakebin "$case_dir/fake" "$case_dir/not-a-worktree")
   spawn=$(make_conpty_binroot)
 
@@ -420,15 +429,15 @@ test_aborted_conpty_spawn_returns_its_own_lease() {
 
 test_unreleasable_lease_prints_the_operator_command() {
   local case_dir id fakebin spawn out status
+  local FM_FAKE_LEASED_PATH FM_FAKE_LEASE_HOLDER FM_FAKE_RETURN_EXIT
   id=acquire-conpty-stuck-z4
   case_dir=$(make_abort_case acquire-conpty-stuck "$id")
-  export FM_FAKE_LEASED_PATH="$case_dir/leased-slot" FM_FAKE_LEASE_HOLDER="firstmate-$id" FM_FAKE_RETURN_EXIT=1
+  FM_FAKE_LEASED_PATH="$case_dir/leased-slot" FM_FAKE_LEASE_HOLDER="firstmate-$id" FM_FAKE_RETURN_EXIT=1
   fakebin=$(make_conpty_fakebin "$case_dir/fake" "$case_dir/not-a-worktree")
   spawn=$(make_conpty_binroot)
 
   out=$(run_acquire_spawn "$case_dir" "$fakebin" "$spawn" "$id" --backend conpty)
   status=$?
-  export FM_FAKE_RETURN_EXIT=0
   [ "$status" -ne 0 ] || fail "the spawn should have aborted on a worktree that is not isolated"$'\n'"$out"
   # A failed abort is worse than a leaked slot, so the release stays best-effort
   # and the operator gets the exact command instead of a failure.
@@ -447,19 +456,19 @@ test_unreleasable_lease_prints_the_operator_command() {
 # reclaim command.
 test_no_recorded_lease_is_reported_without_claiming_either_way() {
   local case_dir id fakebin spawn out status
+  local FM_FAKE_LEASED_PATH FM_FAKE_LEASE_HOLDER FM_FAKE_RETURN_EXIT
   id=acquire-conpty-nolease-z5
   case_dir=$(make_abort_case acquire-conpty-nolease "$id")
   # The pool reads cleanly and its one slot is leased to a DIFFERENT task, so the
   # probe finds no row for this holder.
   # The return is always attempted, and a real treehouse refuses it because this
   # holder holds nothing - which is what leaves the message to be chosen.
-  export FM_FAKE_LEASED_PATH="$case_dir/leased-slot" FM_FAKE_LEASE_HOLDER="firstmate-someone-else" FM_FAKE_RETURN_EXIT=1
+  FM_FAKE_LEASED_PATH="$case_dir/leased-slot" FM_FAKE_LEASE_HOLDER="firstmate-someone-else" FM_FAKE_RETURN_EXIT=1
   fakebin=$(make_conpty_fakebin "$case_dir/fake" "$case_dir/not-a-worktree")
   spawn=$(make_conpty_binroot)
 
   out=$(run_acquire_spawn "$case_dir" "$fakebin" "$spawn" "$id" --backend conpty)
   status=$?
-  export FM_FAKE_LEASE_HOLDER= FM_FAKE_RETURN_EXIT=0
   [ "$status" -ne 0 ] || fail "the spawn should have aborted on a worktree that is not isolated"$'\n'"$out"
   assert_not_contains "$out" "stays leased" \
     "the abort asserted a leaked slot as fact although no lease is recorded for this holder"
@@ -480,15 +489,15 @@ test_no_recorded_lease_is_reported_without_claiming_either_way() {
 # the pool just said otherwise.
 test_pathless_holder_row_still_attempts_the_release() {
   local case_dir id fakebin spawn out status us call
+  local FM_FAKE_LEASED_PATH FM_FAKE_LEASE_HOLDER FM_FAKE_RETURN_EXIT
   id=acquire-conpty-pathless-z8
   case_dir=$(make_abort_case acquire-conpty-pathless "$id")
-  export FM_FAKE_LEASED_PATH= FM_FAKE_LEASE_HOLDER="firstmate-$id" FM_FAKE_RETURN_EXIT=1
+  FM_FAKE_LEASED_PATH='' FM_FAKE_LEASE_HOLDER="firstmate-$id" FM_FAKE_RETURN_EXIT=1
   fakebin=$(make_conpty_fakebin "$case_dir/fake" "$case_dir/not-a-worktree")
   spawn=$(make_conpty_binroot)
 
   out=$(run_acquire_spawn "$case_dir" "$fakebin" "$spawn" "$id" --backend conpty)
   status=$?
-  export FM_FAKE_LEASE_HOLDER= FM_FAKE_RETURN_EXIT=0
   [ "$status" -ne 0 ] || fail "the spawn should have aborted on a worktree that is not isolated"$'\n'"$out"
   us=$(printf '\x1f')
   call=$(treehouse_return_call "$case_dir/treehouse.log")
@@ -507,15 +516,15 @@ test_pathless_holder_row_still_attempts_the_release() {
 # branch that keeps the hint rather than read as "no lease recorded".
 test_non_array_status_payload_is_treated_as_unknown() {
   local case_dir id fakebin spawn out status
+  local FM_FAKE_STATUS_SHAPE FM_FAKE_RETURN_EXIT
   id=acquire-conpty-shape-z7
   case_dir=$(make_abort_case acquire-conpty-shape "$id")
-  export FM_FAKE_STATUS_SHAPE=object FM_FAKE_RETURN_EXIT=1
+  FM_FAKE_STATUS_SHAPE=object FM_FAKE_RETURN_EXIT=1
   fakebin=$(make_conpty_fakebin "$case_dir/fake" "$case_dir/not-a-worktree")
   spawn=$(make_conpty_binroot)
 
   out=$(run_acquire_spawn "$case_dir" "$fakebin" "$spawn" "$id" --backend conpty)
   status=$?
-  export FM_FAKE_STATUS_SHAPE= FM_FAKE_RETURN_EXIT=0
   [ "$status" -ne 0 ] || fail "the spawn should have aborted on a worktree that is not isolated"$'\n'"$out"
   assert_contains "$out" "treehouse return --force --if-lease-holder firstmate-$id $case_dir/not-a-worktree" \
     "a status payload that was not the expected array of rows was read as an empty pool, suppressing the hint"
@@ -524,18 +533,18 @@ test_non_array_status_payload_is_treated_as_unknown() {
 
 test_unreadable_pool_still_prints_the_operator_command() {
   local case_dir id fakebin spawn out status
+  local FM_FAKE_STATUS_UNREADABLE FM_FAKE_RETURN_EXIT
   id=acquire-conpty-unknown-z6
   case_dir=$(make_abort_case acquire-conpty-unknown "$id")
   # `treehouse status` cannot answer, so whether a lease is held is unknown - and
   # an unknown state still earns the hint, aimed at the path the session settled
   # in because it is the only one this spawn observed.
-  export FM_FAKE_STATUS_UNREADABLE=1 FM_FAKE_RETURN_EXIT=1
+  FM_FAKE_STATUS_UNREADABLE=1 FM_FAKE_RETURN_EXIT=1
   fakebin=$(make_conpty_fakebin "$case_dir/fake" "$case_dir/not-a-worktree")
   spawn=$(make_conpty_binroot)
 
   out=$(run_acquire_spawn "$case_dir" "$fakebin" "$spawn" "$id" --backend conpty)
   status=$?
-  export FM_FAKE_STATUS_UNREADABLE= FM_FAKE_RETURN_EXIT=0
   [ "$status" -ne 0 ] || fail "the spawn should have aborted on a worktree that is not isolated"$'\n'"$out"
   assert_contains "$out" "treehouse return --force --if-lease-holder firstmate-$id $case_dir/not-a-worktree" \
     "an unreadable pool suppressed the operator command instead of falling back to the observed path"
