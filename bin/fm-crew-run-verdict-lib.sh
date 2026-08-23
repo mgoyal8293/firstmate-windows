@@ -60,7 +60,10 @@
 #   * OVERRIDE: a run with an active step (see fm_crew_active_step) is alive
 #     right now, and a branch cannot host two concurrent runs, so it is this
 #     task's run whatever the head geometry says. Liveness admits a non-terminal
-#     verdict on its own.
+#     verdict on its own, and NOTHING for a run already bearing a terminal
+#     outcome or status word: admission is all-or-nothing, so that limit can
+#     only be enforced by refusing admission. The note at the gate in
+#     fm_crew_run_admits records what widening it would cost.
 #
 # CODE IDENTITY IS NOT THE ONLY AUTHORITY FOR A TERMINAL VERDICT, and the rule is
 # easier to get wrong than to state: code identity is the authority on WHAT RAN,
@@ -429,7 +432,44 @@ fm_crew_run_admits() {  # <worktree> <run-output> <run-head>
   fi
   # Liveness override: an actively executing step is the daemon stating that
   # this run is alive NOW, and one branch cannot host two concurrent runs, so
-  # the run is this task's regardless of head geometry. Non-terminal only.
+  # the run is this task's regardless of head geometry.
+  #
+  # NON-TERMINAL ONLY. This gate is load-bearing rather than merely deliberate,
+  # so read what it holds up before widening it - a reader who sees only
+  # "deliberate" will reasonably decide the reason has expired and swing it
+  # back. Admission is ALL-OR-NOTHING: once this function says yes, the whole
+  # run record drives the answer, terminal ranking included. Liveness evidence
+  # was only ever enough for a NON-TERMINAL claim (this file's header states
+  # that limit), and refusing a run that already bears a terminal word is the
+  # only place the limit can be enforced, because there is no partial
+  # admission. Widen it and a run this checkout cannot verify as its own can
+  # emit `failed` or `done` off a single step row - reproduced failures 1 and 2
+  # of this whole change, the second of which is the destructive direction.
+  #
+  # `outcome: checks-passed` is the tempting case, since the rest of this file
+  # models checks-passed as a still-monitoring state. Admitting it here walks
+  # back toward the fabricated-working defect removed in commit b8f36e4
+  # ("no-mistakes(review): gate every done path on ownership, kind and proven
+  # liveness"), where a run that had genuinely FINISHED reported
+  # `state: working` on every unconfirmed forge read, with no active step and
+  # no non-terminal status behind the claim. Widening this line would not
+  # reproduce that defect by itself today, and only because the SAME commit
+  # made crew_liveness a second, independent barrier - which is exactly why
+  # this one now looks redundant and is not. The guard is
+  # test_a_terminated_checks_passed_run_does_not_borrow_a_live_crews_answer,
+  # the defect is described under "Ruled: withholding a landing claim is not
+  # the same as knowing nothing" at docs/verification/crew-state-verdicts.md:297,
+  # and the ruling to keep this shut is that file's "Ruled: the liveness
+  # override stays shut to a run bearing an outcome word".
+  #
+  # The residual is ACCEPTED, not overlooked. A `checks-passed` run whose head
+  # this checkout cannot resolve reads `unknown` even when an active `ci` row
+  # says it is executing. Reaching it needs a checks-passed run paired with a
+  # live ci step - a pairing never once recorded on this fork, see that file's
+  # Fixture provenance section on `run_checks_passed`, lines 400-408 - AND a
+  # head this checkout cannot resolve; and `unknown` is
+  # this reader's governing preference wherever the evidence does not settle
+  # it. A theoretical unknown does not buy back a regression already paid for.
   [ "$terminality" = live ] || return 1
   [ -n "$(fm_crew_active_step "$run_out")" ]
 }
