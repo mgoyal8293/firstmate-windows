@@ -119,7 +119,8 @@
 # then asked a second time. A caller running this script inside a budget of its own
 # (bin/fm-inactive-reconcile.sh) narrows that bound to a share of what it has
 # left, or skips the read, through those same two knobs; bin/fm-fleet-snapshot.sh
-# narrows it to a fixed per-task bound. Always exits 0 on a successful read
+# and bin/fm-classify-lib.sh's crew_absorb_class each narrow it to a fixed 3s,
+# and the doubling cost the last of those twice per crew polled. Always exits 0 on a successful read
 # regardless of state; exit 2 only on a usage error (no id).
 set -u
 
@@ -173,9 +174,16 @@ case "$FM_CREW_STATE_RUNS_LIMIT" in ''|*[!0-9]*) FM_CREW_STATE_RUNS_LIMIT=200 ;;
 # serves the interactive single-task read, where the whole cost is one person
 # waiting for one answer and a slow answer is cheaper than a wrong one - the
 # answer this read produces is what stops abandoned work reading as a success.
-# Every caller with more than one task to get through narrows it: 3s in
-# bin/fm-fleet-snapshot.sh, and a share of what remains in
-# bin/fm-inactive-reconcile.sh, each recorded where it is chosen.
+# THREE callers narrow it, and that is the whole set - check this list rather
+# than re-deriving one, and add to it when a fourth appears:
+#   * bin/fm-fleet-snapshot.sh - a fixed 3s per task.
+#   * bin/fm-inactive-reconcile.sh - a share of the aggregate budget it has left,
+#     or a skip when what remains cannot spare the read.
+#   * bin/fm-classify-lib.sh - crew_absorb_class, a fixed 3s per crew. This is
+#     the HIGHEST-FREQUENCY caller: bin/fm-watch.sh reaches it once per crew in a
+#     poll loop with no aggregate budget above it, so it is the one that decides
+#     what this reader's widened forge use actually costs.
+# Each figure is recorded where it is chosen, with the measurement behind it.
 #
 # The call itself is nowhere near either figure. `gh pr view --json
 # state,mergeStateStatus` against a real GitHub PR in this repo measured 0.53s

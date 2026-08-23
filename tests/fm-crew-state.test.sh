@@ -435,6 +435,32 @@ outcome: passed
 EOF
 }
 
+# The same genuine pass with its two step tables in the REVERSE order, and with a
+# `ci` row in each carrying a DIFFERENT word. Synthetic, and deliberately so: it
+# separates the two tables, which no recorded shape does, because a reader keyed
+# on the first `ci,<word>,` row it meets agrees with an anchored one on every
+# record where only `steps` has such a row. The steps table is the step HISTORY
+# and is the one the terminal ranking asks about; the active table is what is
+# executing now.
+run_passed_active_steps_first() {  # <branch>
+  cat <<EOF
+run:
+  id: "01RUN"
+  branch: $1
+  status: completed
+  head: "${FM_FAKE_RUN_HEAD:-abc1234}"
+  pr: "https://github.com/o/r/pull/1"
+  findings: none
+  active_steps[1]{step,status,active_for,last_activity,agent_pid,round}:
+    ci,running,2m,"1m ago: log: watching checks",2010043,1
+  steps[3]{step,status,findings,duration_ms}:
+    intent,completed,0,0
+    push,completed,0,0
+    ci,completed,0,0
+outcome: passed
+EOF
+}
+
 # `outcome: checks-passed` is the pipeline's own statement that the checks went
 # green while the PR waits to be merged. Its ci step is left `running` here
 # deliberately: on a repo where merge is the captain's call that is what the
@@ -2432,6 +2458,28 @@ test_padded_step_columns_do_not_change_the_verdict() {
   pass "padded step columns do not change the verdict"
 }
 
+# The ci word the terminal ranking asks about comes from the step HISTORY, not
+# from whichever TOON table the record happens to emit first. `active_steps` rows
+# begin with a step name too, so a reader that matched any `ci,<word>,` row read
+# the active table on a record that emitted it first - and the ci word is what
+# acceptance criterion 1 rests on when it rules a skipped ci step never reads as
+# done. Here the two tables disagree on purpose: history says `completed`, the
+# active row says `running`, and only the history may settle the pass.
+test_the_ci_word_comes_from_the_steps_table_whatever_its_position() {
+  reset_fakes
+  local d out
+  d=$(new_case ci-table-anchor)
+  make_repo_on_branch "$d/wt" fm/feat-cianchor
+  make_fakebin "$d" >/dev/null
+  fm_write_meta "$d/state/cianchor.meta" "window=fm:fm-cianchor" "worktree=$d/wt" "kind=ship" "harness=claude"
+  FM_FAKE_AXI_STATUS="$(run_passed_active_steps_first fm/feat-cianchor)"
+  FM_FAKE_GH_PR='{"mergeStateStatus":"BLOCKED","state":"OPEN","url":"https://github.com/o/r/pull/1"}'
+  out=$(run_crew_state "$d" cianchor)
+  assert_contains "$out" "state: done" "the steps table's ci,completed is the CI evidence, whatever table came first"
+  assert_not_contains "$out" "no CI evidence" "an active_steps ci row must not stand in for the step history"
+  pass "the ci word comes from the steps table whatever its position"
+}
+
 # ONE ranking, both paths. A forge-confirmed merge is stronger evidence than ci
 # completion for the question actually asked - the merge proves the work LANDED,
 # ci completion only proves that checks ran - so it settles done whatever the ci
@@ -3138,6 +3186,7 @@ test_a_table_after_active_steps_is_not_read_as_an_active_step
 test_branch_sync_gate_status_does_not_park_a_running_run
 test_terminal_pass_without_ci_evidence_supersedes_a_stale_gate_log
 test_padded_step_columns_do_not_change_the_verdict
+test_the_ci_word_comes_from_the_steps_table_whatever_its_position
 test_forge_confirmed_merge_settles_a_ci_skipped_run
 test_forge_confirmed_close_is_failed_not_done
 test_forge_confirmed_close_defeats_a_checks_passed_run

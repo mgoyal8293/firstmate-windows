@@ -218,6 +218,16 @@ fm_crew_run_field() {  # <run-output> <key>
 # Status word of one step in a run's `steps[N]{step,status,...}` table, e.g.
 # `ci`. Empty when the run record has no row for that step.
 #
+# ANCHORED to the `steps[N]{...}` header, columns keyed by name, terminating at
+# any following TOON table header - the same discipline fm_crew_active_step
+# applies to its own table, and for the mirror-image reason. An `active_steps`
+# row also begins with a step name, so a read that matched any indented
+# `<name>,<word>,` row took whichever table came first: a record emitting
+# `active_steps` before `steps` had its `ci` word read from the ACTIVE table, and
+# that word is what acceptance criterion 1 rests on when it rules that a skipped
+# ci step never reads as done. `active_steps[...]` cannot collide with the anchor
+# because the header match starts at the line's first non-space character.
+#
 # The recorded tables are unpadded and unquoted, but this column decides done
 # versus unknown for every full-path terminal pass, so it tolerates surrounding
 # whitespace and quoting rather than depending on that: `ci, completed,0,4221`
@@ -225,9 +235,42 @@ fm_crew_run_field() {  # <run-output> <key>
 # and the readers of the same table in bin/fm-crew-state.sh are written the same
 # way.
 fm_crew_step_status() {  # <run-output> <step-name>
-  fm_nm_strip_quotes "$(printf '%s\n' "$1" \
-    | sed -n "s/^[[:space:]]*$2[[:space:]]*,\([^,]*\),.*/\1/p" \
-    | head -1)"
+  fm_nm_strip_quotes "$(printf '%s\n' "$1" | awk -v want="$2" '
+    /^[[:space:]]*steps\[[0-9]+\]\{/ {
+      hdr = $0
+      sub(/^[^{]*\{/, "", hdr)
+      sub(/\}.*$/, "", hdr)
+      ncol = split(hdr, col, ",")
+      for (i = 1; i <= ncol; i++) {
+        gsub(/^[[:space:]]+|[[:space:]]+$/, "", col[i])
+      }
+      in_table = 1
+      next
+    }
+    in_table {
+      row = $0
+      sub(/^[[:space:]]+/, "", row)
+      if (row == "" || row !~ /,/) { in_table = 0; next }
+      if (row ~ /^[A-Za-z_][A-Za-z0-9_]*\[[0-9]+\]\{/) { in_table = 0; next }
+      nval = 0; cur = ""; inq = 0
+      for (i = 1; i <= length(row); i++) {
+        c = substr(row, i, 1)
+        if (c == "\"") { inq = !inq; continue }
+        if (c == "," && !inq) { val[++nval] = cur; cur = ""; continue }
+        cur = cur c
+      }
+      val[++nval] = cur
+      for (i = 1; i <= nval; i++) {
+        gsub(/^[[:space:]]+|[[:space:]]+$/, "", val[i])
+      }
+      step = ""; status = ""
+      for (i = 1; i <= ncol && i <= nval; i++) {
+        if (col[i] == "step") step = val[i]
+        else if (col[i] == "status") status = val[i]
+      }
+      if (step == want) { print status; exit }
+    }
+  ')"
 }
 
 # The first RUNNING or FIXING row of a run's `active_steps[N]{...}` table, as
@@ -463,7 +506,7 @@ fm_crew_run_admits() {  # <worktree> <run-output> <run-head>
   # is the ONLY barrier for exactly that set of runs. The guard is
   # test_a_terminated_checks_passed_run_does_not_borrow_a_live_crews_answer,
   # the defect is described under "Ruled: withholding a landing claim is not
-  # the same as knowing nothing" at docs/verification/crew-state-verdicts.md:312,
+  # the same as knowing nothing" at docs/verification/crew-state-verdicts.md:318,
   # and the ruling to keep this shut is that file's "Ruled: the liveness
   # override stays shut to a run bearing an outcome word".
   #

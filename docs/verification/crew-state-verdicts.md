@@ -14,7 +14,7 @@ Branch: `fm/fm-crew-state-stale-run-masks-live`.
 
 ```
 $ bash tests/fm-crew-state.test.sh | grep -c '^ok'
-98
+99
 $ bash tests/fm-inactive-reconcile.test.sh 2>/dev/null | grep -c '^ok'
 18
 $ bash tests/fm-fleet-snapshot-view.test.sh 2>/dev/null | grep -c '^ok'
@@ -93,10 +93,16 @@ Every row must fail, and must fail on the named assertion.
 | Liveness on the full-path ci-ready route is DERIVED from the record, not asserted | pass the literal `live` from that call site again | `test_a_record_with_no_status_word_does_not_assert_liveness` | fails: `unexpected: 'state: working'` |
 | When `pr_for_task` falls through to the status log, the url it presents is the NEWEST one the log names | restore `head -1` in `pr_for_task` | `test_presented_pr_is_the_newest_url_the_status_log_names` (`tests/fm-inactive-reconcile.test.sh`) | fails: `the presented PR is not the newest url the status log names: 'https://example.test/owner/repo/pull/1'` |
 | And a merge request counts as that url, since this reader settles a GitLab crew's state from one | narrow `pr_for_task` back to `/pull/` only | the same case | fails: `a merge request is not presented beside the state word it settled: ''` |
+| The ci word the terminal ranking reads comes from the `steps` table, whichever TOON table the record emits first | restore the unanchored `sed` in `fm_crew_step_status` | `test_the_ci_word_comes_from_the_steps_table_whatever_its_position` | fails: `missing: 'state: done'` |
 
-56 of 56 re-derived in full on 2026-08-23 - once per fix round since the decay was found - and the two rows added after that date were derived when they were written, for 58 of 58.
+56 of 56 re-derived in full on 2026-08-23 - once per fix round since the decay was found - and the three rows added after that date were derived when they were written, for 59 of 59.
 
-The last two rows were added by the round that aligned the scan's status-log PR-url selection with this reader's.
+The last row was added by the round that anchored `fm_crew_step_status` to its own table.
+`fm_crew_active_step` already keyed its columns off the `active_steps[N]{...}` header and stopped at any following table header, and said so; its sibling matched any indented `<step>,<word>,` row and so read whichever table came first.
+An `active_steps` row begins with a step name too, so the two readers disagreed about one record, and the ci word is the one acceptance criterion 1 rests on.
+The case's fixture is synthetic and says so: it puts a `ci` row in BOTH tables with different words, which no recorded shape does, because a record where only `steps` carries such a row cannot tell an anchored reader from an unanchored one.
+
+The two rows before it were added by the round that aligned the scan's status-log PR-url selection with this reader's.
 They are the only rows here that guard a CONSUMER's presentation rather than this reader's own answer, and they belong in this table because a `done` this reader confirmed against a replacement PR, printed beside the PR it replaced, is the false landing this change exists to stop, reassembled at the boundary.
 Each half needs its own mutation because `pr_for_task` diverged from `crew_pr_url` in two independent ways at once, and a case exercising only a pull-request log cannot see the merge-request half.
 
@@ -384,7 +390,9 @@ The invariant itself is worded about the CALL and not the ANSWER, deliberately: 
 ## Forge-read bound
 
 `fm_crew_forge_pr_state` is the only outbound call this reader makes, and `FM_CREW_STATE_FORGE_TIMEOUT` bounds it.
-The library default is 10 seconds and every caller with a fleet to get through narrows it: 3 seconds in `bin/fm-fleet-snapshot.sh`, and at most a third of what remains in `bin/fm-inactive-reconcile.sh`.
+The library default is 10 seconds and all three callers with a fleet to get through narrow it: 3 seconds in `bin/fm-fleet-snapshot.sh`, 3 seconds in `bin/fm-classify-lib.sh`'s `crew_absorb_class`, and at most a third of what remains in `bin/fm-inactive-reconcile.sh`.
+Those three are the whole set, and `crew_absorb_class` is the one to keep in view: `bin/fm-watch.sh` reaches it once per crew in a poll loop with no aggregate budget above it, so it is the highest-frequency caller and the one that decides what widening this read to every done-capable path actually costs.
+The Suite section above counts the same three, as four guards, because the scan's share is pinned twice.
 The loose default is for the interactive single-task read, where one person is waiting for one answer and a slow answer is cheaper than a wrong one.
 Deliberately keeping the default and the narrowed bound at DIFFERENT numbers is also what makes the snapshot's choice falsifiable at all, as the matrix note above records.
 
