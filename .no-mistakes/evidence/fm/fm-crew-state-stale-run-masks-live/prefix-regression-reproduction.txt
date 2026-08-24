@@ -1,0 +1,41 @@
+REGRESSION PROOF - the reported defects, reproduced against the PRE-FIX readers
+
+Tree: this branch's tests/ over base commit 6d7dc9a2's bin/fm-crew-state.sh and
+its sibling readers, with bin/fm-crew-run-verdict-lib.sh removed entirely.
+Each case must FAIL here and PASS on the branch (see falsification-baseline.txt).
+
+=== test_superseded_failed_row_does_not_mask_live_row
+    exit=1 (0 would mean the defect is NOT reproduced)
+    not ok - the branch's newest run is live, so the task is working (missing: 'state: working')
+    --- output ---
+    state: failed · source: run-step · run failed
+
+=== test_live_run_at_unfetched_head_is_not_replaced_by_older_failed_run
+    exit=1 (0 would mean the defect is NOT reproduced)
+    not ok - a live run whose head is merely unfetched is still live (missing: 'state: working')
+    --- output ---
+    state: failed · source: run-step · run failed
+
+=== test_open_pr_is_never_reported_as_merged
+    exit=1 (0 would mean the defect is NOT reproduced)
+    not ok - an open PR is reported as not merged (missing: 'not merged')
+    --- output ---
+    state: done · source: run-step · run passed: PR merged/closed
+
+=== test_unanswered_forge_never_claims_a_landing
+    exit=1 (0 would mean the defect is NOT reproduced)
+    not ok - an unanswered forge is reported as unverified (missing: 'unverified')
+    --- output ---
+    state: done · source: run-step · run passed: PR merged/closed
+
+=== test_ci_skipped_pass_does_not_read_as_done_by_itself
+    exit=1 (0 would mean the defect is NOT reproduced)
+    not ok - a skipped ci step is the absence of validation, not validation (unexpected: 'state: done')
+    --- output ---
+    state: done · source: run-step · run passed: PR merged/closed
+
+=== test_live_active_step_attributes_run_despite_head_geometry
+    exit=1 (0 would mean the defect is NOT reproduced)
+    not ok - an executing step means the task is working (missing: 'state: working')
+    --- output ---
+    state: unknown · source: none · no current-state source available

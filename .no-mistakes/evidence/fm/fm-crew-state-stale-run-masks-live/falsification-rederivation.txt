@@ -1,0 +1,69 @@
+FALSIFICATION RE-DERIVATION - bin/fm-crew-state.sh verdict guards
+Each row removes ONE guard from a throwaway copy of the tree and runs the single
+case that claims to protect it. Every row must FAIL, on the named assertion.
+Baseline: the same case passes on the unmutated tree (verified separately).
+
+GUARD    : Only the branch's newest run row is ever examined (AC2)
+MUTATION : keep the LAST matching row instead of the first  [bin/fm-crew-run-verdict-lib.sh]
+CASE     : test_superseded_failed_row_does_not_mask_live_row  (tests/fm-crew-state.test.sh)
+EXPECTED : the case fails on  missing: 'state: working'
+RESULT   : falsified
+OUTPUT   : state: failed · source: run-step · run failed
+
+GUARD    : A proven pipeline head admits its run's terminal verdict (AC2)
+MUTATION : drop the ownership proof  [bin/fm-crew-run-verdict-lib.sh]
+CASE     : test_terminal_run_at_proven_pipeline_head_is_attributed  (tests/fm-crew-state.test.sh)
+EXPECTED : the case fails on  missing: 'state: failed'
+RESULT   : falsified
+OUTPUT   : state: unknown · source: pane · harness state unavailable (unknown missing)
+
+GUARD    : An executing step attributes its run regardless of head geometry (AC4)
+MUTATION : drop the liveness override  [bin/fm-crew-run-verdict-lib.sh]
+CASE     : test_live_active_step_attributes_run_despite_head_geometry  (tests/fm-crew-state.test.sh)
+EXPECTED : the case fails on  missing: 'state: working'
+RESULT   : falsified
+OUTPUT   : state: unknown · source: none · no current-state source available
+
+GUARD    : A skipped `ci` step is never validation by itself (AC1)
+MUTATION : let the ranking's ci arm accept every ci status word  [bin/fm-crew-run-verdict-lib.sh]
+CASE     : test_ci_skipped_pass_does_not_read_as_done_by_itself  (tests/fm-crew-state.test.sh)
+EXPECTED : the case fails on  unexpected: 'state: done'
+RESULT   : falsified
+OUTPUT   : state: done · source: run-step · run passed: PR open, not merged (DIRTY)
+
+GUARD    : An absent `ci` row is the same absence of evidence a skipped one is (AC1)
+MUTATION : revert that arm to the old skipped-only blacklist  [bin/fm-crew-run-verdict-lib.sh]
+CASE     : test_terminal_pass_with_no_steps_table_and_no_landing_is_not_done  (tests/fm-crew-state.test.sh)
+EXPECTED : the case fails on  unexpected: 'state: done'
+RESULT   : falsified
+OUTPUT   : state: done · source: run-step · run passed: PR open, not merged (BLOCKED)
+
+GUARD    : A merged or closed claim comes only from the forge (AC3)
+MUTATION : restore the pre-fix `run passed: PR merged/closed` detail  [bin/fm-crew-state.sh]
+CASE     : test_open_pr_is_never_reported_as_merged  (tests/fm-crew-state.test.sh)
+EXPECTED : the case fails on  missing: 'not merged'
+RESULT   : falsified
+OUTPUT   : state: done · source: run-step · run passed: PR merged/closed
+
+GUARD    : An unanswered forge is never rendered as a landing (AC3)
+MUTATION : the same pre-fix detail  [bin/fm-crew-state.sh]
+CASE     : test_unanswered_forge_never_claims_a_landing  (tests/fm-crew-state.test.sh)
+EXPECTED : the case fails on  missing: 'unverified'
+RESULT   : falsified
+OUTPUT   : state: done · source: run-step · run passed: PR merged/closed
+
+GUARD    : One invocation makes at most one outbound forge read
+MUTATION : drop the memo, letting crew_ask_forge re-read on every call  [bin/fm-crew-state.sh]
+CASE     : test_one_invocation_makes_at_most_one_forge_read  (tests/fm-crew-state.test.sh)
+EXPECTED : the case fails on  one invocation made 2 forge reads
+RESULT   : falsified
+OUTPUT   : state: working · source: status-log · PR https://github.com/o/r/pull/5 checks green · run still monitoring PR, PR state unverified
+
+GUARD    : The fleet snapshot narrows the per-task forge bound (accepted ruling)
+MUTATION : drop the FM_CREW_STATE_FORGE_TIMEOUT it passes  [bin/fm-fleet-snapshot.sh]
+CASE     : test_snapshot_narrows_the_per_task_forge_bound  (tests/fm-fleet-snapshot-view.test.sh)
+EXPECTED : the case fails on  must narrow the per-task forge bound
+RESULT   : falsified
+OUTPUT   : not ok - the snapshot must narrow the per-task forge bound to 3s, got '10'
+
+9 of 9 guards re-derived as falsifiable.

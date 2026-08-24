@@ -1,0 +1,43 @@
+BEFORE / AFTER - the same nine situations through the same demo driver
+BEFORE = base commit 6d7dc9a2 readers (pre-fix)   AFTER = this branch
+
+--- SITUATION 1/4 - PARKED awaiting a gate response  (unchanged)
+    BEFORE: state: parked · source: run-step · parked at review: 2 finding(s) (ask-user: authority decision)
+    AFTER : state: parked · source: run-step · parked at review: 2 finding(s) (ask-user: authority decision)
+
+--- SITUATION 2/4 - FAILED  (unchanged)
+    BEFORE: state: failed · source: run-step · run failed
+    AFTER : state: failed · source: run-step · run failed
+
+--- SITUATION 3/4 - DONE (ci step completed, forge confirms the merge)
+    BEFORE: state: done · source: run-step · run passed: PR merged/closed
+    AFTER : state: done · source: run-step · run passed: PR merged
+
+--- SITUATION 4/4 - completed with its CI STEP SKIPPED (absence of evidence)
+    BEFORE: state: done · source: run-step · run passed: PR merged/closed
+    AFTER : state: unknown · source: run-step · run terminated with ci SKIPPED: no CI evidence, cannot tell whether it passed, PR still open (DIRTY)
+
+--- OBSERVED FAILURE 1 - a superseded terminal-FAILED run must not mask the live one
+    BEFORE: state: failed · source: run-step · run failed
+    AFTER : state: working · source: run-step · validating (background run)
+
+--- OBSERVED FAILURE 2 - an OPEN DIRTY PR must never be reported as merged
+    BEFORE: state: done · source: run-step · run passed: PR merged/closed
+    AFTER : state: unknown · source: run-step · run terminated with ci SKIPPED: no CI evidence, cannot tell whether it passed, PR still open (DIRTY)
+
+--- OBSERVED FAILURE 2b - the forge did not answer at all
+    BEFORE: state: done · source: run-step · run passed: PR merged/closed
+    AFTER : state: unknown · source: run-step · run passed: cannot rule out a close, PR state unverified
+
+--- OBSERVED FAILURE 3 - a live-but-parked pipeline must not read as unknown
+    BEFORE: state: unknown · source: none · no current-state source available
+    AFTER : state: working · source: run-step · validating (test running, active 3m38s, last activity 3m11s ago)
+
+--- ACCEPTED RULING - a forge read that TIMES OUT reports UNVERIFIED, never done
+    BEFORE: state: done · source: run-step · run passed: PR merged/closed
+    AFTER : state: unknown · source: run-step · run passed: cannot rule out a close, PR state unverified
+
+--- REPO-SCOPED axi status naming a SIBLING branch is not this task run
+    BEFORE: state: done · source: status-log · implemented, ready to validate
+    AFTER : state: unknown · source: status-log · implemented, ready to validate, reported complete, not yet validated
+

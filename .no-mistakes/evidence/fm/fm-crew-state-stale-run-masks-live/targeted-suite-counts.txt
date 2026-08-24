@@ -1,0 +1,36 @@
+TARGETED SUITE RUN - assertion counts, not step conclusions
+(each suite fails fast, so the ok count IS the number of assertions that ran)
+
+SUITE                                  EXIT   ok-assertions
+tests/fm-crew-state.test.sh            0      99
+tests/fm-inactive-reconcile.test.sh    0      18
+tests/fm-fleet-snapshot-view.test.sh   0      17
+tests/fm-watch-triage.test.sh          0      50
+tests/fm-documentation-audiences.test.sh 0      4
+
+Matches the counts recorded in docs/verification/crew-state-verdicts.md (99/18/17/50).
+
+Guard cases that carry the four acceptance criteria, by name:
+  ok - a superseded failed row does not mask this branch's newest live row
+  ok - a live run at an unfetched head is not replaced by an older failed run
+  ok - an executing step attributes the run despite unbindable head geometry
+  ok - a terminal run at an unfetched head is not attributed
+  ok - a terminal run at a proven pipeline head is attributed
+  ok - a run that passed with ci skipped does not read as done by itself
+  ok - a terminal pass without CI evidence supersedes a stale gate log
+  ok - a forge-confirmed merge settles a ci-skipped run
+  ok - a forge-confirmed close is failed, not done
+  ok - a forge-confirmed close defeats a checks-passed run
+  ok - a forge-confirmed close defeats a green ci log
+  ok - a forge-confirmed close defeats a ci-ready status log
+  ok - an unconfirmed forge answer never reads done on a terminated run
+  ok - an unconfirmed forge answer keeps a live crew working
+  ok - a structural forge non-answer still reads done
+  ok - a terminal pass with no steps table and no landing is not done
+  ok - a terminal pass whose ci step never completed, with no landing, is not done
+  ok - an open PR is never reported as merged
+  ok - an unanswered forge never claims a landing
+  ok - one invocation makes at most one forge read
+  ok - an open PR names its merge state on the checks-green path
+  ok - a pre-validation ship reads differently from a run that landed nothing
+  ok - a record with no status word does not assert liveness

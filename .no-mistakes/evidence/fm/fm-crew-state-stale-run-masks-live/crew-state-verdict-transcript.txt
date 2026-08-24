@@ -1,0 +1,49 @@
+
+===== SITUATION 1/4 - PARKED awaiting a gate response =====
+  run: status awaiting_approval, gate review, 2 findings (1 ask-user)
+  state: parked · source: run-step · parked at review: 2 finding(s) (ask-user: authority decision)
+
+===== SITUATION 2/4 - FAILED =====
+  run: outcome failed, review step failed
+  state: failed · source: run-step · run failed
+
+===== SITUATION 3/4 - DONE (ci step completed, forge confirms the merge) =====
+  run 01M0JASXQ1H4Q5YAZYJT03F1HN: outcome passed, ci,completed
+  forge: gh pr view -> state MERGED
+  state: done · source: run-step · run passed: PR merged
+
+===== SITUATION 4/4 - completed with its CI STEP SKIPPED (absence of evidence) =====
+  run 01M0JMD3H94MKKF7SCM5C5QWR6: outcome passed, ci,SKIPPED
+  forge: gh pr view -> state OPEN, mergeStateStatus DIRTY
+  state: unknown · source: run-step · run terminated with ci SKIPPED: no CI evidence, cannot tell whether it passed, PR still open (DIRTY)
+
+===== OBSERVED FAILURE 1 - a superseded terminal-FAILED run must not mask the live one =====
+  checkout head 5231e20f carries run 01M0EFHK (FAILED)
+  pipeline head 1d7ae0e1 carries the live run - unfetchable locally
+  state: working · source: run-step · validating (background run)
+
+===== OBSERVED FAILURE 2 - an OPEN DIRTY PR must never be reported as merged =====
+  status log claims 'done'; forge says OPEN + DIRTY, zero checks
+  state: unknown · source: run-step · run terminated with ci SKIPPED: no CI evidence, cannot tell whether it passed, PR still open (DIRTY)
+  outbound forge reads this invocation made: 1 -> pr view 6 --repo o/r --json state,mergeStateStatus
+
+===== OBSERVED FAILURE 2b - the forge did not answer at all =====
+  run passed with ci,completed; the forge read FAILED
+  state: unknown · source: run-step · run passed: cannot rule out a close, PR state unverified
+
+===== OBSERVED FAILURE 3 - a live-but-parked pipeline must not read as unknown =====
+  run 01M0N8J9ET64CBM89W4D663WBZ: active_steps says test running, agent_pid 2419262
+  checkout has advanced past the run head, pane is idle, log holds only an event
+  state: working · source: run-step · validating (test running, active 3m38s, last activity 3m11s ago)
+
+===== ACCEPTED RULING - a forge read that TIMES OUT reports UNVERIFIED, never done =====
+  run passed with ci,completed; the forge would answer MERGED after 5s
+  the bound is 1s here (the fleet snapshot narrows it to 3s)
+  state: unknown · source: run-step · run passed: cannot rule out a close, PR state unverified
+  elapsed: 1s - the bound held and no landing was claimed
+
+===== REPO-SCOPED axi status naming a SIBLING branch is not this task run =====
+  axi status answers for branch fm/some-other-task, carrying PR 77 (merged)
+  this task's own branch is fm/demo-sibling and has no run
+  state: unknown · source: status-log · implemented, ready to validate, reported complete, not yet validated
+

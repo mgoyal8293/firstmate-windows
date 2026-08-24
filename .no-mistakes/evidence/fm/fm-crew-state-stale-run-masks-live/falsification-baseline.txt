@@ -1,0 +1,20 @@
+BASELINE - the same cases on the UNMUTATED tree (guards in place)
+
+rc=0  test_superseded_failed_row_does_not_mask_live_row
+         ok - a superseded failed row does not mask this branch's newest live row
+rc=0  test_terminal_run_at_proven_pipeline_head_is_attributed
+         ok - a terminal run at a proven pipeline head is attributed
+rc=0  test_live_active_step_attributes_run_despite_head_geometry
+         ok - an executing step attributes the run despite unbindable head geometry
+rc=0  test_ci_skipped_pass_does_not_read_as_done_by_itself
+         ok - a run that passed with ci skipped does not read as done by itself
+rc=0  test_terminal_pass_with_no_steps_table_and_no_landing_is_not_done
+         ok - a terminal pass with no steps table and no landing is not done
+rc=0  test_open_pr_is_never_reported_as_merged
+         ok - an open PR is never reported as merged
+rc=0  test_unanswered_forge_never_claims_a_landing
+         ok - an unanswered forge never claims a landing
+rc=0  test_one_invocation_makes_at_most_one_forge_read
+         ok - one invocation makes at most one forge read
+rc=0  test_snapshot_narrows_the_per_task_forge_bound
+         ok - the snapshot narrows the per-task forge bound
