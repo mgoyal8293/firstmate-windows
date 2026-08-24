@@ -296,8 +296,13 @@ if [ -z "${FM_SESSION_START_STAGE_FILE:-}" ]; then
   # platform, because the identical digest costs about 40x more per subprocess
   # under MSYS than on Linux. bin/fm-session-start-bound-lib.sh owns that
   # resolution, its evidence, and the unusable-value fallback.
-  SESSION_START_BUDGET=$(fm_session_start_resolve_budget "${FM_SESSION_START_TIMEOUT:-}")
-  fm_session_start_budget_advisory "${FM_SESSION_START_TIMEOUT:-}" "$SESSION_START_BUDGET"
+  # Bound and cap are BOUND to variables rather than captured from a command
+  # substitution, so the cap the clamp used is the cap the advisory describes -
+  # one derivation, in the parent, inside the window the nesting margin covers.
+  fm_session_start_bind_budget "${FM_SESSION_START_TIMEOUT:-}"
+  SESSION_START_BUDGET=$FM_SESSION_START_BOUND
+  fm_session_start_budget_advisory "${FM_SESSION_START_TIMEOUT:-}" "$SESSION_START_BUDGET" \
+    '' "$FM_SESSION_START_CAP"
   SESSION_START_STAGE_FILE=$(mktemp "${TMPDIR:-/tmp}/fm-session-start-stage.XXXXXX" 2>/dev/null) || SESSION_START_STAGE_FILE=
   if [ -z "$SESSION_START_STAGE_FILE" ]; then
     # Without a breadcrumb the bound still holds; only the banner's precision
@@ -308,19 +313,23 @@ if [ -z "${FM_SESSION_START_STAGE_FILE:-}" ]; then
     if [ -n "$SESSION_SOURCE" ]; then
       fm_run_timed "$SESSION_START_BUDGET" \
         env FM_SESSION_START_STAGE_FILE="$SESSION_START_STAGE_FILE" \
+        FM_SESSION_START_RESOLVED_BOUND="$SESSION_START_BUDGET" \
         "$SCRIPT_DIR/fm-session-start.sh" --reemit --source "$SESSION_SOURCE"
     else
       fm_run_timed "$SESSION_START_BUDGET" \
         env FM_SESSION_START_STAGE_FILE="$SESSION_START_STAGE_FILE" \
+        FM_SESSION_START_RESOLVED_BOUND="$SESSION_START_BUDGET" \
         "$SCRIPT_DIR/fm-session-start.sh" --reemit
     fi
   elif [ -n "$SESSION_SOURCE" ]; then
     fm_run_timed "$SESSION_START_BUDGET" \
       env FM_SESSION_START_STAGE_FILE="$SESSION_START_STAGE_FILE" \
+      FM_SESSION_START_RESOLVED_BOUND="$SESSION_START_BUDGET" \
       "$SCRIPT_DIR/fm-session-start.sh" --source "$SESSION_SOURCE"
   else
     fm_run_timed "$SESSION_START_BUDGET" \
       env FM_SESSION_START_STAGE_FILE="$SESSION_START_STAGE_FILE" \
+      FM_SESSION_START_RESOLVED_BOUND="$SESSION_START_BUDGET" \
       "$SCRIPT_DIR/fm-session-start.sh"
   fi
   SESSION_START_RC=$?

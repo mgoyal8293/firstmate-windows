@@ -52,3 +52,47 @@ fm_test_max_session_start_bound() {
   [ "$max" -gt 0 ] || return 1
   printf '%s\n' "$max"
 }
+
+# fm_test_session_start_margin <uname-s>: the nesting margin the library resolves
+# for that platform, in seconds.
+#
+# Run in a FRESH SHELL with the override already set, because the margin is
+# resolved when bin/fm-session-start-bound-lib.sh is sourced - which is exactly
+# what a Git Bash session does - and not on every call the way the default budget
+# is. Reading the variable that is already in scope here would answer for the
+# host running the suite, which is the one platform whose margin is smallest.
+fm_test_session_start_margin() {  # <uname-s>
+  local got
+  got=$(FM_PLATFORM_UNAME_OVERRIDE="$1" bash -c \
+    '. "$1"; printf "%s\n" "$FM_SESSION_START_NESTING_MARGIN"' _ \
+    "$ROOT/bin/fm-session-start-bound-lib.sh") || return 1
+  case "$got" in ''|*[!0-9]*|0) return 1 ;; esac
+  printf '%s\n' "$got"
+}
+
+# fm_test_min_registration_floor: the SHORTEST session-start hook timeout any
+# harness may declare and still leave every platform's bound nesting under it.
+#
+# THIS, NOT THE BARE MAXIMUM BOUND, IS THE INVARIANT THE LIBRARY DEFINES. The
+# bound in force on the default path is fm_session_start_default_budget, which
+# never consults the cap at all, while the harness kills the whole hook at its
+# registered timeout - and between those two numbers sits the margin, which pays
+# for the parent's pre-fork prologue and its post-kill banner. So the registration
+# has to clear `default + margin`, per platform, and a guard that only clears
+# `default` is weaker than the invariant by exactly the margin. That is the same
+# off-by-a-number shape this suite's header records shipping once already, so the
+# floor is derived from both halves rather than from the budget alone.
+#
+# Fails rather than guessing if any arm cannot be resolved.
+fm_test_min_registration_floor() {
+  local plat budget margin need max=0
+  for plat in $FM_TEST_SESSION_START_PLATFORMS; do
+    budget=$(FM_PLATFORM_UNAME_OVERRIDE="$plat" fm_session_start_default_budget) || return 1
+    case "$budget" in ''|*[!0-9]*|0) return 1 ;; esac
+    margin=$(fm_test_session_start_margin "$plat") || return 1
+    need=$((budget + margin))
+    [ "$need" -le "$max" ] || max=$need
+  done
+  [ "$max" -gt 0 ] || return 1
+  printf '%s\n' "$max"
+}

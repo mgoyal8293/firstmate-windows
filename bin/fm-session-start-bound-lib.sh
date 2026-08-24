@@ -122,15 +122,31 @@ FM_SESSION_START_DIGEST_WRAPPERS='fm-session-start.sh fm-sessionstart-run.sh fm-
 # whole banner. tests/fm-session-start-hook-nesting.test.sh asserts that same
 # strictness.
 #
-# 3 s ON MSYS/MINGW/CYGWIN IS DERIVED, NOT CHOSEN:
-#   22 subprocesses x 124.0 ms per fork = 2728 ms, ceiling to whole seconds = 3.
+# 4 s ON MSYS/MINGW/CYGWIN IS DERIVED, NOT CHOSEN:
+#   26 subprocesses x 124.0 ms per fork = 3224 ms, ceiling to whole seconds = 4.
+#
+# WHICH PATH THE 26 WAS COUNTED ON, because a first attempt at this got exactly
+# that wrong. It counted the DEFAULT path, 22 subprocesses, and landed on 3 s.
+# The default path can never reach the ceiling: the Windows default bound is
+# 300 s and the ceiling is in the 350s, so the only bound that ever EQUALS the
+# ceiling is a CLAMPED one, and clamping is precisely the path that runs the cap
+# derivation and the advisory the default path skips. The margin owes the clamped
+# path, so the clamped path is what is counted here. That earlier 22 is wrong and
+# must not be cited.
+#
 # Each input is measured, and docs/verification/session-start-fork-profile.md
 # records the runs:
-#   - The 22 are COUNTED, not grepped: about 10 in the pre-fork prologue and
-#     about 12 in the post-kill banner, taken on Linux with the LD_PRELOAD
+#   - The 26 are COUNTED, not grepped, on Linux with the LD_PRELOAD
 #     fork/execve/posix_spawn interposer that doc describes, validated against a
-#     known-count program before use. The count is portable; only the per-fork
-#     cost is not.
+#     known-count program before use: 10 in the parent's default pre-fork
+#     prologue, 4 more for the pre-fork cap derivation (the hook-context probe,
+#     the registration glob and the awk over the registration JSONs), and 12 in
+#     the post-kill banner. The count is portable; only the per-fork cost is not.
+#   - It is 26 only because the cap is derived ONCE. Before that dedup the same
+#     path measured 30, since fm_session_start_resolve_budget and
+#     fm_session_start_budget_advisory each derived it. fm_session_start_bind_budget
+#     is what keeps it at one derivation, which makes that function load-bearing
+#     for this number rather than an efficiency tidy-up.
 #   - 124.0 ms is the WORST point of a measured contention curve on the target
 #     box - MINGW64_NT-10.0-26200, bash 5.2.37, 22 cores - replicating that exact
 #     subprocess pattern against fork-heavy competitors: 0 competitors 30.6 ms
@@ -140,12 +156,26 @@ FM_SESSION_START_DIGEST_WRAPPERS='fm-session-start.sh fm-sessionstart-run.sh fm-
 #     made forks FASTER, 25 ms against 30 ms idle, through frequency boost. The
 #     real competitor is a test lane, which contends for PROCESS CREATION, and
 #     MSYS serialises that.
-#   - Corroborated by a second instrument, and reported the way it came out:
-#     timing the same pattern end to end at 12 competitors gave 2574 ms, BELOW
-#     the 2728 ms count-times-cost product, so 3 s is the conservative side of
-#     two independent figures that agree.
+#
+# WHY 4 s SURVIVES A DISPUTED COUNT, which it has to, because the count is the
+# least certain input here and independent measurements of it disagree. 26 x 124
+# = 3224 ms, 28 x 124 = 3472 ms, 30 x 124 = 3720 ms, and the most pessimistic
+# reading argued for it, 32 x 124 = 3968 ms, all ceiling to the same 4 s. The
+# whole plausible range lands on one answer, so the margin does not wait on
+# settling whether the count is 26 or 32.
+#
+# WHAT THE SLACK ACTUALLY IS, stated rather than implied, because it is not
+# uniform across that range. At 26 subprocesses the 4 s margin leaves 776 ms of
+# measured slack; at 31 - what an independent re-measurement of this same path
+# produced - it leaves 156 ms; at 32 it leaves 32 ms. So 4 s is comfortable only
+# at the low end of the range, and the dedup above is what keeps the count near
+# it. Undo the dedup and the count rises by 4 with no margin left to absorb it.
+# tests/fm-session-start-hook-nesting.test.sh holds the margin to the WORST of
+# those counts rather than the one it was derived from, so shrinking the margin
+# fails there even if the optimistic count is the true one.
+#
 #   - What this does NOT claim: the per-fork cost rises with contention, so no
-#     fixed margin is safe at unbounded contention. 3 s covers the measured worst
+#     fixed margin is safe at unbounded contention. 4 s covers the measured worst
 #     case on that box; it is not a proof of sufficiency.
 #
 # THE CLAMP AND THE BANNER READ THIS ONE VARIABLE, which is a requirement and not
@@ -156,7 +186,7 @@ FM_SESSION_START_DIGEST_WRAPPERS='fm-session-start.sh fm-sessionstart-run.sh fm-
 # the number the operator is told diverge from the number in force, which is the
 # failure this margin exists to prevent.
 case "${FM_PLATFORM_UNAME_OVERRIDE:-$FM_SESSION_START_PLATFORM}" in
-  MINGW*|MSYS*|CYGWIN*) FM_SESSION_START_NESTING_MARGIN=3 ;;
+  MINGW*|MSYS*|CYGWIN*) FM_SESSION_START_NESTING_MARGIN=4 ;;
   *) FM_SESSION_START_NESTING_MARGIN=1 ;;
 esac
 
@@ -415,8 +445,18 @@ fm_session_start_cap() {  # [hook-context]
 # subprocess count it had before. The defaults are guarded instead by
 # tests/fm-session-start-hook-nesting.test.sh, which asserts every platform arm
 # nests under every registration.
-fm_session_start_resolve_budget() {  # [explicit-seconds]
-  local explicit=${1:-} fallback cap
+#
+# THE CAP MAY BE HANDED IN, and on the path bin/fm-session-start.sh actually
+# takes it always is. A caller that has already derived the cap passes it as
+# `<seconds> <source>`, or the literal `none` for a positively established
+# direct run where no cap applies; an empty second argument means "derive it
+# here". Deriving it twice is not merely wasteful, it is wasteful in the one
+# place that cannot afford it: the derivation costs a hook-context probe, a glob
+# and an awk over every registration JSON, and all of it runs in the parent
+# BEFORE the bounded child is forked, inside the very window the nesting margin
+# has to cover.
+fm_session_start_resolve_budget() {  # [explicit-seconds] [cap-spec]
+  local explicit=${1:-} cap=${2:-} fallback
   case "$explicit" in
     ''|*[!0-9]*)
       fallback=$(fm_session_start_default_budget)
@@ -430,7 +470,8 @@ fm_session_start_resolve_budget() {  # [explicit-seconds]
     printf '%s\n' "$fallback"
     return 0
   fi
-  if cap=$(fm_session_start_cap); then
+  [ -n "$cap" ] || cap=$(fm_session_start_cap) || cap=none
+  if [ "$cap" != none ]; then
     cap=${cap%% *}
     if [ "$explicit" -gt "$cap" ]; then
       printf '%s\n' "$cap"
@@ -438,6 +479,82 @@ fm_session_start_resolve_budget() {  # [explicit-seconds]
     fi
   fi
   printf '%s\n' "$explicit"
+}
+
+# The one entry point bin/fm-session-start.sh uses, and the reason the cap is
+# derived exactly once on the path where that matters.
+#
+# It ASSIGNS rather than prints, which is the whole point. The resolver above is
+# a printing function, so its caller reaches it through a command substitution -
+# and a subshell discards everything it learned, including the cap it just paid
+# four process creations to derive. The advisory then derived the same cap again
+# in the parent. Binding the result to variables instead means the derivation
+# survives its own call, so the clamp and the advisory read one cap, resolved
+# once, and cannot disagree about it.
+#
+# Sets FM_SESSION_START_BOUND to the bound in force, and FM_SESSION_START_CAP to
+# the cap spec that produced it - `none` when no cap applies, and empty when no
+# cap was needed at all because there was no explicit value to clamp. Leaving it
+# empty on the default path is deliberate: every ordinary session start then pays
+# nothing for a derivation whose only consumer is a value that was never set.
+# shellcheck disable=SC2034  # Both variables are the return values of this
+# function; bin/fm-session-start.sh reads them in the shell that calls it, which
+# is the whole reason this assigns rather than prints.
+fm_session_start_bind_budget() {  # [explicit-seconds]
+  local explicit=${1:-}
+  FM_SESSION_START_CAP=
+  case "$explicit" in
+    ''|*[!0-9]*)
+      FM_SESSION_START_BOUND=$(fm_session_start_default_budget)
+      return 0
+      ;;
+  esac
+  if [ "$((10#$explicit))" -le 0 ]; then
+    FM_SESSION_START_BOUND=$(fm_session_start_default_budget)
+    return 0
+  fi
+  FM_SESSION_START_CAP=$(fm_session_start_cap) || FM_SESSION_START_CAP=none
+  FM_SESSION_START_BOUND=$(fm_session_start_resolve_budget "$explicit" "$FM_SESSION_START_CAP")
+}
+
+# The bound a DETACHED worker must use when its window has to match the digest's.
+# bin/fm-startup-network.sh keeps offering its result for inline delivery for
+# exactly as long as the digest could still be running, so the two are one bound
+# and must now also be one RESOLUTION.
+#
+# WHY THE WORKER CANNOT RESOLVE IT ITSELF, which is the defect this closes. The
+# digest's bound is the operator's FM_SESSION_START_TIMEOUT after a clamp SCOPED
+# TO HOOK CONTEXT, and a detached worker cannot observe the context its digest ran
+# in: it is launched with stdio on /dev/null, so `[ -t 2 ]` is false there no
+# matter what, and fm_session_start_hook_context can never answer `direct` inside
+# it. Re-resolving the same variable there does not reproduce the digest's bound,
+# it reproduces the clamp. So an operator who does what the truncation banner
+# tells them - rerun from a terminal, with FM_SESSION_START_TIMEOUT raised - gets
+# a digest bounded at the value they asked for and a worker that stops offering
+# inline delivery at the ceiling, for the rest of the run, silently. The result is
+# not lost, it still surfaces as a durable wake, but it stops arriving in the
+# digest the operator is sitting in front of.
+#
+# So the digest resolves once and EXPORTS the answer as
+# FM_SESSION_START_RESOLVED_BOUND, and this reads it. One resolution, one bound,
+# equal by construction rather than by two derivations happening to agree.
+#
+# The local resolution remains as the fallback, because bin/fm-startup-network.sh
+# also runs standalone, where there is no digest to inherit from. An inherited
+# value that is not a positive integer takes that same path: a bound that cannot
+# be trusted is not a bound to prefer over one this shell can derive.
+fm_session_start_delivery_bound() {  # [explicit-seconds]
+  local inherited=${FM_SESSION_START_RESOLVED_BOUND:-}
+  case "$inherited" in
+    ''|*[!0-9]*) : ;;
+    *)
+      if [ "$((10#$inherited))" -gt 0 ]; then
+        printf '%s\n' "$((10#$inherited))"
+        return 0
+      fi
+      ;;
+  esac
+  fm_session_start_resolve_budget "${1:-}"
 }
 
 # The digest lines a clamp owes the operator. Never clamps silently: it names what
@@ -455,16 +572,22 @@ fm_session_start_resolve_budget() {  # [explicit-seconds]
 # WHERE THE CAP CAME FROM IS PART OF THE ADVICE. A cap read from the
 # registrations lets this name the exact second the harness kills at; a cap that
 # stood in for registrations this shell could not read does not, and quoting one
-# anyway would invent a deadline. So the source is asked of
-# fm_session_start_cap - the same owner the clamp used - rather than assumed.
-fm_session_start_budget_advisory() {  # <requested> <effective> [context]
-  local requested=${1:-} effective=${2:-} context=${3:-} cap capsource=none
+# anyway would invent a deadline. So the cap is taken from the caller when the
+# caller already has it - fm_session_start_bind_budget always does - and asked of
+# fm_session_start_cap, the same owner the clamp used, only when it does not.
+# Re-deriving it here would run a second hook-context probe, a second glob and a
+# second awk over every registration JSON, in the parent, before the bounded
+# child is forked; the previous version of this comment claimed the no-re-derive
+# property while it was true of the bound and false of the cap beside it.
+fm_session_start_budget_advisory() {  # <requested> <effective> [context] [cap-spec]
+  local requested=${1:-} effective=${2:-} context=${3:-} cap=${4:-} capsource=none
   case "$requested" in ''|*[!0-9]*) return 0 ;; esac
   case "$effective" in ''|*[!0-9]*|0) return 0 ;; esac
   requested=$((10#$requested))
   [ "$requested" -gt "$effective" ] || return 0
   [ -n "$context" ] || context=$(fm_session_start_hook_context)
-  cap=$(fm_session_start_cap "$context") && capsource=${cap##* }
+  [ -n "$cap" ] || cap=$(fm_session_start_cap "$context") || cap=none
+  [ "$cap" = none ] || capsource=${cap##* }
   printf '●  FM_SESSION_START_TIMEOUT=%ss was CLAMPED to %ss.\n' "$requested" "$effective"
   case "$capsource" in
     harness)

@@ -141,10 +141,14 @@ test_the_ceiling_covers_every_arm_the_resolver_can_pick() {
 # --- 2. every registered digest hook outlives that ceiling -------------------
 
 test_every_registered_digest_hook_outlives_the_startup_bound() {
-  local ceiling rel abs line timeout cmd tier
+  local floor rel abs line timeout cmd tier
   local seen=0 digest_hooks=0 digest_files=0 had_digest_here
-  ceiling=$(fm_test_max_session_start_bound) \
-    || fail "the session-start bound ceiling could not be derived"
+  # The floor is `default + margin`, per platform arm, NOT the bare maximum
+  # default. The margin is what pays for the parent's pre-fork prologue and its
+  # post-kill banner, and the harness kills the whole hook - so a registration
+  # that merely exceeds the bound still preempts the banner by up to a margin.
+  floor=$(fm_test_min_registration_floor) \
+    || fail "the minimum registration floor could not be derived, so no nesting check below means anything"
 
   while IFS= read -r rel; do
     [ -n "$rel" ] || continue
@@ -173,10 +177,11 @@ test_every_registered_digest_hook_outlives_the_startup_bound() {
       if [ "$tier" = digest ]; then
         digest_hooks=$((digest_hooks + 1))
         had_digest_here=1
-        # STRICT: equality already loses the banner, because at equal deadlines
-        # which process dies first is a race.
-        [ "$timeout" -gt "$ceiling" ] \
-          || fail "$rel kills the session-start hook after ${timeout}s while the digest may bound itself at ${ceiling}s: the harness preempts the STARTUP TRUNCATED banner, so an over-budget startup loses its wake-queue drain and supervision instructions with nothing printed"
+        # The margin is already the strict separation, so the comparison is
+        # `>=` against a floor that has it built in: at ${floor}s the bound
+        # bites first AND the parent still has its margin to print the banner in.
+        [ "$timeout" -ge "$floor" ] \
+          || fail "$rel kills the session-start hook after ${timeout}s, below the ${floor}s that the largest platform bound plus its own nesting margin needs: the harness preempts the STARTUP TRUNCATED banner mid-print, so an over-budget startup loses its wake-queue drain and supervision instructions with nothing printed"
       fi
     done < <(session_start_hooks_in "$abs")
     [ "$had_digest_here" -eq 0 ] || digest_files=$((digest_files + 1))
@@ -189,7 +194,7 @@ test_every_registered_digest_hook_outlives_the_startup_bound() {
   # out of discovery fails here instead of quietly narrowing the guard.
   [ "$digest_files" -ge 3 ] \
     || fail "only $digest_files tracked registration(s) were found to run the digest; Claude, Codex and Cursor each register one, so discovery has stopped seeing at least one of them"
-  pass "hook nesting: all $digest_hooks digest-running session-start hook(s) across $digest_files registration(s) outlive the ${ceiling}s startup bound, so firstmate's own bound always bites first"
+  pass "hook nesting: all $digest_hooks digest-running session-start hook(s) across $digest_files registration(s) clear the ${floor}s bound-plus-margin floor, so firstmate's own bound bites first AND the banner has time to print"
 }
 
 # --- 3. and so does an EXPLICIT override, which is where this got through -----
@@ -324,17 +329,33 @@ test_a_clamp_says_so_on_the_digest() {
 # them, raise FM_SESSION_START_TIMEOUT to the printed ceiling, still loses the
 # banner on MSYS.
 #
-# The measured pattern is 22 subprocesses at a worst measured 124.0 ms per fork
+# The measured pattern is 26 subprocesses at a worst measured 124.0 ms per fork
 # under contention on the target box; bin/fm-session-start-bound-lib.sh and
 # docs/verification/session-start-fork-profile.md record how both numbers were
 # taken. This suite holds the library's Windows arm to covering that product.
+#
+# The count is the CLAMPED path, not the default one, and that distinction is the
+# whole point of the number. The default Windows bound is 300 s against a ceiling
+# in the 350s, so the default path can never reach the ceiling; the only bound
+# that ever equals it is a clamped one, which additionally runs the pre-fork cap
+# derivation. An earlier version of this constant was 22 - the default path - and
+# it was too small for the path the margin actually owes.
+#
+# THE CONSTANT IS THE WORST COUNT ON RECORD, NOT THE ONE THE MARGIN WAS DERIVED
+# FROM. The margin was derived from 26; an independent re-measurement of the same
+# path with the same interposer came out at 31, and 32 was argued for. All of them
+# ceiling to the same 4 s, so the margin does not turn on which is right - but a
+# guard that assumed the smallest would pass a margin that the largest does not
+# cover, so it is held to the largest. That leaves this assertion with only 32 ms
+# of headroom, which is the honest state of it: it is a guard against the margin
+# shrinking, not evidence that 4 s is roomy.
 #
 # THE WINDOWS ARM IS DRIVEN BY SOURCING THE LIBRARY UNDER THE PLATFORM OVERRIDE,
 # not by reading its text: the margin is resolved when the file is sourced, so a
 # fresh shell with FM_PLATFORM_UNAME_OVERRIDE set is what a Git Bash session
 # actually does, and every number below comes from running the real functions
 # there.
-MEASURED_PROLOGUE_AND_BANNER_SUBPROCESSES=22
+MEASURED_CLAMPED_PATH_SUBPROCESSES=32
 MEASURED_WORST_FORK_MS=124
 
 # Run <snippet> with bin/fm-session-start-bound-lib.sh sourced in a fresh shell
@@ -351,7 +372,7 @@ on_platform() {  # <uname-s> <shell-snippet>
 # shellcheck disable=SC2016
 READ_MARGIN='printf "%s\n" "$FM_SESSION_START_NESTING_MARGIN"'
 
-test_the_nesting_margin_covers_the_windows_prologue_and_banner() {
+test_the_nesting_margin_covers_the_windows_clamped_path() {
   local margin portable owed
 
   margin=$(on_platform MINGW64_NT-10.0-26200 "$READ_MARGIN")
@@ -363,15 +384,15 @@ test_the_nesting_margin_covers_the_windows_prologue_and_banner() {
   # parent does outside the bounded child. A margin sized for the race alone does
   # not, and this is the assertion that says so in milliseconds rather than in
   # prose.
-  owed=$((MEASURED_PROLOGUE_AND_BANNER_SUBPROCESSES * MEASURED_WORST_FORK_MS))
+  owed=$((MEASURED_CLAMPED_PATH_SUBPROCESSES * MEASURED_WORST_FORK_MS))
   [ "$((margin * 1000))" -ge "$owed" ] \
-    || fail "the Windows nesting margin is ${margin}s, below the ${owed}ms the measured ${MEASURED_PROLOGUE_AND_BANNER_SUBPROCESSES}-subprocess prologue and banner cost at ${MEASURED_WORST_FORK_MS}ms per fork: the harness kills the parent mid-banner, so a truncation prints no stage and no reconcile list"
+    || fail "the Windows nesting margin is ${margin}s, below the ${owed}ms the measured ${MEASURED_CLAMPED_PATH_SUBPROCESSES}-subprocess clamped path costs at ${MEASURED_WORST_FORK_MS}ms per fork: the harness kills the parent mid-banner, so a truncation prints no stage and no reconcile list"
   # The portable arm is the strict-inequality margin and stays that: forks are
   # about 1 ms here, so the same product is well under a second.
   [ "$portable" -ge 1 ] \
     || fail "the portable nesting margin must stay at least 1s: at equal deadlines which process dies first is a race"
 
-  pass "hook nesting: the Windows margin ${margin}s covers the measured ${owed}ms of prologue and banner the bound itself does not, and the portable arm keeps its ${portable}s strict-inequality margin"
+  pass "hook nesting: the Windows margin ${margin}s covers the measured ${owed}ms of clamped-path prologue, cap derivation and banner the bound itself does not, and the portable arm keeps its ${portable}s strict-inequality margin"
 }
 
 # The clamp and the operator-facing advice must be reading the SAME margin. If
@@ -418,9 +439,68 @@ test_the_clamp_and_the_banner_agree_on_the_margin() {
   pass "hook nesting: the clamp and every banner line on the Windows arm go through the one ${margin}s margin, so the ${cap}s bound and the ${harness}s kill deadline they print cannot disagree"
 }
 
+# The clamped-path invariant, stated as the library defines it: the ceiling the
+# clamp hands an operator, PLUS the margin, must never exceed the shortest
+# registration. That is what makes a clamped bound survivable - the digest
+# truncates at the ceiling and the parent still has the margin left to print the
+# banner before the harness kills the hook.
+#
+# It is asserted on EVERY platform arm, not just the host's, because the margin
+# is per platform and the arm with the largest margin is the one with the least
+# room. The registration side is read with jq, independently of the library's own
+# awk scanner, so the two implementations have to agree about which deadline
+# bounds the operator.
+test_a_clamped_bound_plus_its_margin_never_exceeds_the_registration() {
+  local harness plat margin cap checked=0
+  harness=$(min_registered_digest_timeout) \
+    || fail "no digest-tier session-start timeout could be read at all"
+
+  for plat in $FM_TEST_SESSION_START_PLATFORMS; do
+    margin=$(fm_test_session_start_margin "$plat") \
+      || fail "no nesting margin could be resolved for '$plat'"
+    cap=$(on_platform "$plat" 'fm_session_start_hook_ceiling') \
+      || fail "no ceiling could be derived on '$plat', so an explicit bound there is not clamped at all"
+    case "$cap" in ''|*[!0-9]*|0) fail "the ceiling on '$plat' must be a positive integer, got '$cap'" ;; esac
+    # THE GUARD. Not `cap < harness`, which a one-second margin would satisfy
+    # while losing the banner: the margin has to still be there after the bound
+    # is spent.
+    [ "$((cap + margin))" -le "$harness" ] \
+      || fail "on '$plat' a clamped bound of ${cap}s plus its ${margin}s margin is $((cap + margin))s against the ${harness}s shortest registration: an operator who follows the banner's own advice to the printed ceiling has the harness kill the parent mid-banner"
+    # And the clamp must really land there, or the invariant is about a number
+    # nothing uses.
+    [ "$(on_platform "$plat" "fm_session_start_resolve_budget $((harness * 10))")" -eq "$cap" ] \
+      || fail "on '$plat' an over-ceiling override did not resolve to the ${cap}s ceiling the assertion above checked"
+    checked=$((checked + 1))
+  done
+
+  [ "$checked" -gt 0 ] \
+    || fail "no platform arm was checked, so this case verified nothing"
+  pass "hook nesting: on all $checked platform arm(s) the clamped bound plus its own margin still fits inside the ${harness}s shortest registration"
+}
+
+# Anti-vacuity for the floor the section-2 guard now uses. If it ever degenerates
+# back to the bare maximum default budget, section 2 silently returns to the
+# weaker comparison it had before - green against a registration that preempts
+# the banner by up to a margin.
+test_the_registration_floor_includes_the_margin_it_is_named_for() {
+  local floor max plat margin widest=0
+  floor=$(fm_test_min_registration_floor) || fail "the registration floor could not be derived"
+  max=$(fm_test_max_session_start_bound) || fail "the maximum default bound could not be derived"
+  for plat in $FM_TEST_SESSION_START_PLATFORMS; do
+    margin=$(fm_test_session_start_margin "$plat") || fail "no margin for '$plat'"
+    [ "$margin" -le "$widest" ] || widest=$margin
+  done
+  [ "$widest" -gt 0 ] || fail "no platform arm declared a positive nesting margin"
+  [ "$floor" -ge "$((max + 1))" ] \
+    || fail "the ${floor}s registration floor does not exceed the ${max}s maximum default bound, so it carries no margin at all and section 2 is back to the weaker check"
+  pass "hook nesting: the ${floor}s registration floor is the ${max}s largest default bound plus a real margin (widest arm ${widest}s), not the bound alone"
+}
+
 test_the_ceiling_covers_every_arm_the_resolver_can_pick
+test_the_registration_floor_includes_the_margin_it_is_named_for
 test_every_registered_digest_hook_outlives_the_startup_bound
+test_a_clamped_bound_plus_its_margin_never_exceeds_the_registration
 test_an_explicit_override_is_clamped_below_the_shortest_registration
 test_a_clamp_says_so_on_the_digest
-test_the_nesting_margin_covers_the_windows_prologue_and_banner
+test_the_nesting_margin_covers_the_windows_clamped_path
 test_the_clamp_and_the_banner_agree_on_the_margin

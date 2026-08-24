@@ -320,6 +320,59 @@ test_an_unreadable_registration_set_caps_rather_than_releasing() {
   pass "fm_session_start_resolve_budget: an unreadable registration set falls back to the ${windows}s platform default instead of releasing the bound, and the advisory invents no harness deadline"
 }
 
+# --- 2d. the detached worker's window is the digest's bound, not its own ------
+#
+# bin/fm-startup-network.sh keeps offering its result for inline delivery for
+# exactly as long as the digest could still be running. It is a DETACHED worker
+# with stdio on /dev/null, so `[ -t 2 ]` is false inside it and its hook context
+# can never be `direct` - which means re-resolving FM_SESSION_START_TIMEOUT there
+# reproduces the CLAMP rather than the digest's bound. On a terminal rerun above
+# the ceiling the digest gets the value asked for and the worker would stop
+# delivering inline at the ceiling, silently, for the rest of the run.
+#
+# The worker's own context is reproduced here rather than described: every resolve
+# below runs with no hook marker and with stderr redirected away from any
+# terminal, which is exactly what `undetermined` means and exactly what the worker
+# sees.
+test_the_delivery_bound_follows_the_digest_and_not_the_workers_own_context() {
+  local cap raised worker digest
+  cap=$(fm_session_start_hook_ceiling) \
+    || fail "no harness ceiling could be derived, so there is no clamp for the worker to diverge by"
+  raised=$((cap * 2))
+
+  # THE GUARD. The digest resolved ${raised}s and exported it; the worker must
+  # use that, not the ${cap}s its own context would re-derive.
+  worker=$(FM_SESSION_START_UNDER_HOOK='' FM_SESSION_START_RESOLVED_BOUND="$raised" \
+    fm_session_start_delivery_bound "$raised" 2>/dev/null)
+  [ "$worker" -eq "$raised" ] \
+    || fail "the detached worker resolved ${worker}s while the digest is bounded at ${raised}s: from ${worker}s to ${raised}s the digest is still running and the worker has stopped offering inline delivery, so the result arrives as a durable wake instead of in the digest the operator is waiting on"
+
+  # And the two really would have disagreed without it, or the case above proves
+  # nothing: the worker's own context clamps.
+  digest=$(FM_SESSION_START_UNDER_HOOK='' fm_session_start_resolve_budget "$raised" 2>/dev/null)
+  [ "$digest" -eq "$cap" ] \
+    || fail "the worker's own context was expected to clamp ${raised}s to ${cap}s, got ${digest}s, so this case is not reproducing the divergence it guards"
+
+  # A worker running standalone has no digest to inherit from and must still
+  # resolve a usable bound rather than none.
+  worker=$(FM_SESSION_START_UNDER_HOOK='' FM_SESSION_START_RESOLVED_BOUND='' \
+    fm_session_start_delivery_bound 45 2>/dev/null)
+  [ "$worker" -eq 45 ] \
+    || fail "with nothing inherited the worker must resolve its own bound, got ${worker}s"
+
+  # An inherited value that is not a usable bound is not preferred over one this
+  # shell can derive: `timeout 0` and every zero-padded spelling of it disable the
+  # deadline outright.
+  local bad
+  for bad in 0 00 000 abc -5 ' '; do
+    worker=$(FM_SESSION_START_UNDER_HOOK='' FM_SESSION_START_RESOLVED_BOUND="$bad" \
+      fm_session_start_delivery_bound 45 2>/dev/null)
+    [ "$worker" -eq 45 ] \
+      || fail "an unusable inherited bound '$bad' must fall back to a real resolution, got ${worker}s"
+  done
+  pass "fm_session_start_delivery_bound: a detached worker uses the ${raised}s bound the digest resolved rather than the ${cap}s its own context would clamp to"
+}
+
 # --- 3. the stage marks must not distort what they measure -------------------
 
 test_stage_mark_spawns_no_subprocess() {
@@ -459,6 +512,36 @@ test_truncated_startup_names_the_stage_and_attributes_its_time() {
   printf '%s\n' "$out" | grep -qE "to at most ${ceiling}s" \
     || fail "the banner told the operator to raise the bound without naming the ${ceiling}s ceiling the harness enforces, got: $out"
   pass "fm-session-start.sh: a truncated startup names the stage it died in, attributes its elapsed time per stage, and caps its own remedy at the ${ceiling}s harness ceiling"
+}
+
+# The worker only has a digest bound to inherit if the parent actually hands it
+# over, so the export is asserted through the real script rather than assumed.
+#
+# WHAT IS OBSERVED. The parent forks its bounded child as
+# `env <assignments> fm-session-start.sh`, and `env` is resolved through PATH, so
+# a stub records the exact assignments the parent asked for before exec'ing the
+# real one. That argv IS the handover mechanism; nothing here reads the script.
+test_the_parent_hands_its_resolved_bound_to_the_bounded_child() {
+  local world root home fakebin envlog out
+  world=$(new_world bound-handover) || fail "could not build a world"
+  root=${world%%|*}; world=${world#*|}
+  home=${world%%|*}; fakebin=${world#*|}
+  make_fake_toolchain "$fakebin"
+  envlog="$home/env.argv"
+  : > "$envlog"
+  # shellcheck disable=SC2016  # The stub body is deferred; it expands when the stub runs.
+  printf '#!/bin/sh\nprintf "%%s\\n" "$@" >> "$FM_TEST_ENV_LOG"\nfor c in /usr/bin/env /bin/env; do [ -x "$c" ] && exec "$c" "$@"; done\nexit 0\n' > "$fakebin/env"
+  chmod +x "$fakebin/env"
+  out=$(run_session_start "$home" "$root" "$fakebin" \
+    FM_TEST_ENV_LOG="$envlog" FM_SESSION_START_TIMEOUT=1) \
+    || fail "session start must still exit 0 when it truncates"
+  assert_contains "$out" 'HIT ITS 1s RUNTIME BOUND' \
+    'the fixture must run bounded at the value it asked for, or there is no bound to hand over'
+  # THE GUARD. The bound in force is 1s, so that is the bound the child - and
+  # through it the detached network worker - must be told about.
+  grep -qx -- 'FM_SESSION_START_RESOLVED_BOUND=1' "$envlog" \
+    || fail "the parent forked its bounded child without handing over the 1s bound it resolved, so the detached network worker re-derives its inline-delivery window from its own hook context and can silently stop delivering while the digest is still running; env argv seen: $(tr '\n' ' ' < "$envlog")"
+  pass "fm-session-start.sh: the bound the parent resolved is handed to the bounded child, which is what the detached network worker inherits it through"
 }
 
 # When mktemp fails there is no breadcrumb file, and the path falls back to
@@ -627,11 +710,13 @@ test_unusable_explicit_bound_falls_back_to_the_platform_default
 test_a_zero_padded_bound_still_produces_a_deadline_that_bites
 test_the_clamp_follows_hook_context_and_undetermined_clamps
 test_an_unreadable_registration_set_caps_rather_than_releasing
+test_the_delivery_bound_follows_the_digest_and_not_the_workers_own_context
 test_stage_mark_spawns_no_subprocess
 test_stage_mark_is_append_only_and_survives_an_unwritable_target
 test_render_attributes_each_stage_and_flags_the_unfinished_one
 test_render_is_quiet_when_it_has_nothing_to_say
 test_truncated_startup_names_the_stage_and_attributes_its_time
 test_a_failed_breadcrumb_mktemp_never_hands_dev_null_to_rm
+test_the_parent_hands_its_resolved_bound_to_the_bounded_child
 test_the_remedy_stops_advising_a_knob_that_is_already_pinned
 test_every_stage_prints_its_header_before_the_stage_runs
