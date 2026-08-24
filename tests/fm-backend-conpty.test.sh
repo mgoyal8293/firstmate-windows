@@ -875,13 +875,12 @@ exit
         });
       ' "$LIVENESS" "$2"
   }
-  fg_script='%s
-printf %%s%%s FMFG RUN
+  fg_script_tail='printf %s%s FMFG RUN
 exit
 exit
 '
   # The control: a healthy nested shell, marking its own command start.
-  healthy=$(state_at "$(printf "$fg_script" 'bash -i')" FMFGRUN)
+  healthy=$(state_at "$(printf '%s\n%s' 'bash -i' "$fg_script_tail")" FMFGRUN)
   case "$healthy" in
     running\|*) ;;
     *) fail "a healthy nested shell running a command read '$healthy', not running" ;;
@@ -892,7 +891,7 @@ exit
   # the outer shell's `C` as the last word rather than claiming a prompt.
   HC="$CASE/home-clobber"; mkdir -p "$HC"
   printf "PS0='OPERATOR'\n" > "$HC/.bashrc"
-  ps0_gone=$(state_at "$(printf "$fg_script" 'bash -i')" FMFGRUN "$HC")
+  ps0_gone=$(state_at "$(printf '%s\n%s' 'bash -i' "$fg_script_tail")" FMFGRUN "$HC")
   case "$ps0_gone" in
     running\|*) ;;
     *) fail "a nested shell whose own rc file assigned PS0 read '$ps0_gone' while a command held the foreground; at-prompt here is a false dead on a live agent" ;;

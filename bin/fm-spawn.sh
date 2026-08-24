@@ -752,7 +752,7 @@ parse_orca_worktree_result() {
 # release cannot be made this prints the exact one-line command instead of
 # failing.
 conpty_release_spawn_lease() {  # <holder>
-  local holder=$1 path= probe= pool_read= holder_row=
+  local holder=$1 path='' probe='' pool_read='' holder_row=''
   [ -n "$holder" ] || return 0
   if command -v treehouse >/dev/null 2>&1 && command -v node >/dev/null 2>&1; then
     probe=$( cd "${PROJ_ABS:-.}" 2>/dev/null && treehouse status --json 2>/dev/null | node -e '
