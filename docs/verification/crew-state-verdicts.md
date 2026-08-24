@@ -300,7 +300,7 @@ It also reaches the ordinary PRE-VALIDATION moment: a crew appends `done: implem
 
 The verdict for that moment was RULED to stay `unknown`, and both alternatives were rejected on the record.
 Not `working`, because `crew_absorb_class` in `bin/fm-classify-lib.sh` absorbs `working` from `run-step` or `pane`, so that word would suppress the very signal firstmate needs and let the task disappear from supervision - the worst failure in this whole set.
-Not `done`, because this repo defines a ship's done as "PR <url> checks green", so a pre-validation done is a DIFFERENT EVENT WEARING THE SAME WORD, which is the confusion this branch exists to end.
+Not `done`, because a ship task in this repo's remote-backed modes defines its done as "PR <url> checks green", so a pre-validation done is a DIFFERENT EVENT WEARING THE SAME WORD, which is the confusion this branch exists to end.
 The crew has claimed completion and nothing has been verified, which is exactly what `unknown` says.
 
 What did change is the DETAIL, and only the detail.
@@ -312,6 +312,14 @@ A ship task with no PR is TWO situations - the self-report above, and a run that
 So `fm_crew_no_pr_phrase` now takes the evidence level that already distinguishes them: `reported` is the self-report with no run behind it, and every other token in the vocabulary comes from a run.
 `fm_crew_forge_suffix` carries that level for the one answer whose wording depends on which moment is being described, and every caller already held it.
 Acceptance criterion 1 requires the two read differently, and the matrix row above falsifies exactly that.
+
+"Remote-backed modes" above is scoped deliberately, and what that scoping leaves OPEN is recorded here rather than left to be rediscovered.
+`fm_crew_no_pr_class` splits an absent PR on the RECORDED KIND alone, and nothing on that path reads the task's delivery mode, but a `mode=local-only` ship task is owed no PR by construction: `bin/fm-brief.sh`'s delivery contract for that mode is "no remote, no PR, no pipeline", and its done is a commit on the crew's own branch, landed later by `bin/fm-merge-local.sh`.
+Such a task therefore reaches the `no-landing` arm and reads `unknown` on a genuine completion, which places it with the ship's unanswered landing question when by construction it belongs with the scout's exemption.
+Two consequences follow that no wording here resolves.
+`bin/fm-inactive-reconcile.sh` accepts only `state: done` or `state: failed`, so a long-inactive `local-only` crew that genuinely finished is never reconciled and never produces its terminal receipt.
+And the end-to-end Windows run recorded in [`windows.md`](../windows.md) "Run end to end on Windows" observed `state: done · source: status-log` for exactly that shape, so that row PREDATES this change and is not a claim about current behaviour.
+Settling it needs a code answer, not a doc one - either a mode-keyed arm in `fm_crew_no_pr_class`, reading the `mode=` field `bin/fm-spawn.sh` already writes into `state/<id>.meta` beside `kind`, or an accepted residual with the reconcile accept list corrected to match.
 
 This also changed what the test fixtures must say.
 A case that means to assert `done` about ci evidence now has to answer the forge question explicitly, or it is really asserting the forge gate; `forge_answers_open` in `tests/fm-crew-state.test.sh` exists for that, and its comment records the coupling.
