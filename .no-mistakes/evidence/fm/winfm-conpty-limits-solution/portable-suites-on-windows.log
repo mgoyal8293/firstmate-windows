@@ -1,0 +1,138 @@
+FM_TEST_BEGIN 2026-08-24T21:21:16Z tests/fm-backend-conpty.test.sh family=conpty expected_gate_skip=none
+ok - session ids are scoped by firstmate home (the pipe namespace is machine-global)
+ok - target parsing accepts one atom and refuses anything that could address another pipe
+ok - host gate: running ON Windows, refusal path not applicable
+ok - key vocabulary normalizes the spellings callers vary on and passes the rest through
+ok - agent_state passes the daemon's full recovery vocabulary through unchanged
+ok - an unrecognized state word degrades to unreadable, never to a recovery-licensing verdict
+ok - with no state answer the durable record decides even though the client exits nonzero, and a contradictory live pipe stays unreadable
+ok - a malformed target is unreadable, never dead
+ok - the three-state view collapses only authoritative absence to dead
+ok - busy state is a direct output-age measurement with an explicit unknown
+ok - capability descriptor declares styled + true cursor (the first non-tmux backend able to)
+ok - composer verdicts come from the shared classifier, cursor-anchored
+ok - an unusable cursor row refuses loudly instead of classifying the wrong shape
+ok - the composer is read in ONE client call, so the row and screen cannot straddle a redraw
+ok - create_task refuses an existing live session before spawning anything
+ok - create_task spawns a home-scoped shell session and confirms it answers before reporting success
+ok - create_task refuses to arm a CR-bearing rcfile and spawns the session unarmed instead
+ok - create_task does not offer --rcfile to a pinned non-bash session shell
+ok - literal text is delivered by file, so no payload is exposed to Windows command-line quoting
+ok - send_key normalizes then forwards
+ok - capture forwards a numeric scrollback depth and sanitizes anything else
+ok - list_live is scoped to this firstmate home and confirmed by a live ping, never by a stored pid
+ok - a leftover session directory with no answering pipe is not reported live
+ok - kill is best-effort and never forwards a target it could not parse
+ok - a well-formed conpty endpoint validates and reports its backend and target
+ok - a window that disagrees with conpty_session is refused, preserving task state
+ok - an endpoint bound to another task is refused
+ok - a conpty record with no session identifier is refused
+ok - conpty is registered as a known, spawn-capable, explicitly-selected backend needing no JSON parser
+ok - conpty liveness: the shell's prompt mark settles the foreground, and silence falls back instead of inferring dead
+ok - conpty liveness: the marker tracker reads split marks, both terminators, ignores untagged ones, and resynchronises rather than letting a stale OSC swallow a mark
+ok - conpty liveness: the fallback screen reading survives a sparse viewport and a prompt left in scrollback
+ok - conpty liveness: a session whose process list cannot be read still reports its prompt-mark chain, so a transient poll failure is a retry rather than a dead end
+ok - conpty shell integration: the armed shell marks both command start and the return to its prompt
+ok - conpty shell integration: the command-start mark writes no stray control bytes onto the pty
+ok - conpty shell integration: a nested shell continues the mark chain, and stops marking when the carriers are withheld
+ok - conpty shell integration: a shell that cannot mark a running command marks no prompts either, so an inherited prompt hook can never report a live agent as stopped
+ok - conpty shell integration: SHELL is repaired unless a real executable image stands behind it, so treehouse opens a shell it can actually start
+ok - conpty shell integration: each carrier is armed idempotently, so a re-source heals a wiped one and duplicates nothing
+ok - conpty shell integration: an operator's array-form prompt hooks survive arming without the trailing one running twice
+ok - conpty shell integration: an operator's inline comment in one array hook does not swallow the hooks after it
+ok - conpty shell integration: an operator's pre-set PS0 survives arming, and re-sourcing adds no second mark
+ok - conpty shell integration: an operator's own prompt hook still reads the command's exit status through the mark hook, on both the zero and the non-zero arm
+ok - conpty adapter unit tests complete
+FM_TEST_END 2026-08-24T21:22:23Z tests/fm-backend-conpty.test.sh exit=0 duration_ms=66598 gate_skip=false
+FM_TEST_BEGIN 2026-08-24T21:22:24Z tests/fm-control.test.sh family=backend-dispatch expected_gate_skip=none
+warning: in the working copy of 'README.md', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'README.md', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'README.md', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'README.md', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'README.md', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'README.md', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'README.md', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'README.md', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'README.md', LF will be replaced by CRLF the next time Git touches it
+ok - fm-control exit: every verified harness gets its own verified exit command
+warning: in the working copy of 'README.md', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'README.md', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'README.md', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'README.md', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'README.md', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'README.md', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'README.md', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'README.md', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'README.md', LF will be replaced by CRLF the next time Git touches it
+ok - fm-control interrupt: every verified harness gets its own verified key and repeat count
+warning: in the working copy of 'README.md', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'README.md', LF will be replaced by CRLF the next time Git touches it
+ok - fm-control interrupt: opencode needs a double Escape, claude a single one
+warning: in the working copy of 'README.md', LF will be replaced by CRLF the next time Git touches it
+ok - fm-control: a harness with no verified control mechanics is refused, not guessed at
+ok - fm-control-lib: a recorded harness resolves to its verified adapter without guessing
+warning: in the working copy of 'README.md', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'README.md', LF will be replaced by CRLF the next time Git touches it
+ok - fm-control: prefixed recorded harnesses reach interrupt and exit mechanics
+ok - fm-control-lib: the backend key matrix matches each adapter's real send-key surface
+ok - fm-control-lib: adapter capability is per task kind, not per adapter alone
+warning: in the working copy of 'README.md', LF will be replaced by CRLF the next time Git touches it
+ok - fm-control interrupt: a backend that cannot deliver the harness's key refuses instead of sending another
+warning: in the working copy of 'README.md', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'README.md', LF will be replaced by CRLF the next time Git touches it
+ok - fm-control: a backend that cannot prove an agent stopped refuses exit and relaunch
+ok - fm-control-lib: stop-proving verbs are gated on exactly the backends fm_backend_agent_state really classifies
+warning: in the working copy of 'README.md', LF will be replaced by CRLF the next time Git touches it
+ok - fm-control: a legacy window label is refused and the exact task id is named
+warning: in the working copy of 'README.md', LF will be replaced by CRLF the next time Git touches it
+ok - fm-control: an explicit backend endpoint is never a control target
+warning: in the working copy of 'README.md', LF will be replaced by CRLF the next time Git touches it
+ok - fm-control: an unrecorded task id is refused
+warning: in the working copy of 'README.md', LF will be replaced by CRLF the next time Git touches it
+ok - fm-control: a record whose endpoint identity names another task is refused
+warning: in the working copy of 'README.md', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'README.md', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'README.md', LF will be replaced by CRLF the next time Git touches it
+ok - fm-control: a remotely placed secondmate is refused by placement, not by a metadata complaint
+warning: in the working copy of 'README.md', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'README.md', LF will be replaced by CRLF the next time Git touches it
+ok - fm-control: interrupt and exit lock before task-state resolution
+warning: in the working copy of 'README.md', LF will be replaced by CRLF the next time Git touches it
+ok - fm-control: the verb list is closed - no raw keys, arbitrary text, or clear verb
+warning: in the working copy of 'README.md', LF will be replaced by CRLF the next time Git touches it
+ok - fm-control: resume is refused with the determinism reason and the alternative
+warning: in the working copy of 'README.md', LF will be replaced by CRLF the next time Git touches it
+ok - fm-control: profile and note flags belong to relaunch only
+warning: in the working copy of 'README.md', LF will be replaced by CRLF the next time Git touches it
+ok - fm-control exit: an already-stopped agent is idempotent success with no bytes sent
+warning: in the working copy of 'README.md', LF will be replaced by CRLF the next time Git touches it
+ok - fm-control exit: a vanished endpoint refuses instead of silently succeeding
+warning: in the working copy of 'README.md', LF will be replaced by CRLF the next time Git touches it
+ok - fm-control interrupt: refuses when no agent is running rather than keying a shell
+warning: in the working copy of 'README.md', LF will be replaced by CRLF the next time Git touches it
+ok - fm-control exit: an endpoint whose process cannot be attributed refuses
+warning: in the working copy of 'README.md', LF will be replaced by CRLF the next time Git touches it
+ok - fm-control exit: a busy agent receives interrupt delivery before the exit command
+warning: in the working copy of 'README.md', LF will be replaced by CRLF the next time Git touches it
+ok - fm-control exit: an idle agent goes straight to its exit command
+warning: in the working copy of 'README.md', LF will be replaced by CRLF the next time Git touches it
+ok - fm-control interrupt: unconfirmed delivery preserves observed busy state
+warning: in the working copy of 'README.md', LF will be replaced by CRLF the next time Git touches it
+not ok - the result should report muse's cancelled terminal acknowledgement (missing: 'verified=agent-alive cancel=confirmed')
+--- output ---
+interrupt-delivered t1 harness=muse backend=tmux verified=agent-alive cancel=unconfirmed
+FM_TEST_END 2026-08-24T21:34:43Z tests/fm-control.test.sh exit=1 duration_ms=739166 gate_skip=false
+FM_TEST_BEGIN 2026-08-24T21:34:43Z tests/fm-spawn-worktree-settle.test.sh family=backend-dispatch expected_gate_skip=none
+warning: in the working copy of 'README.md', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'README.md', LF will be replaced by CRLF the next time Git touches it
+ok - a single transient stale pane_current_path read is not accepted as the worktree
+warning: in the working copy of 'README.md', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'README.md', LF will be replaced by CRLF the next time Git touches it
+not ok - already-settled pane took 9s to confirm - expected close to the single inter-poll sleep
+FM_TEST_END 2026-08-24T21:35:07Z tests/fm-spawn-worktree-settle.test.sh exit=1 duration_ms=23222 gate_skip=false
+FM_TEST_SUMMARY total=3 failed=2 skipped_gate=0 duration_ms=830645
+FM_TEST_SUMMARY_FAMILY family=backend-dispatch count=2 duration_ms=762388 failed=2
+FM_TEST_SUMMARY_FAMILY family=conpty count=1 duration_ms=66598 failed=0
+FM_TEST_SLOWEST rank=1 script=tests/fm-control.test.sh duration_ms=739166
+FM_TEST_SLOWEST rank=2 script=tests/fm-backend-conpty.test.sh duration_ms=66598
+FM_TEST_SLOWEST rank=3 script=tests/fm-spawn-worktree-settle.test.sh duration_ms=23222

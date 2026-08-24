@@ -1,0 +1,173 @@
+warning: in the working copy of 'README.md', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'treehouse.toml', LF will be replaced by CRLF the next time Git touches it
+=== 1. SPAWN a real conpty task, real claude harness, real treehouse pool ===
+  spawned ctlprobeh harness=claude kind=ship mode=local-only yolo=off window=fm-firstmate-542f3d48-ctlprobeh worktree=/tmp/fm-e2e/lab/pool/.treehouse/scratch-project-a1365c/1/scratch-project
+  stderr: notice: ctlprobeh ships mode=local-only while the standing posture for scratch-project is no-mistakes - less rigor than the captain's standing posture; proceed only on a current explicit captain instruction or an intake judgment you can state
+  spawn-exit=0
+--- state/ctlprobeh.meta ---
+  window=fm-firstmate-542f3d48-ctlprobeh
+  endpoint_task_id=ctlprobeh
+  worktree=/tmp/fm-e2e/lab/pool/.treehouse/scratch-project-a1365c/1/scratch-project
+  project=/tmp/fm-e2e/lab/scratch-project
+  harness=claude
+  kind=ship
+  mode=local-only
+  yolo=off
+  tasktmp=/tmp/fm-ctlprobeh
+  model=default
+  effort=default
+  busy_gen=g1787606150.11753.31071
+  spawn_gen=s1787606151.11439.17725
+  backend=conpty
+  conpty_session=fm-firstmate-542f3d48-ctlprobeh
+  session=fm-firstmate-542f3d48-ctlprobeh
+  leased worktree=/tmp/fm-e2e/lab/pool/.treehouse/scratch-project-a1365c/1/scratch-project
+--- treehouse pool after spawn ---
+  1     leased       ~\AppData\Local\Temp\fm-e2e\lab\pool\.treehouse\scratch-project-a1365c\1\scratch-project  (held by firstmate-ctlprobeh)
+                     bash.exe (4480), claude.exe (16612), sh.exe (43548)
+
+=== 1b. one-time folder-trust dialog (a throwaway worktree path this
+        machine's claude has never seen; an operator answers it once) ===
+
+=== 2. wait for the real agent to hold the foreground ===
+  [agent running]
+        state       = alive
+        why         = harness process claude.exe and a foreground command running
+        prompt      = running  (last OSC 133 mark: C, marks seen: 12)
+        console list= [{"pid":45968,"name":"","startTicks":"0","identityValidated":false},{"pid":16612,"name":"claude.exe","startTicks":"639232227565203132","identityValidated":true},{"pid":43548,"name":"sh.exe","startTicks":"639232227563488073","identityValidated":true},{"pid":4480,"name":"bash.exe","startTicks":"639232227419381081","identityValidated":true},{"pid":23820,"name":"bash.exe","startTicks":"639232227419053646","identityValidated":true}]
+
+--- state samples while the agent works (1s apart) ---
+  t+01s state=alive
+  t+02s state=alive
+  t+03s state=alive
+  t+04s state=alive
+  t+05s state=alive
+  t+06s state=alive
+  t+07s state=alive
+  t+08s state=alive
+  t+09s state=alive
+  t+10s state=alive
+--- session screen just before interrupt ---
+    | 
+    | ╭─── Claude Code v2.1.220 ─────────────────────────────────────────────────────────────────────────────────────────────╮
+    | │                                                    │ Tips for getting started                                        │
+    | │             Welcome back Munish Goyal!             │ Run /init to create a CLAUDE.md file with instructions for Cla… │
+    | │                                                    │ ─────────────────────────────────────────────────────────────── │
+    | │                       ▐▛███▜▌                      │ What's new                                                      │
+    | │                      ▝▜█████▛▘                     │ Fixed prompt caching for sessions using an LLM gateway or cust… │
+    | │                        ▘▘ ▝▝                       │ Added a built-in "Concise" output style: Claude leads with res… │
+    | │                                                    │ Added `ANTHROPIC_DEFAULT_MODEL` environment variable: sets the… │
+    | │    Opus 5 (1M context) · Claude Team · Addatech    │ /release-notes for more                                         │
+    | │ ~\AppData\Local\Temp\fm-e2e\lab\pool\.treehouse\s… │                                                                 │
+    | ╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
+    | 
+    | 
+    | ❯ FIRSTMATE_OP: v1 launch-brief: Delivery contract: mode=local-only                                                     
+    |                                                                                                                         
+    |   AUTOMATED CONTROL-PLANE PROBE - THIS IS NOT REAL WORK.                                                                
+    |                                                                                                                         
+    |   Do nothing at all. Do not read, write, create, edit, move or delete any file.                                         
+    |   Do not run any command. Do not use any tool.                                                                          
+    |                                                                                                                         
+    |   Reply with exactly this one line and nothing else:                                                                    
+    |                                                                                                                         
+    |   probe-agent-ready                                                                                                     
+    |                                                                                                                         
+    |   Then stop and wait. Take no further action of any kind.                                                               
+    | 
+    | ● probe-agent-ready
+    | 
+    | ✻ Crunched for 3s
+    | 
+    | 
+    | 
+    | 
+    | 
+    | 
+    | ────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+    | ❯ 
+    | ────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+    |   ⏵⏵ bypass permissions on (shift+tab to cycle) · ← for agents
+
+=== 3. bin/fm-control.sh ctlprobeh interrupt ===
+  interrupt-delivered ctlprobeh harness=claude backend=conpty verified=agent-alive cancel=unconfirmed
+  -> exit=0 in 8s
+  [after interrupt]
+        state       = alive
+        why         = harness process claude.exe and a foreground command running
+        prompt      = running  (last OSC 133 mark: C, marks seen: 12)
+        console list= [{"pid":37360,"name":"","startTicks":"0","identityValidated":false},{"pid":16612,"name":"claude.exe","startTicks":"639232227565203132","identityValidated":true},{"pid":43548,"name":"sh.exe","startTicks":"639232227563488073","identityValidated":true},{"pid":4480,"name":"bash.exe","startTicks":"639232227419381081","identityValidated":true},{"pid":23820,"name":"bash.exe","startTicks":"639232227419053646","identityValidated":true}]
+--- session screen just after interrupt ---
+    | 
+    | ╭─── Claude Code v2.1.220 ─────────────────────────────────────────────────────────────────────────────────────────────╮
+    | │                                                    │ Tips for getting started                                        │
+    | │             Welcome back Munish Goyal!             │ Run /init to create a CLAUDE.md file with instructions for Cla… │
+    | │                                                    │ ─────────────────────────────────────────────────────────────── │
+    | │                       ▐▛███▜▌                      │ What's new                                                      │
+    | │                      ▝▜█████▛▘                     │ Fixed prompt caching for sessions using an LLM gateway or cust… │
+    | │                        ▘▘ ▝▝                       │ Added a built-in "Concise" output style: Claude leads with res… │
+    | │                                                    │ Added `ANTHROPIC_DEFAULT_MODEL` environment variable: sets the… │
+    | │    Opus 5 (1M context) · Claude Team · Addatech    │ /release-notes for more                                         │
+    | │ ~\AppData\Local\Temp\fm-e2e\lab\pool\.treehouse\s… │                                                                 │
+    | ╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
+    | 
+    | 
+    | ❯ FIRSTMATE_OP: v1 launch-brief: Delivery contract: mode=local-only                                                     
+    |                                                                                                                         
+    |   AUTOMATED CONTROL-PLANE PROBE - THIS IS NOT REAL WORK.                                                                
+    |                                                                                                                         
+    |   Do nothing at all. Do not read, write, create, edit, move or delete any file.                                         
+    |   Do not run any command. Do not use any tool.                                                                          
+    |                                                                                                                         
+    |   Reply with exactly this one line and nothing else:                                                                    
+    |                                                                                                                         
+    |   probe-agent-ready                                                                                                     
+    |                                                                                                                         
+    |   Then stop and wait. Take no further action of any kind.                                                               
+    | 
+    | ● probe-agent-ready
+    | 
+    | ✻ Crunched for 3s
+    | 
+    | 
+    | 
+    | 
+    | 
+    | 
+    | ────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+    | ❯ 
+    | ────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+    |   ⏵⏵ bypass permissions on (shift+tab to cycle) · ← for agents
+
+=== 4. bin/fm-control.sh ctlprobeh exit  (the graceful stop) ===
+  stopped ctlprobeh harness=claude backend=conpty endpoint=fm-firstmate-542f3d48-ctlprobeh worktree=/tmp/fm-e2e/lab/pool/.treehouse/scratch-project-a1365c/1/scratch-project
+  -> exit=0 in 15s
+  [after exit]
+        state       = dead
+        why         = the session shell is at a prompt
+        prompt      = at-prompt  (last OSC 133 mark: B, marks seen: 15)
+        console list= [{"pid":53636,"name":"","startTicks":"0","identityValidated":false},{"pid":4480,"name":"bash.exe","startTicks":"639232227419381081","identityValidated":true},{"pid":23820,"name":"bash.exe","startTicks":"639232227419053646","identityValidated":true}]
+  endpoint health = live  (the endpoint is PRESERVED, not killed)
+  leased worktree still on disk = yes
+  uncommitted work preserved = 0 dirty path(s)
+
+=== 5. bin/fm-control.sh ctlprobeh relaunch  (full fm-spawn --relaunch path) ===
+  notice: ctlprobeh ships mode=local-only while the standing posture for scratch-project is no-mistakes - less rigor than the captain's standing posture; proceed only on a current explicit captain instruction or an intake judgment you can state
+  relaunched ctlprobeh harness=claude from=claude model=default effort=default backend=conpty endpoint=fm-firstmate-542f3d48-ctlprobeh worktree=/tmp/fm-e2e/lab/pool/.treehouse/scratch-project-a1365c/1/scratch-project
+  -> exit=0 in 26s
+  [after relaunch]
+        state       = alive
+        why         = harness process claude.exe and a foreground command running
+        prompt      = running  (last OSC 133 mark: C, marks seen: 20)
+        console list= [{"pid":4000,"name":"","startTicks":"0","identityValidated":false},{"pid":52448,"name":"claude.exe","startTicks":"639232228531172187","identityValidated":true},{"pid":45756,"name":"sh.exe","startTicks":"639232228522743578","identityValidated":true},{"pid":4480,"name":"bash.exe","startTicks":"639232227419381081","identityValidated":true},{"pid":23820,"name":"bash.exe","startTicks":"639232227419053646","identityValidated":true}]
+
+=== 6. stop the replacement, then clean the lab up ===
+  stopped ctlprobeh harness=claude backend=conpty endpoint=fm-firstmate-542f3d48-ctlprobeh worktree=/tmp/fm-e2e/lab/pool/.treehouse/scratch-project-a1365c/1/scratch-project
+  [final]
+        state       = dead
+        why         = the session shell is at a prompt
+        prompt      = at-prompt  (last OSC 133 mark: B, marks seen: 23)
+        console list= [{"pid":29672,"name":"","startTicks":"0","identityValidated":false},{"pid":4480,"name":"bash.exe","startTicks":"639232227419381081","identityValidated":true},{"pid":23820,"name":"bash.exe","startTicks":"639232227419053646","identityValidated":true}]
+--- pool after return ---
+  1     available    ~\AppData\Local\Temp\fm-e2e\lab\pool\.treehouse\scratch-project-a1365c\1\scratch-project
+  cleanup done

@@ -1,0 +1,90 @@
+FM_TEST_BEGIN 2026-08-24T21:36:09Z tests/fm-spawn-worktree-settle.test.sh family=backend-dispatch expected_gate_skip=none
+warning: in the working copy of 'README.md', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'README.md', LF will be replaced by CRLF the next time Git touches it
+ok - a single transient stale pane_current_path read is not accepted as the worktree
+warning: in the working copy of 'README.md', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'README.md', LF will be replaced by CRLF the next time Git touches it
+not ok - already-settled pane took 13s to confirm - expected close to the single inter-poll sleep
+FM_TEST_END 2026-08-24T21:36:42Z tests/fm-spawn-worktree-settle.test.sh exit=1 duration_ms=32913 gate_skip=false
+FM_TEST_BEGIN 2026-08-24T21:36:42Z tests/fm-control.test.sh family=backend-dispatch expected_gate_skip=none
+warning: in the working copy of 'README.md', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'README.md', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'README.md', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'README.md', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'README.md', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'README.md', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'README.md', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'README.md', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'README.md', LF will be replaced by CRLF the next time Git touches it
+ok - fm-control exit: every verified harness gets its own verified exit command
+warning: in the working copy of 'README.md', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'README.md', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'README.md', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'README.md', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'README.md', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'README.md', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'README.md', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'README.md', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'README.md', LF will be replaced by CRLF the next time Git touches it
+ok - fm-control interrupt: every verified harness gets its own verified key and repeat count
+warning: in the working copy of 'README.md', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'README.md', LF will be replaced by CRLF the next time Git touches it
+ok - fm-control interrupt: opencode needs a double Escape, claude a single one
+warning: in the working copy of 'README.md', LF will be replaced by CRLF the next time Git touches it
+ok - fm-control: a harness with no verified control mechanics is refused, not guessed at
+ok - fm-control-lib: a recorded harness resolves to its verified adapter without guessing
+warning: in the working copy of 'README.md', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'README.md', LF will be replaced by CRLF the next time Git touches it
+ok - fm-control: prefixed recorded harnesses reach interrupt and exit mechanics
+ok - fm-control-lib: the backend key matrix matches each adapter's real send-key surface
+ok - fm-control-lib: adapter capability is per task kind, not per adapter alone
+warning: in the working copy of 'README.md', LF will be replaced by CRLF the next time Git touches it
+ok - fm-control interrupt: a backend that cannot deliver the harness's key refuses instead of sending another
+warning: in the working copy of 'README.md', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'README.md', LF will be replaced by CRLF the next time Git touches it
+ok - fm-control: a backend that cannot prove an agent stopped refuses exit and relaunch
+ok - fm-control-lib: stop-proving verbs are gated on exactly the backends fm_backend_agent_state really classifies
+warning: in the working copy of 'README.md', LF will be replaced by CRLF the next time Git touches it
+ok - fm-control: a legacy window label is refused and the exact task id is named
+warning: in the working copy of 'README.md', LF will be replaced by CRLF the next time Git touches it
+ok - fm-control: an explicit backend endpoint is never a control target
+warning: in the working copy of 'README.md', LF will be replaced by CRLF the next time Git touches it
+ok - fm-control: an unrecorded task id is refused
+warning: in the working copy of 'README.md', LF will be replaced by CRLF the next time Git touches it
+ok - fm-control: a record whose endpoint identity names another task is refused
+warning: in the working copy of 'README.md', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'README.md', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'README.md', LF will be replaced by CRLF the next time Git touches it
+ok - fm-control: a remotely placed secondmate is refused by placement, not by a metadata complaint
+warning: in the working copy of 'README.md', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'README.md', LF will be replaced by CRLF the next time Git touches it
+ok - fm-control: interrupt and exit lock before task-state resolution
+warning: in the working copy of 'README.md', LF will be replaced by CRLF the next time Git touches it
+ok - fm-control: the verb list is closed - no raw keys, arbitrary text, or clear verb
+warning: in the working copy of 'README.md', LF will be replaced by CRLF the next time Git touches it
+ok - fm-control: resume is refused with the determinism reason and the alternative
+warning: in the working copy of 'README.md', LF will be replaced by CRLF the next time Git touches it
+ok - fm-control: profile and note flags belong to relaunch only
+warning: in the working copy of 'README.md', LF will be replaced by CRLF the next time Git touches it
+ok - fm-control exit: an already-stopped agent is idempotent success with no bytes sent
+warning: in the working copy of 'README.md', LF will be replaced by CRLF the next time Git touches it
+ok - fm-control exit: a vanished endpoint refuses instead of silently succeeding
+warning: in the working copy of 'README.md', LF will be replaced by CRLF the next time Git touches it
+ok - fm-control interrupt: refuses when no agent is running rather than keying a shell
+warning: in the working copy of 'README.md', LF will be replaced by CRLF the next time Git touches it
+ok - fm-control exit: an endpoint whose process cannot be attributed refuses
+warning: in the working copy of 'README.md', LF will be replaced by CRLF the next time Git touches it
+ok - fm-control exit: a busy agent receives interrupt delivery before the exit command
+warning: in the working copy of 'README.md', LF will be replaced by CRLF the next time Git touches it
+ok - fm-control exit: an idle agent goes straight to its exit command
+warning: in the working copy of 'README.md', LF will be replaced by CRLF the next time Git touches it
+ok - fm-control interrupt: unconfirmed delivery preserves observed busy state
+warning: in the working copy of 'README.md', LF will be replaced by CRLF the next time Git touches it
+not ok - the result should report muse's cancelled terminal acknowledgement (missing: 'verified=agent-alive cancel=confirmed')
+--- output ---
+interrupt-delivered t1 harness=muse backend=tmux verified=agent-alive cancel=unconfirmed
+FM_TEST_END 2026-08-24T21:45:54Z tests/fm-control.test.sh exit=1 duration_ms=552015 gate_skip=false
+FM_TEST_SUMMARY total=2 failed=2 skipped_gate=0 duration_ms=585927
+FM_TEST_SUMMARY_FAMILY family=backend-dispatch count=2 duration_ms=584928 failed=2
+FM_TEST_SLOWEST rank=1 script=tests/fm-control.test.sh duration_ms=552015
+FM_TEST_SLOWEST rank=2 script=tests/fm-spawn-worktree-settle.test.sh duration_ms=32913

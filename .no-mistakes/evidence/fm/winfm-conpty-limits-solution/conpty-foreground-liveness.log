@@ -1,0 +1,18 @@
+
+A. fresh session, nothing running
+  fm_backend_agent_state -> dead
+  why      : the session shell is at a prompt
+  prompt   : at-prompt   (last OSC 133 mark: B)
+  attached : bash.exe, bash.exe
+
+B. a real claude BACKGROUNDED - attached to the console, but the shell owns the foreground
+  fm_backend_agent_state -> dead
+  why      : the session shell is at a prompt, so claude.exe is attached but not in the foreground
+  prompt   : at-prompt   (last OSC 133 mark: B)
+  attached : claude.exe, sh.exe, bash.exe, bash.exe
+
+C. the same real claude in the FOREGROUND
+  fm_backend_agent_state -> alive
+  why      : harness process claude.exe and a foreground command running
+  prompt   : running   (last OSC 133 mark: C)
+  attached : claude.exe, sh.exe, bash.exe, bash.exe

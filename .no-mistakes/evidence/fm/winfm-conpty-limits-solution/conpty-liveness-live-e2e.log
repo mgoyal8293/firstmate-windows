@@ -1,0 +1,10 @@
+ok - conpty spawn abort: against real treehouse 2.1.1, a holder-scoped return clears this task's own durable lease and refuses one it does not own
+ok - conpty liveness against real claude: backgrounded reads dead, foreground under a nested shell reads alive, and it emits no marks of its own - tagged or untagged - while it holds the foreground
+note: codex is not installed here, so it was not checked
+note: opencode is not installed here, so it was not checked
+note: grok is not installed here, so it was not checked
+note: kimi is not installed here, so it was not checked
+note: pi is not installed here, so it was not checked
+note: cursor-agent is not installed here, so it was not checked
+note: muse is not installed here, so it was not checked
+ok - conpty real-harness liveness guard complete (1 harness(es) checked)
