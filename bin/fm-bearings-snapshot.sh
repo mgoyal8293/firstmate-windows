@@ -11,13 +11,18 @@
 # output, it never removes them from - or otherwise weakens - the canonical snapshot,
 # which stays complete.
 #
-# LOCAL-ONLY by default: a normal invocation makes ZERO GitHub/network/auth calls.
-# It MAY surface PR URLs already recorded locally in task meta (recorded_prs), but it
-# performs no live discovery or checks. Live PR discovery/checks happen ONLY under
-# --include-prs, which is the sole path that touches the network; all gh coupling
-# lives in that branch and never in the canonical snapshot. The default output states
-# explicitly (the prs: line and the omitted[] surfaces) what was not requested, so an
-# absence is never ambiguous.
+# NO LIVE PR DISCOVERY by default: a normal invocation makes no open-PR discovery,
+# no PR check, and no auth call of its own. It MAY surface PR URLs already recorded
+# locally in task meta (recorded_prs), but it performs no live discovery or checks.
+# Live PR discovery/checks happen ONLY under --include-prs, which is the sole path
+# in THIS wrapper that touches the network; all gh coupling here lives in that
+# branch. The canonical snapshot underneath is not network-free, though: it spends
+# at most one bounded `gh pr view` per task through bin/fm-crew-state.sh, because a
+# merged-or-closed claim may come only from the forge and that read is what stops a
+# captain-facing view reporting abandoned work as a success. That script's header
+# owns the invariant, and bin/fm-fleet-snapshot.sh owns the per-task bound. The
+# default output states explicitly (the prs: line and the omitted[] surfaces) what
+# was not requested, so an absence is never ambiguous.
 #
 # This wrapper consumes canonical status decisions plus canonically normalized
 # backlog roles, unresolved blockers, and captain actionability. It never infers
@@ -40,9 +45,9 @@
 # order.
 #
 # Flags:
-#   (default)        compact projection, TOON, local-only
+#   (default)        compact projection, TOON, no live PR discovery
 #   --json           the same projected model as JSON (machine/debug; parity form)
-#   --include-prs    ALSO do live open-PR discovery + checks (the only network path)
+#   --include-prs    ALSO do live open-PR discovery + checks (this wrapper's only network path)
 #   --fields <list>  opt in to dropped surfaces: bodies,paths,actions,endpoints
 #   --all-in-flight  include every in-flight task
 #   --all-decisions  include every open decision
@@ -103,7 +108,9 @@ usage: fm-bearings-snapshot.sh [--json] [--include-prs] [--fields <list>]
                                [--all-pr-repos]
 
 Compact bearings projection over fm-fleet-snapshot.sh. TOON by default.
-Default is LOCAL-ONLY (no network); --include-prs is the only path that fetches.
+Default does no live PR discovery; --include-prs is the only path that fetches here.
+The canonical snapshot underneath still spends at most one bounded gh pr view per
+  task, which is the only source a merged-or-closed crew state may come from.
 
 Default fields: schema, home, generated, prs, in_flight{id,kind,state,doing},
   secondmates{id,state,doing,provenance,freshness,age_seconds,contradiction,reason},
@@ -179,7 +186,7 @@ fi
 HOME_LABEL=$(printf '%s' "$SNAP" | jq -er '.fm_home | strings | split("/") | (.[-2:] | join("/"))') \
   || { echo "fm-bearings-snapshot: invalid canonical snapshot" >&2; exit 1; }
 
-# --- optional live PR enrichment (the ONLY network path) --------------------
+# --- optional live PR enrichment (this wrapper's ONLY network path) ---------
 PR_STATUS='not_requested (run: /bearings include PRs)'
 CANDIDATE_PRS='[]'
 PR_REPOS_TOTAL=0
