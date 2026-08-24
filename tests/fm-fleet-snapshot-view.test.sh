@@ -10,6 +10,11 @@ SNAPSHOT="$ROOT/bin/fm-fleet-snapshot.sh"
 VIEW="$ROOT/bin/fm-fleet-view.sh"
 TMP_ROOT=$(fm_test_tmproot fm-fleet-snapshot)
 
+# Fixture worktrees here are real git repos with real commits, and a CI runner
+# carries no git identity of its own, so the commit would abort and leave the
+# fixture without a HEAD to read.
+fm_git_identity fmtest fmtest@example.invalid
+
 command -v jq >/dev/null 2>&1 || { echo "skip: jq not found"; exit 0; }
 
 make_fakebin() {  # <dir>

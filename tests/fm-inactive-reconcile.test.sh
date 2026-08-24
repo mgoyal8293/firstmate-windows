@@ -419,8 +419,17 @@ test_watcher_hook_and_idle_secondmate_exemption() {
 
 # A stalled authoritative state read consumes only the aggregate scan budget.
 # The durable scan position lets the next invocation reach the following child.
+#
+# The budget is the outer bound on the WHOLE pass, so it also pays for the
+# re-exec, the library sourcing, and the scan lock before any child is visited.
+# A one-second budget leaves that overhead nothing to spare on a loaded runner:
+# the pass is cancelled having visited no child, the cursor never advances, and
+# the resumption this case is about cannot be observed at all. So the budget here
+# is large enough that startup is never what binds, and the bound being proved -
+# that the 30s stall does not run to completion - is asserted against the budget
+# rather than against a wall-clock constant.
 test_stalled_state_read_is_bounded_and_scan_progresses() {
-  local started elapsed
+  local started elapsed budget=5
   make_world bounded
   write_child "$MAIN" a 'working: state read will stall'
   cat > "$WORLD/fakebin/fm-crew-state.sh" <<'SH'
@@ -434,12 +443,13 @@ SH
   chmod +x "$WORLD/fakebin/fm-crew-state.sh"
 
   started=$(date +%s)
-  FM_INACTIVE_RECONCILE_BUDGET_SECS=1 run_reconcile "$MAIN" --startup
+  FM_INACTIVE_RECONCILE_BUDGET_SECS=$budget run_reconcile "$MAIN" --startup
   elapsed=$(( $(date +%s) - started ))
-  [ "$elapsed" -le 3 ] || fail "stalled state read exceeded aggregate scan budget (${elapsed}s)"
+  [ "$elapsed" -le $((budget * 3)) ] \
+    || fail "stalled state read exceeded aggregate scan budget (${elapsed}s)"
 
   write_child "$MAIN" b 'done: green'
-  FM_INACTIVE_RECONCILE_BUDGET_SECS=1 run_reconcile "$MAIN" --startup
+  FM_INACTIVE_RECONCILE_BUDGET_SECS=$budget run_reconcile "$MAIN" --startup
   grep -Fq 'child=b state=done' "$MAIN/state/.wake-queue" \
     || fail "next bounded scan did not resume with the following child"
   pass "stalled state reads are bounded without starving later children"
