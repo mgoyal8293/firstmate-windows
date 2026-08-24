@@ -87,6 +87,9 @@ Every row must fail, and must fail on the named assertion.
 | A budget too small to spare the read skips it instead of shrinking it | take the bound arm unconditionally (`if true`) | the same case | fails: `a 2s budget cannot spare a whole second of forge read: '0\|'` |
 | A failed branch attribution discards the run record, so a SIBLING task's PR url can never settle this crew | restore `RUN_SOURCE=full` at initialisation and drop the `RUN_OUT`/`RUN_OBJECT` clearing in the mismatch arm | `test_a_sibling_runs_pr_url_never_settles_this_crew` | fails: `unexpected: 'PR merged'`, on the line `state: done · source: status-log · implemented, ready to validate, PR merged` |
 | A SHIP task with no PR anywhere is never done, because a ship task exists to land a branch | settle every kind the scout way, returning `no-pr` from every arm of `fm_crew_no_pr_class` | `test_a_ship_task_with_no_pr_anywhere_is_not_done` | fails: `unexpected: 'state: done'` |
+| A `mode=local-only` SHIP task with no PR still reads done, being owed none by its delivery contract | rule `local-only` `no-landing` in `fm_crew_ship_no_pr_class`, the kind-blind behaviour | `test_a_local_only_ship_reads_done_without_a_pr_but_an_unrecorded_mode_does_not` | fails: `missing: 'state: done'`, on `a local-only ship owes no PR, so its own done: is the landing` |
+| And an UNRECORDED delivery mode still does not, because an unstated contract exempts nothing | return `no-pr` unconditionally from `fm_crew_ship_no_pr_class`, dropping the strict arm | the same case | fails: `unexpected: 'state: done'`, on `an unrecorded delivery mode exempts nothing` |
+| A snapshot child is terminal on a CONFIRMED landing, not on its own `done:` line | drop the `pr=` the fixture's done child records | `test_nonprogressing_child_states_are_explicit` (`tests/fm-bearings-snapshot.test.sh`) | fails: `terminal in-flight child states were silently dropped` |
 | A TERMINATED checks-passed run does not borrow the live crew's unconfirmed answer | hardcode `working` in `fm_crew_checks_green_verdict` again, ignoring `<liveness>` | `test_a_terminated_checks_passed_run_does_not_borrow_a_live_crews_answer` | fails: `unexpected: 'state: working'` |
 | One invocation makes at most one outbound forge read | drop the memo, letting `crew_ask_forge` re-read on every call | `test_one_invocation_makes_at_most_one_forge_read` | fails: `one invocation made 2 forge reads, and every caller's bound assumes 1` |
 | The merge state the forge read already paid for is reported on the green-checks path | return the done arm of `fm_crew_done_claim_verdict` without its forge suffix | `test_an_open_pr_names_its_merge_state_on_the_checks_green_path` | fails: `missing: 'PR still open'` |
@@ -143,6 +146,11 @@ The five rows before those were added by the round that closed the sibling-PR le
 Three of them are paired with a case that must STAY GREEN under the same mutation, and that pairing is the point rather than a courtesy: each fix narrows a rule that a previous ruling had deliberately widened, so a mutation that only shows the new case failing cannot show the old ruling survived.
 Under the kind-blind mutation `test_a_task_with_no_pr_anywhere_still_reads_done` still passes, so the SCOUT exemption is intact and only the ship case moved.
 Under the hardcoded-`working` mutation `test_an_unconfirmed_answer_keeps_a_live_crew_working` still passes, so a demonstrably live crew still reads `working` on an unconfirmed answer - reproduced failure (3) is not reintroduced, and what was removed is only the TERMINATED run's ability to borrow that answer.
+
+The mode rows added by the round that closed the local-only hole need one procedural note, because reproducing them naively looks like a different result.
+This suite aborts on its first failure, and dropping the strict arm of `fm_crew_ship_no_pr_class` widens the rule for EVERY ship mode, so `test_a_sibling_runs_pr_url_never_settles_this_crew` fails first and the run never reaches the row's own case.
+That earlier failure is corroboration rather than noise - the permissive mutation reopens the sibling-PR leak too - but the row's named assertion has to be observed with its own case run in isolation.
+The pairing rule above holds here as well: under the local-only mutation the sibling row and `test_a_ship_task_with_no_pr_anywhere_is_not_done` both stay green, so the remote-backed strictness this branch added is untouched and only the local-only case moved.
 
 The one-forge-read row is the only row in this table that asserts a COST rather than a verdict, and it needs a different kind of assertion for a reason worth recording.
 Every other guard here changes what the reader says; this one changes only how many times it asks, and the answer is byte-identical either way.
@@ -281,11 +289,12 @@ That is a worse failure than the one the unconfirmed rule guards against - the s
 `no-pr` is the third answer, and it is reached only after `crew_pr_url` has looked in the run record, the coarse row, the task meta and the status log, so it means "this task has no PR" rather than "this reader did not look".
 That distinction was previously blurred: a coarse runs-list row never carries a PR url, so a crew on that path answered "no PR to ask about" while the very status log the same invocation had already read named the PR, and `bin/fm-inactive-reconcile.sh` then dug that url out to show the captain beside the word.
 
-What an absent PR LICENSES is a second question, and it is settled by the RECORDED TASK KIND rather than by the absent url.
-The url is missing in every case, so it cannot possibly tell those cases apart, and only the kind states whether a PR was ever owed.
+What an absent PR LICENSES is a second question, and it is settled by the RECORDED TASK KIND and DELIVERY MODE rather than by the absent url.
+The url is missing in every case, so it cannot possibly tell those cases apart, and only the record states whether a PR was ever owed.
 A SCOUT settles like `unanswerable`: it has no landing to claim by construction, its deliverable is a report, and a `done` there is not a landing claim at all.
-A SHIP task does not, because a ship task exists to land a branch, so "no PR" is not an exemption from the landing question - it is that question answered badly, and it is the single place a `done` is most certainly wrong.
-`fm_crew_no_pr_class` owns the split and spells out every recorded kind, with the unrecognized arm refusing `done` rather than falling through to the permissive one: a kind this reader has never heard of is not evidence that no landing was expected.
+A SHIP task in a remote-backed mode does not, because such a task exists to land a branch, so "no PR" is not an exemption from the landing question - it is that question answered badly, and it is the single place a `done` is most certainly wrong.
+A `mode=local-only` ship task settles the scout's way, and for the scout's reason: `bin/fm-brief.sh`'s delivery contract for that mode is "no remote, no PR, no pipeline", firstmate lands the ready branch with `bin/fm-merge-local.sh`, so no PR is ever owed and the absent one is the contract being honoured rather than a landing that never happened.
+`fm_crew_no_pr_class` owns the kind split and `fm_crew_ship_no_pr_class` owns the mode split, each spelling out every recorded value, with the unrecognized arm refusing `done` rather than falling through to the permissive one: neither a kind nor a delivery contract this reader has never heard of is evidence that no landing was expected.
 
 That hole was one sentence wide and had been written down.
 `fm_crew_forge_answer_class` said the case "is a scout, or a task that has not opened a PR yet" - two situations named in one breath and then given one answer - so a ship crew rode the scout's exemption in code and in prose.
@@ -313,17 +322,24 @@ So `fm_crew_no_pr_phrase` now takes the evidence level that already distinguishe
 `fm_crew_forge_suffix` carries that level for the one answer whose wording depends on which moment is being described, and every caller already held it.
 Acceptance criterion 1 requires the two read differently, and the matrix row above falsifies exactly that.
 
-"Remote-backed modes" above is scoped deliberately, and what that scoping leaves OPEN is recorded here rather than left to be rediscovered.
-`fm_crew_no_pr_class` splits an absent PR on the RECORDED KIND alone, and nothing on that path reads the task's delivery mode, but a `mode=local-only` ship task is owed no PR by construction: `bin/fm-brief.sh`'s delivery contract for that mode is "no remote, no PR, no pipeline", and its done is a commit on the crew's own branch, landed later by `bin/fm-merge-local.sh`.
-Such a task therefore reaches the `no-landing` arm and reads `unknown` on a genuine completion, which places it with the ship's unanswered landing question when by construction it belongs with the scout's exemption.
-Two consequences follow that no wording here resolves.
-`bin/fm-inactive-reconcile.sh` accepts only `state: done` or `state: failed`, so a long-inactive `local-only` crew that genuinely finished is never reconciled and never produces its terminal receipt.
-And the end-to-end Windows run recorded in [`windows.md`](../windows.md) "Run end to end on Windows" observed `state: done · source: status-log` for exactly that shape, so that row PREDATES this change and is not a claim about current behaviour.
-Settling it needs a code answer, not a doc one - either a mode-keyed arm in `fm_crew_no_pr_class`, reading the `mode=` field `bin/fm-spawn.sh` already writes into `state/<id>.meta` beside `kind`, or an accepted residual with the reconcile accept list corrected to match.
+"Remote-backed modes" above is scoped deliberately, because the first draft of this rule was kind-blind in the other direction and made `mode=local-only` permanently unreadable as done.
+That draft split an absent PR on the RECORDED KIND alone, so every kind=ship task took the `no-landing` arm - and a local-only task is owed no PR by construction, runs no pipeline, and therefore has the status log's own `done:` as its ONLY terminal evidence, which is precisely the claim `no-landing` refuses.
+It placed the mode with the ship's unanswered landing question when it belongs with the scout's exemption, and the cost was not only a wrong word: `bin/fm-inactive-reconcile.sh` accepts only `state: done` or `state: failed`, so a long-inactive local-only crew that genuinely finished was never reconciled and never produced its terminal receipt.
+The end-to-end Windows run recorded in [`windows.md`](../windows.md) "Run end to end on Windows" observed `state: done · source: status-log` for exactly that shape, and that observation is correct again.
+
+The fix reads the delivery mode `bin/fm-spawn.sh` already writes into `state/<id>.meta` beside `kind`, so it needed no new signal - only a reader that stopped ignoring one.
+`bin/fm-crew-state.sh` appends the mode to the descriptor it hands the forge vocabulary, `no-pr <task-kind> [<delivery-mode>]`, and appends it only when it is RECORDED, so an unrecorded mode leaves the descriptor the single-word shape it always had.
+That is the half of the ruling that keeps the guard: the permissive arm is reached only by a mode this reader RECOGNIZES as owing no PR, and an absent or unrecognized mode keeps the strict answer, because a delivery contract nobody wrote down is not a contract exempting the task.
+Both halves are falsified separately in the matrix above, which is the point - a permissive arm whose strict counterpart is untested is the kind-blind hole again with one more word in it.
 
 This also changed what the test fixtures must say.
 A case that means to assert `done` about ci evidence now has to answer the forge question explicitly, or it is really asserting the forge gate; `forge_answers_open` in `tests/fm-crew-state.test.sh` exists for that, and its comment records the coupling.
 That is the same lesson the ci-padding row taught, arriving from the other direction: a fixture that leaves a second input unpinned stops testing the input it names.
+
+The lesson reaches every suite that reads a crew's state through this one, not only its own.
+`tests/fm-bearings-snapshot.test.sh` builds a secondmate child that means to be TERMINAL, and it did so with a bare `done: complete` status log and no PR anywhere - a shape that now correctly reads `unknown`, so the fixture stopped exercising the terminal-row rule it names and started exercising this one.
+It records a `pr=` and its fake `gh` answers `pr view --json state,mergeStateStatus`, a different query from the `pr list` that fake already served, so the child is terminal because a landing was CONFIRMED rather than because a worker said so.
+A fake forge that answers one of this reader's two queries and not the other is the unpinned second input again, wearing a network boundary.
 
 ## Ruled: withholding a landing claim is not the same as knowing nothing
 

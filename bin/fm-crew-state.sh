@@ -19,7 +19,8 @@
 #   state: <working|parked|done|blocked|paused|failed|unknown> · source: <run-step|pane|status-log|none> · <detail>
 #
 # Logic, in order:
-#   1. Resolve worktree + backend target + kind from state/<id>.meta.
+#   1. Resolve worktree + backend target + kind + delivery mode from
+#      state/<id>.meta.
 #   2. Matching no-mistakes run for this crew? ONE candidate is considered - the
 #      branch's newest run - and bin/fm-crew-run-verdict-lib.sh owns the whole
 #      model: how that candidate is selected, what its code binding is allowed
@@ -222,6 +223,23 @@ WT=$(meta_value worktree)
 KIND=$(meta_value kind)
 HARNESS=$(meta_value harness)
 [ -n "$KIND" ] || KIND=ship
+
+# The DELIVERY MODE travels beside the kind, because an absent PR is a defect for
+# one ship mode and the CONTRACT for another. A `mode=local-only` task is
+# instructed never to push and never to open a PR - see bin/fm-brief.sh's
+# local-only delivery contract, "no remote, no PR, no pipeline" - and it is landed
+# by bin/fm-merge-local.sh as a fast-forward, so its missing url is what the brief
+# asked for rather than a landing that never happened. Without this field the
+# absent url is indistinguishable from the ship task that owed a PR and has none,
+# and every local-only crew reads `unknown` forever: it runs no pipeline, so its
+# only current-state source is the status log's own `done:`, which is exactly the
+# claim the forge question refuses without one.
+#
+# Left EMPTY when unrecorded, deliberately, rather than defaulted like KIND above.
+# KIND's `ship` default is safe because ship is the STRICT answer; any mode
+# default would be a permissive guess about a task whose contract was never
+# written down. fm_crew_no_pr_class keeps that conservative arm for it.
+MODE=$(meta_value mode)
 
 # A torn-down (or never-created) worktree has no current state to read.
 if [ -z "$WT" ] || [ ! -d "$WT" ]; then
@@ -657,12 +675,22 @@ crew_forge_read() {
     *) printf 'unverified'; return ;;
   esac
   url=$(crew_pr_url)
-  # The RECORDED TASK KIND travels with the answer, because an absent PR means
-  # opposite things for different kinds and the absent url cannot tell them
-  # apart. fm_crew_no_pr_class owns the rule: a scout has no landing to claim by
-  # construction, while a ship task with no PR is precisely where a `done` would
-  # be wrong.
-  [ -n "$url" ] || { printf 'no-pr %s' "$KIND"; return; }
+  # The RECORDED TASK KIND and DELIVERY MODE travel with the answer, because an
+  # absent PR means opposite things for different kinds and different modes, and
+  # the absent url cannot tell any of them apart. fm_crew_no_pr_class owns the
+  # rule: a scout has no landing to claim by construction, a local-only ship was
+  # told not to open a PR, and a remote-backed ship with no PR is precisely where
+  # a `done` would be wrong.
+  #
+  # The mode word is APPENDED rather than always present, so an unrecorded mode
+  # leaves the descriptor exactly the single-word shape it had before and takes
+  # the conservative arm. Emitting an empty third word instead would hand the
+  # parser a mode it cannot distinguish from a recorded one.
+  if [ -z "$url" ]; then
+    printf 'no-pr %s' "$KIND"
+    [ -z "$MODE" ] || printf ' %s' "$MODE"
+    return
+  fi
   fm_crew_forge_pr_state "$url" "$FM_CREW_STATE_FORGE_TIMEOUT"
 }
 

@@ -3119,6 +3119,57 @@ test_a_pre_validation_ship_reads_differently_from_a_run_that_landed_nothing() {
   pass "a pre-validation ship reads differently from a run that landed nothing"
 }
 
+# `mode=local-only` is a first-class ship delivery mode whose brief FORBIDS a PR:
+# the worker never pushes, firstmate lands the ready branch with
+# bin/fm-merge-local.sh, and no pipeline ever runs. Classifying an absent PR on
+# the task KIND alone therefore made the mode permanently unreadable as done - its
+# only terminal evidence is the status log's own `done:`, which is exactly the
+# claim a `no-landing` answer refuses - and bin/fm-inactive-reconcile.sh, which
+# accepts only `done` or `failed`, never reconciled such a crew or produced its
+# terminal receipt.
+#
+# BOTH arms are asserted in one case, because the permissive one is only safe
+# while the strict one holds. The second half is the falsifiable guard: the same
+# status log, the same kind, the same absent PR, and NO recorded mode must still
+# read `unknown`. An unrecorded delivery contract is not a contract exempting the
+# task, and if that arm ever goes permissive every ship task with no PR silently
+# rides the local-only exemption - the defect this whole split exists to remove.
+test_a_local_only_ship_reads_done_without_a_pr_but_an_unrecorded_mode_does_not() {
+  reset_fakes
+  local d out
+  d=$(new_case local-only-ship)
+  make_repo_on_branch "$d/wt" fm/feat-localonly
+  make_fakebin "$d" >/dev/null
+  fm_write_meta "$d/state/localonly.meta" "window=fm:fm-localonly" "worktree=$d/wt" \
+    "kind=ship" "mode=local-only" "harness=claude"
+  printf 'done: ready in branch fm/feat-localonly\n' > "$d/state/localonly.status"
+  # No run anywhere: local-only runs no pipeline, so this is the mode's only shape.
+  FM_FAKE_BUSY=0
+  arm_idle_record "$d/state" localonly
+  out=$(run_crew_state "$d" localonly)
+  assert_contains "$out" "state: done" "a local-only ship owes no PR, so its own done: is the landing"
+  assert_contains "$out" "source: status-log" "and the status log is the only source the mode has"
+  assert_contains "$out" "mode=local-only" "the detail names the contract, not a missing PR"
+  assert_not_contains "$out" "not yet validated" "nothing is awaiting a validation this mode never runs"
+  assert_not_contains "$out" "nothing has landed" "the ready branch is the landing for this mode"
+
+  # The guard half: same kind, same log, same absent PR, no recorded mode.
+  reset_fakes
+  d=$(new_case unrecorded-mode-ship)
+  make_repo_on_branch "$d/wt" fm/feat-nomode
+  make_fakebin "$d" >/dev/null
+  fm_write_meta "$d/state/nomode.meta" "window=fm:fm-nomode" "worktree=$d/wt" \
+    "kind=ship" "harness=claude"
+  printf 'done: ready in branch fm/feat-nomode\n' > "$d/state/nomode.status"
+  FM_FAKE_BUSY=0
+  arm_idle_record "$d/state" nomode
+  out=$(run_crew_state "$d" nomode)
+  assert_not_contains "$out" "state: done" "an unrecorded delivery mode exempts nothing"
+  assert_contains "$out" "state: unknown" "and unknown is the honest word for an unstated contract"
+  assert_not_contains "$out" "mode=local-only" "no mode was recorded, so none may be claimed"
+  pass "a local-only ship reads done without a PR, and an unrecorded mode still does not"
+}
+
 # The absent-`status:` record, and the one shape on which this reader contradicted
 # itself. The status dispatch mapped a record with no status word to
 # working/"run active"; crew_liveness rules the same record `terminated`, because
@@ -3260,5 +3311,6 @@ test_one_invocation_makes_at_most_one_forge_read
 test_an_open_pr_names_its_merge_state_on_the_checks_green_path
 test_a_pre_validation_ship_reads_differently_from_a_run_that_landed_nothing
 test_a_record_with_no_status_word_does_not_assert_liveness
+test_a_local_only_ship_reads_done_without_a_pr_but_an_unrecorded_mode_does_not
 
 echo "all fm-crew-state tests passed"

@@ -49,6 +49,19 @@ SH
 echo "gh $*" >> "$NET_LOG"
 if [ "${FAKE_GH_FAIL:-0}" = 1 ]; then exit 1; fi
 if [ "${FAKE_GH_SLEEP:-0}" = 1 ]; then sleep 30; fi
+# `pr view --json state,mergeStateStatus` is bin/fm-crew-state.sh's forge
+# question, a DIFFERENT query from the `pr list` the rest of this fake serves.
+# It has to answer in that reader's own vocabulary: a child whose only terminal
+# evidence is a `done:` status log no longer reads `done` until the forge
+# confirms the landing, so a fake that replied with the pr-list array made every
+# such fixture read `unverified` and settle nothing. Answering MERGED by default
+# keeps a fixture that MEANS to be terminal terminal; the two overrides let a
+# case ask for an open or closed PR instead.
+if [ "${1:-}" = pr ] && [ "${2:-}" = view ]; then
+  printf '{"state":"%s","mergeStateStatus":"%s"}\n' \
+    "${FAKE_GH_PR_STATE:-MERGED}" "${FAKE_GH_MERGE_STATE:-CLEAN}"
+  exit 0
+fi
 if [ "${FAKE_GH_MANY:-0}" = 1 ]; then
   cat <<'JSON'
 [{"number":1,"title":"One","url":"https://github.com/acme/repo/pull/1","headRefName":"fm/one","reviewDecision":"","mergeable":"MERGEABLE","statusCheckRollup":[]},{"number":2,"title":"Two","url":"https://github.com/acme/repo/pull/2","headRefName":"fm/two","reviewDecision":"","mergeable":"MERGEABLE","statusCheckRollup":[]},{"number":3,"title":"Three","url":"https://github.com/acme/repo/pull/3","headRefName":"fm/three","reviewDecision":"","mergeable":"MERGEABLE","statusCheckRollup":[]}]
@@ -748,9 +761,16 @@ EOF
 
 ## Done
 EOF
+  # The `done` child records its PR, because that is what makes it LEGITIMATELY
+  # terminal now: a kind=ship task whose only evidence is its own `done:` line and
+  # no PR anywhere reads `unknown`, since an unconfirmed landing must never read as
+  # done. The fixture asserts the terminal-row rule, not the absent-PR rule, so it
+  # supplies the landing the forge can confirm and leaves that other rule to
+  # tests/fm-crew-state.test.sh, which owns it.
   fm_write_meta "$mate/state/done.meta" \
     "window=firstmate:fm-done" "worktree=$mate/projects/done" "project=sample" \
-    "harness=claude" "kind=ship" "mode=no-mistakes"
+    "harness=claude" "kind=ship" "mode=no-mistakes" \
+    "pr=https://github.com/kunchenguid/firstmate/pull/11"
   fm_write_meta "$mate/state/failed.meta" \
     "window=firstmate:fm-failed" "worktree=$mate/projects/failed" "project=sample" \
     "harness=claude" "kind=ship" "mode=no-mistakes"

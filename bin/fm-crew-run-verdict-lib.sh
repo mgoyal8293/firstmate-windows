@@ -584,9 +584,10 @@ fm_crew_runs_newest_row_for_branch() {  # <runs-output> <branch>
 #                            URL at all.
 #
 # The caller adds one more word in the same vocabulary, for the case this function
-# never sees because there is nothing to pass it: `no-pr <task-kind>`, when
-# nothing anywhere records a PR url for this task. It carries the RECORDED TASK
-# KIND because an absent PR means opposite things for different kinds, and
+# never sees because there is nothing to pass it: `no-pr <task-kind>
+# [<delivery-mode>]`, when nothing anywhere records a PR url for this task. It
+# carries the RECORDED TASK KIND and DELIVERY MODE because an absent PR means
+# opposite things for different kinds and for different ship modes, and
 # fm_crew_no_pr_class owns that split.
 #
 # A host with no `gh` is as permanent as an unsupported provider - both are "no
@@ -691,14 +692,17 @@ fm_crew_evidence_lead() {  # <ci-evidence: verified|checks-green|reported|unveri
 #                 forever, which is why these still settle `done` where the
 #                 run's own evidence earns it.
 #   no-pr         nothing anywhere names a PR for this task, and the task's
-#                 RECORDED KIND says none was ever expected - a scout delivers a
-#                 report and a secondmate delivers no branch at all. There is no
-#                 landing to confirm, so a `done` here is not a landing claim,
-#                 and it settles like `unanswerable`.
+#                 RECORDED KIND and DELIVERY MODE say none was ever expected - a
+#                 scout delivers a report, a secondmate delivers no branch at
+#                 all, and a local-only ship is instructed not to push or open
+#                 one. There is no landing to confirm, so a `done` here is not a
+#                 landing claim, and it settles like `unanswerable`.
 #   no-landing    nothing anywhere names a PR for this task, and its recorded
-#                 kind says there SHOULD be one. A ship task exists to land a
-#                 branch, so "no PR" is not an exemption from the landing
-#                 question, it is that question answered badly. Never settles
+#                 kind and mode say there SHOULD be one. A remote-backed ship
+#                 task exists to land a branch, so "no PR" is not an exemption
+#                 from the landing question, it is that question answered badly.
+#                 An unrecorded mode takes this answer too: a contract nobody
+#                 wrote down is not a contract exempting the task. Never settles
 #                 `done`.
 #   unconfirmed   unverified, or a url we could have queried and did not - the
 #                 answer EXISTS and we do not have it. Timed out, unauthenticated,
@@ -735,21 +739,53 @@ fm_crew_forge_answer_class() {  # <forge-answer>
   esac
 }
 
-# Which class an absent PR falls in, decided by the task's RECORDED KIND and by
-# nothing else. Inferring it from the absent url is what conflated the two: the
-# url is missing in both cases, so it cannot possibly tell them apart, and only
-# the kind states whether a PR was ever owed.
+# Which class an absent PR falls in, decided by the task's RECORDED KIND and
+# DELIVERY MODE and by nothing else. Inferring it from the absent url is what
+# conflated the cases: the url is missing in all of them, so it cannot possibly
+# tell them apart, and only the record states whether a PR was ever owed.
+#
+# The descriptor is "<task-kind> [<delivery-mode>]", one word or two, exactly as
+# bin/fm-crew-state.sh's crew_forge_read emits it. It is parsed here rather than
+# at the call sites because the two words answer ONE question and splitting them
+# earlier would let a caller pass the kind and drop the mode.
 #
 # EVERY recorded kind is spelled out, and the unrecognized arm refuses `done`
 # rather than falling through to the permissive one. A kind this reader has never
 # heard of is not evidence that no landing was expected, so the conservative
 # answer is the only honest default - and it is a named arm, not a silent one.
-fm_crew_no_pr_class() {  # <task-kind>
-  case "$1" in
+fm_crew_no_pr_class() {  # <no-pr-descriptor: <task-kind> [<delivery-mode>]>
+  local kind=${1%% *} mode=""
+  case "$1" in *' '*) mode=${1#* } ;; esac
+  case "$kind" in
     scout)      printf 'no-pr' ;;
     secondmate) printf 'no-pr' ;;
-    ship)       printf 'no-landing' ;;
+    ship)       fm_crew_ship_no_pr_class "$mode" ;;
     *)          printf 'no-landing' ;;
+  esac
+}
+
+# The ship arm of the class above, split on the DELIVERY MODE, because "a ship
+# task exists to land a branch" is true of the remote-backed modes and false of
+# local-only. A local-only brief instructs the worker never to push and never to
+# open a PR, and firstmate lands the ready branch with bin/fm-merge-local.sh, so
+# no PR is ever owed and an absent one is the contract being honoured. Ruling it
+# `no-landing` made the mode permanently unreadable as done: it runs no pipeline,
+# so the status log's `done:` is its ONLY terminal evidence, and that is the one
+# claim a `no-landing` answer refuses. bin/fm-inactive-reconcile.sh accepts only
+# `done` or `failed`, so such a crew was never reconciled and never produced its
+# terminal receipt either.
+#
+# This does NOT weaken the guard the split exists for. The permissive arm is
+# reached only by a mode this reader RECOGNIZES as owing no PR; an absent or
+# unrecognized mode keeps the strict answer, because an unrecorded contract is
+# not evidence that no landing was expected. The two remote-backed modes are
+# named explicitly for the same reason the kinds are - so the strict arm is a
+# decision about a known mode rather than a fallthrough.
+fm_crew_ship_no_pr_class() {  # <delivery-mode>
+  case "$1" in
+    local-only)             printf 'no-pr' ;;
+    no-mistakes|direct-PR)  printf 'no-landing' ;;
+    *)                      printf 'no-landing' ;;
   esac
 }
 
@@ -762,15 +798,19 @@ fm_crew_no_pr_class() {  # <task-kind>
 #
 # The kind decides the WORDING here exactly as it decides the CLASS in
 # fm_crew_no_pr_class, and every recorded kind is spelled out for the same
-# reason. Only the ship arm needs the evidence level too, and why is recorded
+# reason. It takes the same "<task-kind> [<delivery-mode>]" descriptor and parses
+# it the same way, so the word and the verdict are always read off one record.
+# Only the ship arm needs the evidence level and the mode, and why is recorded
 # there.
-fm_crew_no_pr_phrase() {  # <task-kind> <ci-evidence>
-  case "$1" in
+fm_crew_no_pr_phrase() {  # <no-pr-descriptor> <ci-evidence>
+  local kind=${1%% *} mode=""
+  case "$1" in *' '*) mode=${1#* } ;; esac
+  case "$kind" in
     scout)      printf 'no PR to land, a scout delivers a report' ;;
     secondmate) printf 'no PR to land, a secondmate owns no branch' ;;
-    ship)       fm_crew_ship_no_pr_phrase "${2:-unverified}" ;;
+    ship)       fm_crew_ship_no_pr_phrase "${2:-unverified}" "$mode" ;;
     '')         printf 'no PR recorded anywhere, and no task kind recorded either' ;;
-    *)          printf 'no PR recorded anywhere for a task of kind %s' "$1" ;;
+    *)          printf 'no PR recorded anywhere for a task of kind %s' "$kind" ;;
   esac
 }
 
@@ -805,7 +845,21 @@ fm_crew_no_pr_phrase() {  # <task-kind> <ci-evidence>
 # such, not a fallthrough. A run that recorded no PR has genuinely landed
 # nothing, and saying "not yet validated" there would credit a finished run with
 # a validation still to come.
-fm_crew_ship_no_pr_phrase() {  # <ci-evidence>
+#
+# The DELIVERY MODE is consulted FIRST and outranks the evidence level, because
+# for local-only the absent PR is not a moment in a lifecycle at all - it is the
+# brief's instruction, and it reads the same whether the claim came from a run or
+# from the worker's own line. Naming the mode is what stops the detail from
+# sending a reader to look for a PR the task was forbidden to open. Only a mode
+# this reader RECOGNIZES gets that wording; an absent or unrecognized one falls
+# through to the evidence split below, which is also the arm whose class refuses
+# `done`, so the words and the verdict stay in agreement.
+fm_crew_ship_no_pr_phrase() {  # <ci-evidence> [<delivery-mode>]
+  case "${2:-}" in
+    local-only)
+      printf 'no PR by design, mode=local-only lands a ready branch'
+      return ;;
+  esac
   case "$1" in
     reported) printf 'reported complete, not yet validated' ;;
     *)        printf 'no PR recorded by this run, so nothing has landed' ;;
