@@ -70,6 +70,7 @@ So the RATIO is the durable result and the absolute floor is only reproducible a
 Both readings are kept rather than one overwriting the other, because a single number silently replaced is how a measured claim turns into remembered prose.
 
 The three later commits measure identically to `45e6708` on the blocking path, so the runtime bound, the stage marks and the harness-ceiling clamp cost nothing on the default path - which is what deriving the ceiling only for an explicit override was for.
+The per-platform nesting margin added after them does cost 3 process creations in the bounded child, measured and broken down under "What the per-platform margin cost" below.
 
 ## Where the forks were, ranked
 
@@ -173,6 +174,139 @@ It is this script's own setup - one harness probe, the library sources and the t
 That figure is a LOWER bound on the window: when it was taken, the mark sat after three of the library sources, so their cost fell outside the stage. The mark has since been moved ahead of every source but `bin/fm-session-start-bound-lib.sh`, which defines the mark itself, so the window the stage now reports is wider than the one measured here and has not been re-measured on Windows.
 Before the `startup` stage existed, a truncation inside that window could only report the stage as `unknown` and list no lost stages at all, which is the case where the banner explains least.
 The final stage's elapsed is bounded by the remaining budget rather than measured, because the child was killed inside it; it is a lower bound on that stage, which is why it is marked as not finished.
+
+## The nesting margin, and why it is 3 s on Windows
+
+The runtime bound governs the BOUNDED CHILD.
+The harness kills the PARENT, and the parent spends time outside that child at both ends, so the hook's wall time is prologue + bound + banner.
+A margin sized only for the equal-deadline race covers neither end, and the operator who does exactly what the truncation banner tells them - raise `FM_SESSION_START_TIMEOUT` to the printed ceiling - then loses the banner outright on MSYS.
+`FM_SESSION_START_NESTING_MARGIN` in [`../../bin/fm-session-start-bound-lib.sh`](../../bin/fm-session-start-bound-lib.sh) is therefore per platform, by the same `uname -s` arms as the default budget.
+
+### What the margin owes
+
+Counted with the same `LD_PRELOAD` interposer described above, validated against the same known-count program before use, and counted rather than grepped:
+
+| Side of the bound | Work | Subprocesses |
+|---|---|---|
+| Before the fork | `bin/fm-session-start.sh`'s `SCRIPT_DIR`/`FM_ROOT` resolution, the `fm-session-start-bound-lib.sh`, `fm-timeout-lib.sh` and `fm-session-lock-lib.sh` sources with their transitive prologues, and the stage-file `mktemp` | ~10 |
+| After the kill | `fm_session_stage_last`, the pending-stage `awk`/`tr` pipeline, `fm_session_start_bound_remedy` and `fm_session_stage_render` | ~12 |
+| | | **22** |
+
+The count is portable and is taken on Linux; only the per-fork cost is not.
+
+### The per-fork cost on the target
+
+Measured on the box the defect lives on: `MINGW64_NT-10.0-26200`, bash 5.2.37, 22 cores.
+The pattern being timed is that same 22-subprocess shape, run against fork-heavy competitors:
+
+| Competing fork-heavy processes | Per fork | The 22-subprocess pattern |
+|---|---|---|
+| 0 | 30.6 ms | 639 ms |
+| 3 | 44.5 ms | 903 ms |
+| 6 | 61.7 ms | 1316 ms |
+| 12 | 124.0 ms | 2574 ms |
+
+**Pure CPU load was the wrong model and was discarded.**
+Four busy-loop burners made forks FASTER, 25 ms against 30 ms idle, through frequency boost.
+The real competitor is a test lane, which contends for PROCESS CREATION, and MSYS serialises that - hence fork-heavy competitors rather than CPU burners.
+
+### The derivation, and what it does not claim
+
+22 subprocesses x 124.0 ms = 2728 ms, ceiling to whole seconds = **3 s**.
+Off Windows the margin stays 1 s: forks cost about 1 ms here, so the same product is well under a second, and 1 s is the strict-inequality margin the equal-deadline race needs.
+
+The corroboration is reported the way it came out.
+The direct pattern timing at 12 competitors was 2574 ms, which is LOWER than the 2728 ms count-times-cost product, so the chosen 3 s is the conservative side of two independent instruments that agree.
+
+What this does NOT claim: the per-fork cost rises with contention, so no fixed margin is safe at unbounded contention.
+3 s covers the measured worst case on that box.
+It is not a proof of sufficiency.
+
+### One value, read by both the clamp and the banner
+
+`fm_session_start_hook_ceiling` subtracts the margin to derive the highest bound it will allow, and `fm_session_start_budget_advisory` and `fm_session_start_bound_remedy` add it back to name the second the harness will actually kill at.
+A second literal anywhere would let the number the operator is told diverge from the number in force, which is the failure the margin exists to prevent, so mutation M8 below is what holds them together.
+
+## What the per-platform margin cost, measured
+
+Same interposer, counting process creations for the library alone rather than for a whole session start, since that is where the change is:
+
+| Path | Before | After |
+|---|---|---|
+| Parent: source the library and resolve the DEFAULT bound | 4 forks, 1 exec | 4 forks, 1 exec |
+| Bounded child: source the library only | 0 | 2 forks, 1 exec |
+| Parent: source and clamp an explicit over-cap bound | 5 forks, 1 exec | 8 forks, 2 exec |
+| The truncation banner's remedy | 3 forks, 1 exec | 7 forks, 2 exec |
+
+The `uname -s` moved from `fm_session_start_default_budget`'s body to a single resolution when the file is sourced, so the parent's default path is unchanged.
+The bounded child, which sources the library for its stage marks and never asks for a bound, now pays that `uname` too: **3 process creations it did not pay before**, against the 789 the blocking path costs, which is 0.4%.
+That is the price of the margin being a plain variable that the clamp and the banner both read, and it is recorded rather than rounded away.
+The clamp and remedy paths cost more because they now go through one owner of "what caps this bound and why" instead of two ad-hoc derivations; both run only when an explicit `FM_SESSION_START_TIMEOUT` is set or after a truncation, so no ordinary session start reaches either.
+
+## Falsification: every guard shown FAILING with its protection removed
+
+"It passes" is not evidence.
+Each mutation below was applied to the working tree, the named suite was run, and the file was restored from a byte-for-byte backup afterwards; `git status` is clean of them.
+The line quoted is the actual `not ok` the suite printed.
+
+| # | Guard, and the commit that added it | Mutation | Suite |
+|---|---|---|---|
+| M1 | the registrations outlive the bound (`fd3f716`) | `.claude/settings.json` timeout 360 -> 180, the pre-`fd3f716` value | hook-nesting |
+| M2 | the ceiling is derived over every arm (`fd3f716`) | platform matrix shrunk to `Linux` | hook-nesting |
+| M3 | the harness ceiling clamp (`ceecac8`) | the clamp removed from `fm_session_start_resolve_budget` | hook-nesting |
+| M4 | the remedy is conditional (`ceecac8`) | the remedy always advises the knob | bound |
+| M5 | zero-padded bounds rejected (`773687c`) | the base-10 normalisation removed | bound |
+| M6 | hook context must be POSITIVE (`773687c`) | no marker, therefore `direct` - the tempting shortcut | bound |
+| M12 | the clamp is scoped to hook context (`773687c`) | the direct-run exemption removed | bound |
+| M7 | the per-platform nesting margin (this round) | the Windows arm dropped | hook-nesting |
+| M8 | one margin, read by clamp and banner alike (this round) | a second literal margin in the banner | hook-nesting |
+| M9 | the ceiling fails CLOSED (this round) | the `&&` short-circuit restored | bound |
+| M10 | `/dev/null` never reaches the cleanup (this round) | the guard removed | bound |
+| M11 | the shortened churner still catches the spill (this round) | the group redirection removed from `fm_lock_read_owner_pid` | watcher-lock |
+
+```console
+$ # M1
+not ok - .claude/settings.json kills the session-start hook after 180s while the digest may bound itself at 300s: the harness preempts the STARTUP TRUNCATED banner, so an over-budget startup loses its wake-queue drain and supervision instructions with nothing printed
+$ # M2
+not ok - the ceiling 120s is below the Windows default 300s: the derivation stopped covering the raised arm, which is how a 180s registration passed this check before
+$ # M3
+not ok - FM_SESSION_START_TIMEOUT=3600 on 'Linux' resolves to 3600s, at or above the 360s harness hook timeout: the harness kills the hook first, so there is no STARTUP TRUNCATED banner, no named stage and no reconcile list
+$ # M4
+not ok - a run already bounded at the 359s ceiling was still told to raise FM_SESSION_START_TIMEOUT, got: ●  If it truncates again, raise FM_SESSION_START_TIMEOUT - to at most 359s, above
+$ # M5
+not ok - unusable bound '00' on MINGW must fall back to the 300s platform default, got '00'
+$ # M6
+not ok - with no marker and no terminal on stderr the context must be 'undetermined', got 'direct'
+$ # M12
+not ok - a positively established direct run must be honoured IN FULL (3590s), got 359s: the operator's own rerun is the remedy the truncation banner prescribes and nothing kills it at the hook timeout
+$ # M7
+not ok - the Windows nesting margin is 1s, below the 2728ms the measured 22-subprocess prologue and banner cost at 124ms per fork: the harness kills the parent mid-banner, so a truncation prints no stage and no reconcile list
+$ # M8
+not ok - the raise advice on the Windows arm must name the 360s registration as the second the harness kills at, got: ●  If it truncates again, raise FM_SESSION_START_TIMEOUT - to at most 357s, above
+$ # M9
+not ok - with no readable registration an over-default bound must fall back to the 300s platform default, got 3000s: honouring it in full is the same silent kill a wrong 'not a hook' produces
+$ # M10
+not ok - the cleanup asked rm to delete /dev/null; running as root in a container that removes /dev/null for everything else running in it
+$ # M11
+not ok - reading the owner pid file while it is deleted underneath spilled to stderr, which bin/fm-session-start.sh merges into the digest with 2>&1: bin/fm-wake-lib.sh: line 362: .../.contend.lock.owner/pid: No such file or directory
+```
+
+Two limits of this record, stated rather than left to be discovered.
+M7 falsifies the margin's SHAPE - that the Windows arm exists and covers the measured product - and not the 2728 ms input itself, which is a measurement and is falsifiable only by re-measuring on the target box.
+M8 catches a second margin that DISAGREES with the first; it cannot catch both sites being changed to the same wrong value, which is why the derivation above is recorded rather than only asserted.
+
+## The lock-pid race case, and what shortening it cost
+
+`tests/fm-watcher-lock.test.sh`'s lock-pid read race churned the pid file 4000 times, and `rm -f` is not a builtin, so that is 4000 process creations: 2.7 s here and, at the 42 ms a fork costs under MSYS, about 168 s for one case on the platform this whole branch is scoped to.
+The churn is now bounded by wall clock instead - at most a second, less when bash's whole-second `SECONDS` ticks early - and keeps running past that slice only while an outcome has not been observed.
+
+| | Churn iterations | Wall |
+|---|---|---|
+| before | 4000 | 2.728 s |
+| after | 257 | 0.162 s |
+
+The reduction was checked against the regression rather than assumed harmless.
+With the group redirection removed from `fm_lock_read_owner_pid`, the shortened loop still spilled 8804, 19809, 15975, 16756 and 16756 bytes of bash's own `No such file or directory` to stderr on five consecutive runs, and M11 above is that same mutation failing the real suite.
 
 ## Reproducing
 

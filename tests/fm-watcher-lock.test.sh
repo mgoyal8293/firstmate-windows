@@ -406,6 +406,25 @@ test_lock_late_claim_loses_after_recreate() {
 # the spill unconditionally, so a green result here does not depend on winning or
 # losing any race - only a REGRESSION that puts the suppression back inside the
 # substitution, or drops it, can make it fail. It cannot flake green.
+#
+# THE CHURNER IS BOUNDED BY ELAPSED TIME, NOT BY AN ITERATION COUNT, and that is
+# a portability property rather than a tidy-up. `printf > file` is a builtin but
+# `rm -f` is not, so every churn cycle costs one process creation: a fixed 4000
+# cycles is 2.8 s here and, at the 42 ms a fork costs under MSYS - the platform
+# this suite's own library changes are for, and the one the captain runs daily -
+# about 168 s for this single case. The window being crossed is a property of the
+# loop, not of how long it runs, so the churn is bounded by wall clock instead -
+# at most one second, and less when `SECONDS` ticks early, since it is
+# whole-second granular - and the anti-vacuity assertions below are what say it
+# was enough. They are unchanged and still hard failures: the loop keeps running
+# past that slice only while an outcome has not been observed, so "reduce the
+# loop" cannot turn into "stop observing the window".
+#
+# The reduction was checked against the regression rather than assumed harmless:
+# with the group redirection removed from fm_lock_read_owner_pid, the shortened
+# loop still spilled 8.8-19.8 KB of bash's own "No such file or directory" to
+# stderr on five consecutive runs, so the case still fails the moment the
+# suppression does.
 test_lock_owner_pid_read_is_silent_while_the_file_is_being_deleted() {
   local dir state ownerdir err out
   dir=$(make_case lock-pid-read-race)
@@ -416,22 +435,31 @@ test_lock_owner_pid_read_is_silent_while_the_file_is_being_deleted() {
   out=$(FM_STATE_OVERRIDE="$state" bash -c '
     . "$1"
     ownerdir=$2
+    stop="$ownerdir/../churn.stop"
     # The churner recreates and removes the pid file as fast as it can, so the
     # reader below crosses the window between its own [ -r ] and its read many
-    # times over.
+    # times over. It stops when the reader has seen what it came for, so the
+    # process creations it spends are bounded by that and not by a fixed count.
     ( i=0
-      while [ "$i" -lt 4000 ]; do
+      while [ ! -e "$stop" ] && [ "$i" -lt 100000 ]; do
         printf "%s\n" "$i" > "$ownerdir/pid" 2>/dev/null || true
         rm -f "$ownerdir/pid" 2>/dev/null || true
         i=$((i + 1))
       done ) &
     churner=$!
     reads=0 hits=0 misses=0
-    while kill -0 "$churner" 2>/dev/null; do
+    SECONDS=0
+    # One second of racing, then as much longer as it takes to observe both
+    # outcomes, capped so a box that never produces one fails the assertions
+    # below rather than hanging.
+    while [ "$SECONDS" -lt 1 ] || [ "$hits" -eq 0 ] || [ "$misses" -eq 0 ]; do
+      kill -0 "$churner" 2>/dev/null || break
       fm_lock_read_owner_pid "$ownerdir" || { printf "FAILED_RETURN\n"; break; }
       reads=$((reads + 1))
       if [ -n "$FM_LOCK_OWNER_PID" ]; then hits=$((hits + 1)); else misses=$((misses + 1)); fi
+      [ "$reads" -lt 400000 ] || break
     done
+    : > "$stop"
     wait "$churner" 2>/dev/null || true
     printf "reads=%s hits=%s misses=%s\n" "$reads" "$hits" "$misses"
   ' _ "$LIB" "$ownerdir" 2> "$err") || fail "reading a racing owner pid file must never fail the caller"

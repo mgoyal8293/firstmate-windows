@@ -347,7 +347,14 @@ if [ -z "${FM_SESSION_START_STAGE_FILE:-}" ]; then
     fm_session_stage_render "$SESSION_START_STAGE_FILE" "$SESSION_START_BUDGET"
     printf '%s\n' "$BAR"
   fi
-  rm -f "$SESSION_START_STAGE_FILE" 2>/dev/null || true
+  # /dev/null is the sentinel this block uses when mktemp fails, and it is
+  # load-bearing: the child is told apart from the parent by having a NON-EMPTY
+  # FM_SESSION_START_STAGE_FILE, so the breadcrumb path cannot simply be blanked.
+  # It must therefore never be handed to rm. An unprivileged account is protected
+  # by /dev not being writable; a session start running as root in a container is
+  # not, and would delete /dev/null for everything else in that container.
+  [ "$SESSION_START_STAGE_FILE" = /dev/null ] \
+    || rm -f "$SESSION_START_STAGE_FILE" 2>/dev/null || true
   exit 0
 fi
 

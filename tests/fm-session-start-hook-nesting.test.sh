@@ -311,7 +311,116 @@ test_a_clamp_says_so_on_the_digest() {
   pass "hook nesting: a clamped bound names the requested value, the cap applied and why, and an unclamped one stays silent"
 }
 
+# --- 4. the margin covers the parent's OWN time, not just the equal-deadline race
+#
+# The bound governs the bounded CHILD. The harness kills the PARENT, and the
+# parent spends time outside that child at both ends: the pre-fork prologue
+# (SCRIPT_DIR/FM_ROOT resolution, three library sources with their own transitive
+# prologues, the stage-file mktemp) and, after the kill, the whole banner
+# (fm_session_stage_last, the pending-stage awk/tr pipeline,
+# fm_session_start_bound_remedy, fm_session_stage_render). So the hook's wall
+# time is prologue + bound + banner, and a margin sized only for the race covers
+# neither end - which means an operator who does exactly what the banner tells
+# them, raise FM_SESSION_START_TIMEOUT to the printed ceiling, still loses the
+# banner on MSYS.
+#
+# The measured pattern is 22 subprocesses at a worst measured 124.0 ms per fork
+# under contention on the target box; bin/fm-session-start-bound-lib.sh and
+# docs/verification/session-start-fork-profile.md record how both numbers were
+# taken. This suite holds the library's Windows arm to covering that product.
+#
+# THE WINDOWS ARM IS DRIVEN BY SOURCING THE LIBRARY UNDER THE PLATFORM OVERRIDE,
+# not by reading its text: the margin is resolved when the file is sourced, so a
+# fresh shell with FM_PLATFORM_UNAME_OVERRIDE set is what a Git Bash session
+# actually does, and every number below comes from running the real functions
+# there.
+MEASURED_PROLOGUE_AND_BANNER_SUBPROCESSES=22
+MEASURED_WORST_FORK_MS=124
+
+# Run <snippet> with bin/fm-session-start-bound-lib.sh sourced in a fresh shell
+# that resolves its platform arms as <uname>, under a positively established hook
+# context. A fresh shell rather than a subshell, because the margin is resolved
+# when the file is sourced and the override has to be in place before that.
+on_platform() {  # <uname-s> <shell-snippet>
+  FM_PLATFORM_UNAME_OVERRIDE="$1" FM_SESSION_START_UNDER_HOOK=1 \
+    bash -c '. "$1"; eval "$2"' _ "$ROOT/bin/fm-session-start-bound-lib.sh" "$2"
+}
+
+# Deferred on purpose: this is evaluated in the fresh shell on_platform starts,
+# after the library has been sourced there under that shell's platform override.
+# shellcheck disable=SC2016
+READ_MARGIN='printf "%s\n" "$FM_SESSION_START_NESTING_MARGIN"'
+
+test_the_nesting_margin_covers_the_windows_prologue_and_banner() {
+  local margin portable owed
+
+  margin=$(on_platform MINGW64_NT-10.0-26200 "$READ_MARGIN")
+  case "$margin" in ''|*[!0-9]*|0) fail "the Windows nesting margin must be a positive integer, got '$margin'" ;; esac
+  portable=$(on_platform Linux "$READ_MARGIN")
+  case "$portable" in ''|*[!0-9]*|0) fail "the portable nesting margin must be a positive integer, got '$portable'" ;; esac
+
+  # THE GUARD. The Windows margin has to cover the measured cost of the work the
+  # parent does outside the bounded child. A margin sized for the race alone does
+  # not, and this is the assertion that says so in milliseconds rather than in
+  # prose.
+  owed=$((MEASURED_PROLOGUE_AND_BANNER_SUBPROCESSES * MEASURED_WORST_FORK_MS))
+  [ "$((margin * 1000))" -ge "$owed" ] \
+    || fail "the Windows nesting margin is ${margin}s, below the ${owed}ms the measured ${MEASURED_PROLOGUE_AND_BANNER_SUBPROCESSES}-subprocess prologue and banner cost at ${MEASURED_WORST_FORK_MS}ms per fork: the harness kills the parent mid-banner, so a truncation prints no stage and no reconcile list"
+  # The portable arm is the strict-inequality margin and stays that: forks are
+  # about 1 ms here, so the same product is well under a second.
+  [ "$portable" -ge 1 ] \
+    || fail "the portable nesting margin must stay at least 1s: at equal deadlines which process dies first is a race"
+
+  pass "hook nesting: the Windows margin ${margin}s covers the measured ${owed}ms of prologue and banner the bound itself does not, and the portable arm keeps its ${portable}s strict-inequality margin"
+}
+
+# The clamp and the operator-facing advice must be reading the SAME margin. If
+# either of them carried its own copy the two would drift, and the operator would
+# be told a kill deadline that is not the one the bound was computed against -
+# which is the whole failure mode the margin exists to prevent. Asserted against
+# the registration timeout read independently with jq, so the printed second has
+# to be the real one and not merely self-consistent.
+test_the_clamp_and_the_banner_agree_on_the_margin() {
+  local harness margin cap budget below at advisory
+  harness=$(min_registered_digest_timeout) \
+    || fail "no digest-tier session-start timeout could be read at all"
+  margin=$(on_platform MINGW64_NT-10.0-26200 "$READ_MARGIN")
+  cap=$(on_platform MINGW64_NT-10.0-26200 'fm_session_start_hook_ceiling') \
+    || fail "no cap could be derived on the Windows arm"
+  case "$cap" in ''|*[!0-9]*|0) fail "the Windows cap must be a positive integer, got '$cap'" ;; esac
+
+  # The clamp: the bound in force is the registration minus that one margin.
+  [ "$cap" -eq "$((harness - margin))" ] \
+    || fail "the Windows cap ${cap}s is not the ${harness}s shortest registration minus its own ${margin}s margin: the clamp is using a different margin from the one the library defines"
+  budget=$(on_platform MINGW64_NT-10.0-26200 "fm_session_start_resolve_budget $((harness * 10))")
+  [ "$budget" -eq "$cap" ] \
+    || fail "an over-cap override on the Windows arm resolved to ${budget}s rather than the ${cap}s cap"
+
+  # The banner: every line that names the second the harness kills at must name
+  # the registration's own timeout. A second literal margin anywhere makes this
+  # print ${harness} minus the difference, and this fails.
+  below=$(on_platform MINGW64_NT-10.0-26200 "fm_session_start_bound_remedy $((cap - 1))")
+  case "$below" in
+    *"after ${harness}s"*) : ;;
+    *) fail "the raise advice on the Windows arm must name the ${harness}s registration as the second the harness kills at, got: $below" ;;
+  esac
+  at=$(on_platform MINGW64_NT-10.0-26200 "fm_session_start_bound_remedy $cap")
+  case "$at" in
+    *"after ${harness}s"*) : ;;
+    *) fail "the pinned advice on the Windows arm must name the ${harness}s registration as the second the harness kills at, got: $at" ;;
+  esac
+  advisory=$(on_platform MINGW64_NT-10.0-26200 "fm_session_start_budget_advisory $((harness * 10)) $cap hook")
+  case "$advisory" in
+    *"after ${harness}s"*) : ;;
+    *) fail "the clamp advisory on the Windows arm must name the ${harness}s registration as the second the harness kills at, got: $advisory" ;;
+  esac
+
+  pass "hook nesting: the clamp and every banner line on the Windows arm go through the one ${margin}s margin, so the ${cap}s bound and the ${harness}s kill deadline they print cannot disagree"
+}
+
 test_the_ceiling_covers_every_arm_the_resolver_can_pick
 test_every_registered_digest_hook_outlives_the_startup_bound
 test_an_explicit_override_is_clamped_below_the_shortest_registration
 test_a_clamp_says_so_on_the_digest
+test_the_nesting_margin_covers_the_windows_prologue_and_banner
+test_the_clamp_and_the_banner_agree_on_the_margin

@@ -43,6 +43,24 @@
 # empty stamp, which the renderer reports as unmeasured rather than as zero.
 set -u
 
+# The `uname -s` every platform arm in this file is resolved against, read ONCE
+# when the file is sourced.
+#
+# FM_PLATFORM_UNAME_OVERRIDE still wins at CALL time in
+# fm_session_start_default_budget, which is the seam every platform-arm test
+# drives; caching the host's answer here only removes the `uname` that arm used
+# to fork on every call. It is what lets the nesting margin below be a single
+# variable, readable by the clamp and by the banner alike, rather than a function
+# each of them would have to remember to call.
+#
+# Assigned once per shell rather than once per source: this file is sourced by
+# both the parent and the bounded child, and re-running a prologue per source is
+# the exact pattern docs/verification/session-start-fork-profile.md ranks as the
+# largest single source of forks on this path.
+if [ -z "${FM_SESSION_START_PLATFORM:-}" ]; then
+  FM_SESSION_START_PLATFORM=${FM_PLATFORM_UNAME_OVERRIDE:-$(uname -s 2>/dev/null || printf unknown)}
+fi
+
 # The default runtime bound in seconds for this platform.
 #
 # FM_PLATFORM_UNAME_OVERRIDE is the same test seam bin/fm-proc-lib.sh uses, for
@@ -66,7 +84,7 @@ set -u
 # measured maximum, and raising the bound does not make the subprocess count that
 # forced it acceptable.
 fm_session_start_default_budget() {
-  case "${FM_PLATFORM_UNAME_OVERRIDE:-$(uname -s 2>/dev/null || printf unknown)}" in
+  case "${FM_PLATFORM_UNAME_OVERRIDE:-$FM_SESSION_START_PLATFORM}" in
     MINGW*|MSYS*|CYGWIN*) printf '300\n' ;;
     *) printf '120\n' ;;
   esac
@@ -81,12 +99,66 @@ fm_session_start_default_budget() {
 FM_SESSION_START_DIGEST_WRAPPERS='fm-session-start.sh fm-sessionstart-run.sh fm-sessionstart-cursor.sh'
 
 # The margin, in seconds, between the digest's own bound and the shortest harness
-# hook timeout that has to outlive it. It is 1 because the nesting invariant is a
-# STRICT inequality: at equal deadlines which process dies first is a race, and
-# losing that race loses the whole banner.
-# tests/fm-session-start-hook-nesting.test.sh asserts that same strictness, so
-# this is the one place the margin is written down.
-FM_SESSION_START_NESTING_MARGIN=1
+# hook timeout that has to outlive it. Per platform, by the same `uname -s` arms
+# and the same FM_PLATFORM_UNAME_OVERRIDE seam as the default budget above,
+# because what the margin has to cover is per platform too.
+#
+# WHAT THE MARGIN OWES, AND WHY 1 s DID NOT COVER IT. The bound governs the
+# BOUNDED CHILD's runtime, but the harness kills the PARENT, and the parent
+# spends time outside that child on both sides of it. Before the fork:
+# bin/fm-session-start.sh's SCRIPT_DIR/FM_ROOT resolution, the
+# fm-session-start-bound-lib.sh, fm-timeout-lib.sh and fm-session-lock-lib.sh
+# sources - the last pulling fm-cursor-lib.sh, fm-proc-lib.sh and
+# fm-session-token-lib.sh with their own prologues - and the stage-file mktemp.
+# After the kill, the entire banner: fm_session_stage_last, the pending-stage
+# awk/tr pipeline, fm_session_start_bound_remedy and fm_session_stage_render. So
+# the hook's wall time is prologue + bound + banner, and a margin sized only for
+# the equal-deadline race covers neither end. An operator doing exactly what the
+# banner tells them - raise FM_SESSION_START_TIMEOUT to the printed ceiling -
+# would then lose the banner outright on the platform this port exists for.
+#
+# 1 s OFF WINDOWS is the strict-inequality margin and is unchanged: at equal
+# deadlines which process dies first is a race, and losing that race loses the
+# whole banner. tests/fm-session-start-hook-nesting.test.sh asserts that same
+# strictness.
+#
+# 3 s ON MSYS/MINGW/CYGWIN IS DERIVED, NOT CHOSEN:
+#   22 subprocesses x 124.0 ms per fork = 2728 ms, ceiling to whole seconds = 3.
+# Each input is measured, and docs/verification/session-start-fork-profile.md
+# records the runs:
+#   - The 22 are COUNTED, not grepped: about 10 in the pre-fork prologue and
+#     about 12 in the post-kill banner, taken on Linux with the LD_PRELOAD
+#     fork/execve/posix_spawn interposer that doc describes, validated against a
+#     known-count program before use. The count is portable; only the per-fork
+#     cost is not.
+#   - 124.0 ms is the WORST point of a measured contention curve on the target
+#     box - MINGW64_NT-10.0-26200, bash 5.2.37, 22 cores - replicating that exact
+#     subprocess pattern against fork-heavy competitors: 0 competitors 30.6 ms
+#     per fork, 3 competitors 44.5 ms, 6 competitors 61.7 ms, 12 competitors
+#     124.0 ms.
+#   - Pure CPU load was the WRONG model and was discarded: 4 busy-loop burners
+#     made forks FASTER, 25 ms against 30 ms idle, through frequency boost. The
+#     real competitor is a test lane, which contends for PROCESS CREATION, and
+#     MSYS serialises that.
+#   - Corroborated by a second instrument, and reported the way it came out:
+#     timing the same pattern end to end at 12 competitors gave 2574 ms, BELOW
+#     the 2728 ms count-times-cost product, so 3 s is the conservative side of
+#     two independent figures that agree.
+#   - What this does NOT claim: the per-fork cost rises with contention, so no
+#     fixed margin is safe at unbounded contention. 3 s covers the measured worst
+#     case on that box; it is not a proof of sufficiency.
+#
+# THE CLAMP AND THE BANNER READ THIS ONE VARIABLE, which is a requirement and not
+# a tidiness preference. fm_session_start_hook_ceiling subtracts it to derive the
+# highest bound it will allow; fm_session_start_budget_advisory and
+# fm_session_start_bound_remedy add it back to name the deadline the harness will
+# actually kill at. A second literal or a second derivation anywhere would let
+# the number the operator is told diverge from the number in force, which is the
+# failure this margin exists to prevent.
+case "${FM_PLATFORM_UNAME_OVERRIDE:-$FM_SESSION_START_PLATFORM}" in
+  MINGW*|MSYS*|CYGWIN*) FM_SESSION_START_NESTING_MARGIN=3 ;;
+  *) FM_SESSION_START_NESTING_MARGIN=1 ;;
+esac
 
 # The highest bound the harness will actually let a session start reach: the
 # SHORTEST timeout any registered digest-tier session-start hook declares, minus
@@ -262,6 +334,43 @@ fm_session_start_hook_context() {
   printf 'undetermined\n'
 }
 
+# The cap actually in force for an explicit bound on this path, and the reason it
+# applies. Prints "<seconds> <source>", where source is one of:
+#   harness - the shortest registered digest-tier hook timeout, minus the nesting
+#             margin. The number the machine will really give.
+#   default - no registration could be read AT ALL, so this platform's default
+#             stands in for the deadline this shell cannot see.
+# Returns non-zero and prints nothing on a POSITIVELY established direct run,
+# where nothing kills this process at a hook timeout and no cap applies.
+#
+# WHY AN UNREADABLE REGISTRATION SET CAPS RATHER THAN RELEASES. The ceiling used
+# to be consulted with `&&`, so a registration set that could not be read - awk
+# absent, or a bin-only deployment with no .claude/.codex/.cursor directories
+# beside the library - short-circuited and handed back the operator's explicit
+# value in full. That is the SAME outcome as a wrong "not a hook": a bound above
+# a hook timeout, killed by the harness with no banner at all. The hook-context
+# arm already resolves exactly that uncertainty to the safe side, and this one
+# missed it. So an unreadable set falls back to the platform default, which is
+# the largest bound this file can justify without reading anything, rather than
+# to whatever was asked for.
+#
+# ONE OWNER, BECAUSE THE CLAMP AND THE BANNER MUST NOT DISAGREE.
+# fm_session_start_resolve_budget clamps with this, and
+# fm_session_start_budget_advisory and fm_session_start_bound_remedy describe the
+# result with it. Two derivations of "what caps this" is how an operator gets
+# told to raise a knob that is already pinned, or gets a harness deadline quoted
+# for a cap that did not come from the harness.
+fm_session_start_cap() {  # [hook-context]
+  local context=${1:-} ceiling
+  [ -n "$context" ] || context=$(fm_session_start_hook_context)
+  [ "$context" != direct ] || return 1
+  if ceiling=$(fm_session_start_hook_ceiling); then
+    printf '%s harness\n' "$ceiling"
+  else
+    printf '%s default\n' "$(fm_session_start_default_budget)"
+  fi
+}
+
 # The effective runtime bound, given the operator's explicit
 # FM_SESSION_START_TIMEOUT (empty when unset).
 #
@@ -285,12 +394,12 @@ fm_session_start_hook_context() {
 # banner reports the bound the way `timeout` read it.
 #
 # The one thing an explicit value does NOT win against is the harness. A usable
-# value above fm_session_start_hook_ceiling is CLAMPED to that ceiling, because
-# above it the harness kills the hook first and the operator gets nothing printed
-# at all - strictly less than the truncation banner they were trying to avoid. It
-# is clamped rather than rejected: someone who asked for MORE time must not be
-# handed LESS than the machine can safely give, so an over-ceiling request lands
-# on the ceiling and never back on the platform default.
+# value above fm_session_start_cap is CLAMPED to that cap, because above it the
+# harness kills the hook first and the operator gets nothing printed at all -
+# strictly less than the truncation banner they were trying to avoid. It is
+# clamped rather than rejected: someone who asked for MORE time must not be
+# handed LESS than the machine can safely give, so an over-cap request lands on
+# the cap and never below it.
 # fm_session_start_budget_advisory below is what says so on the digest.
 #
 # THE CLAMP IS SCOPED TO THE PATHS THE CEILING GOVERNS. It applies when
@@ -301,13 +410,13 @@ fm_session_start_hook_context() {
 # clamp refuses time the machine will not give, or time this process cannot
 # establish that the machine will give; it is not a global cap.
 #
-# The ceiling is only derived when there IS an explicit value that could be
-# clamped, which keeps the default path - every ordinary session start - at
-# exactly the subprocess count it had before. The defaults are guarded instead by
+# The cap is only derived when there IS an explicit value that could be clamped,
+# which keeps the default path - every ordinary session start - at exactly the
+# subprocess count it had before. The defaults are guarded instead by
 # tests/fm-session-start-hook-nesting.test.sh, which asserts every platform arm
 # nests under every registration.
 fm_session_start_resolve_budget() {  # [explicit-seconds]
-  local explicit=${1:-} fallback ceiling
+  local explicit=${1:-} fallback cap
   case "$explicit" in
     ''|*[!0-9]*)
       fallback=$(fm_session_start_default_budget)
@@ -321,10 +430,12 @@ fm_session_start_resolve_budget() {  # [explicit-seconds]
     printf '%s\n' "$fallback"
     return 0
   fi
-  if [ "$(fm_session_start_hook_context)" != direct ] \
-    && ceiling=$(fm_session_start_hook_ceiling) && [ "$explicit" -gt "$ceiling" ]; then
-    printf '%s\n' "$ceiling"
-    return 0
+  if cap=$(fm_session_start_cap); then
+    cap=${cap%% *}
+    if [ "$explicit" -gt "$cap" ]; then
+      printf '%s\n' "$cap"
+      return 0
+    fi
   fi
   printf '%s\n' "$explicit"
 }
@@ -333,28 +444,50 @@ fm_session_start_resolve_budget() {  # [explicit-seconds]
 # was asked for, what was applied, and what would have happened otherwise, so the
 # operator is not left believing a bound that is not in force.
 #
-# Takes both numbers rather than re-deriving the ceiling, so it costs no
-# subprocess and cannot disagree with the bound that is actually running. The
-# context is named too, because "we know this is a hook" and "we could not
-# establish that this is not a hook" are different claims and the operator's next
-# move differs between them.
+# Takes both numbers rather than re-deriving the bound, so it can never disagree
+# with the bound that is actually running, and it returns before touching
+# anything else when nothing was clamped - which is every ordinary session start,
+# and why this costs the default path no subprocess at all. The context is named
+# too, because "we know this is a hook" and "we could not establish that this is
+# not a hook" are different claims and the operator's next move differs between
+# them.
+#
+# WHERE THE CAP CAME FROM IS PART OF THE ADVICE. A cap read from the
+# registrations lets this name the exact second the harness kills at; a cap that
+# stood in for registrations this shell could not read does not, and quoting one
+# anyway would invent a deadline. So the source is asked of
+# fm_session_start_cap - the same owner the clamp used - rather than assumed.
 fm_session_start_budget_advisory() {  # <requested> <effective> [context]
-  local requested=${1:-} effective=${2:-} context=${3:-}
+  local requested=${1:-} effective=${2:-} context=${3:-} cap capsource=none
   case "$requested" in ''|*[!0-9]*) return 0 ;; esac
   case "$effective" in ''|*[!0-9]*|0) return 0 ;; esac
   requested=$((10#$requested))
   [ "$requested" -gt "$effective" ] || return 0
   [ -n "$context" ] || context=$(fm_session_start_hook_context)
+  cap=$(fm_session_start_cap "$context") && capsource=${cap##* }
   printf '●  FM_SESSION_START_TIMEOUT=%ss was CLAMPED to %ss.\n' "$requested" "$effective"
-  printf '●  A registered session-start hook is killed by the harness after %ss, and that\n' \
-    "$((effective + FM_SESSION_START_NESTING_MARGIN))"
-  printf '●  kill takes this script with the digest, printing no truncation banner at all.\n'
+  case "$capsource" in
+    harness)
+      printf '●  A registered session-start hook is killed by the harness after %ss, and that\n' \
+        "$((effective + FM_SESSION_START_NESTING_MARGIN))"
+      printf '●  kill takes this script with the digest, printing no truncation banner at all.\n'
+      ;;
+    default)
+      printf '●  No harness session-start registration could be read from this deployment, so\n'
+      printf '●  the hook timeout that would kill this script is unknown here and the bound\n'
+      printf '●  falls back to this platform default rather than to the value asked for.\n'
+      ;;
+  esac
   case "$context" in
     hook) printf '●  This run IS under a registered session-start hook.\n' ;;
+    direct) : ;;
     *) printf '●  This run could not be established as a direct terminal invocation, so it is\n'
        printf '●  treated as a hook: an unprovable "not a hook" is what loses the banner.\n' ;;
   esac
-  printf '●  Raise the SessionStart timeouts in the harness registrations to go higher.\n'
+  case "$capsource" in
+    harness) printf '●  Raise the SessionStart timeouts in the harness registrations to go higher.\n' ;;
+    default) printf '●  Restore the harness registrations beside bin/ to go higher.\n' ;;
+  esac
 }
 
 # The truncation banner's remedy, which has to stay ACTIONABLE. Owned here rather
@@ -363,34 +496,59 @@ fm_session_start_budget_advisory() {  # <requested> <effective> [context]
 # raise a knob already pinned at its maximum spends their next move on a no-op
 # and reads as though nothing was checked.
 #
-# Three cases, and the middle one is the reason this exists:
-#   below the ceiling  - raise it, and here is how far it can go.
-#   at or above it     - raising it cannot help; the registrations are the knob.
-#   no ceiling read    - the original uncapped advice, because naming a number
-#                        this shell could not read would not be honest.
+# Four cases, and the middle two are the reason this exists:
+#   no cap applies    - a positively established direct run, where nothing kills
+#                       this process at a hook timeout: the original uncapped
+#                       advice, and the only case where it is still true.
+#   below the cap     - raise it, and here is how far it can actually go.
+#   at or above it    - raising it cannot help; say which knob still moves.
+#   cap without a read - the registrations could not be read, so the pinned
+#                       advice points at restoring them rather than quoting a
+#                       harness deadline this shell never saw.
+#
+# The cap and the reason both come from fm_session_start_cap, the same owner
+# fm_session_start_resolve_budget clamped with, so the number named here is by
+# construction the number in force.
 fm_session_start_bound_remedy() {  # <effective-budget>
-  local effective=${1:-} ceiling
-  if ! ceiling=$(fm_session_start_hook_ceiling); then
+  local effective=${1:-} cap capvalue capsource
+  case "$effective" in ''|*[!0-9]*) effective=0 ;; esac
+  if ! cap=$(fm_session_start_cap); then
     printf '●  If it truncates again, raise FM_SESSION_START_TIMEOUT and report the slow\n'
     printf '●  stage - a stage that cannot finish inside the bound is a fleet problem, not a\n'
     printf '●  reporting detail.\n'
     return 0
   fi
-  case "$effective" in ''|*[!0-9]*) effective=0 ;; esac
-  if [ "$effective" -lt "$ceiling" ]; then
-    printf '●  If it truncates again, raise FM_SESSION_START_TIMEOUT - to at most %ss, above\n' "$ceiling"
-    printf '●  which the harness kills this hook after %ss and prints no banner at all - and\n' \
-      "$((ceiling + FM_SESSION_START_NESTING_MARGIN))"
+  capvalue=${cap%% *}
+  capsource=${cap##* }
+  if [ "$effective" -lt "$capvalue" ]; then
+    printf '●  If it truncates again, raise FM_SESSION_START_TIMEOUT - to at most %ss, above\n' "$capvalue"
+    if [ "$capsource" = harness ]; then
+      printf '●  which the harness kills this hook after %ss and prints no banner at all - and\n' \
+        "$((capvalue + FM_SESSION_START_NESTING_MARGIN))"
+    else
+      printf '●  which nothing here can bound it, since no harness registration could be read\n'
+      printf '●  from this deployment to say when the hook is killed - and\n'
+    fi
     printf '●  report the slow stage: a stage that cannot finish inside the bound is a fleet\n'
     printf '●  problem, not a reporting detail.\n'
     return 0
   fi
-  printf '●  FM_SESSION_START_TIMEOUT is ALREADY at the %ss harness ceiling, so raising it\n' "$ceiling"
-  printf '●  cannot help: the harness kills this hook after %ss and prints no banner at all.\n' \
-    "$((ceiling + FM_SESSION_START_NESTING_MARGIN))"
-  printf '●  Raise the SessionStart timeouts in the harness registrations, or fix the stage\n'
-  printf '●  named above - a stage that cannot finish inside the bound is a fleet problem,\n'
-  printf '●  not a reporting detail.\n'
+  if [ "$capsource" = harness ]; then
+    printf '●  FM_SESSION_START_TIMEOUT is ALREADY at the %ss harness ceiling, so raising it\n' "$capvalue"
+    printf '●  cannot help: the harness kills this hook after %ss and prints no banner at all.\n' \
+      "$((capvalue + FM_SESSION_START_NESTING_MARGIN))"
+    printf '●  Raise the SessionStart timeouts in the harness registrations, or fix the stage\n'
+    printf '●  named above - a stage that cannot finish inside the bound is a fleet problem,\n'
+    printf '●  not a reporting detail.\n'
+    return 0
+  fi
+  printf '●  FM_SESSION_START_TIMEOUT is ALREADY at the %ss cap this deployment can justify,\n' "$capvalue"
+  printf '●  so raising it cannot help: no harness registration could be read here, so the\n'
+  printf '●  hook timeout that kills this script is unknown and the platform default stands\n'
+  printf '●  in for it.\n'
+  printf '●  Restore the harness registrations beside bin/, or fix the stage named above - a\n'
+  printf '●  stage that cannot finish inside the bound is a fleet problem, not a reporting\n'
+  printf '●  detail.\n'
 }
 
 # Append the entry instant of <stage> to <file>. Never fails the caller: a

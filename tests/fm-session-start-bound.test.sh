@@ -252,6 +252,74 @@ test_the_clamp_follows_hook_context_and_undetermined_clamps() {
   pass "fm_session_start_resolve_budget: clamps under a hook AND when hook context is undetermined, and honours a positively established direct run in full"
 }
 
+# --- 2c. an unreadable registration set caps too, it does not release --------
+#
+# The ceiling used to be consulted with `&&`, so a deployment where no
+# registration could be READ - a bin-only install with no .claude/.codex/.cursor
+# beside the library, or a box with no awk - short-circuited straight past the
+# clamp and handed the operator's explicit bound back in full. That is the same
+# outcome as a wrong "not a hook", which the case above proves is the one
+# inference that must never be made: a bound above a hook timeout, killed with no
+# banner at all. The uncertainty is identical, so the resolution has to be.
+#
+# The deployment is reproduced rather than described: FM_SESSION_START_REGISTRATION_ROOT
+# points the library's own discovery glob at a directory with nothing in it, so
+# the real derivation runs and really finds nothing.
+test_an_unreadable_registration_set_caps_rather_than_releasing() {
+  local empty windows got out
+  empty=$(fm_test_tmproot fm-session-start-bound-bin-only) \
+    || fail "could not create a temp root"
+  # The premise, asserted rather than assumed: if a ceiling could still be
+  # derived here, every assertion below would be checking the ordinary clamp.
+  if FM_SESSION_START_REGISTRATION_ROOT="$empty" fm_session_start_hook_ceiling >/dev/null 2>&1; then
+    fail "a registration root holding no registrations still yielded a ceiling, so this case is not exercising the unreadable path"
+  fi
+  windows=$(FM_PLATFORM_UNAME_OVERRIDE=MINGW64_NT-10.0 fm_session_start_default_budget)
+
+  # THE GUARD. Under a hook, with nothing readable to bound it by, an explicit
+  # bound above the platform default must fall CLOSED to that default.
+  got=$(FM_SESSION_START_UNDER_HOOK=1 FM_SESSION_START_REGISTRATION_ROOT="$empty" \
+    FM_PLATFORM_UNAME_OVERRIDE=MINGW64_NT-10.0 \
+    fm_session_start_resolve_budget "$((windows * 10))")
+  [ "$got" -eq "$windows" ] \
+    || fail "with no readable registration an over-default bound must fall back to the ${windows}s platform default, got ${got}s: honouring it in full is the same silent kill a wrong 'not a hook' produces"
+  # And the same on an UNDETERMINED context, which is the safe side everywhere
+  # else in this file.
+  got=$(FM_SESSION_START_UNDER_HOOK='' FM_SESSION_START_REGISTRATION_ROOT="$empty" \
+    FM_PLATFORM_UNAME_OVERRIDE=MINGW64_NT-10.0 \
+    fm_session_start_resolve_budget "$((windows * 10))" 2>/dev/null)
+  [ "$got" -eq "$windows" ] \
+    || fail "an undetermined context with no readable registration must also fall back to the ${windows}s platform default, got ${got}s"
+
+  # Failing closed must not become a floor: a value the platform default already
+  # covers is still the operator's to choose.
+  got=$(FM_SESSION_START_UNDER_HOOK=1 FM_SESSION_START_REGISTRATION_ROOT="$empty" \
+    FM_PLATFORM_UNAME_OVERRIDE=MINGW64_NT-10.0 fm_session_start_resolve_budget 45)
+  [ "$got" -eq 45 ] \
+    || fail "a bound below the platform default must still be honoured exactly when no registration can be read, got ${got}s"
+
+  # Nor may it cap a POSITIVELY established direct run: nothing kills that
+  # process at a hook timeout, so there is no deadline to fail closed against.
+  if fm_test_have_pty; then
+    got=$(fm_test_on_pty "FM_SESSION_START_REGISTRATION_ROOT='$empty' fm_session_start_resolve_budget $((windows * 10))")
+    [ "$got" -eq "$((windows * 10))" ] \
+      || fail "a direct run must still be honoured in full when no registration can be read, got ${got}s"
+  else
+    printf 'note: no pty allocator on this box, so the direct-run leg of the unreadable-registration case is unverified here\n' >&2
+  fi
+
+  # And the operator must not be told a harness deadline this shell never read.
+  # The clamp is real, so it is announced; the second it would be killed at is
+  # not known here, so no number is invented for it.
+  out=$(FM_SESSION_START_REGISTRATION_ROOT="$empty" FM_PLATFORM_UNAME_OVERRIDE=MINGW64_NT-10.0 \
+    fm_session_start_budget_advisory "$((windows * 10))" "$windows" hook)
+  assert_contains "$out" 'CLAMPED' \
+    'a bound clamped by the platform default is still a clamp and must say so'
+  printf '%s\n' "$out" | grep -q 'killed by the harness after' \
+    && fail "the advisory quoted a harness kill deadline while no registration could be read, so the number is invented: $out"
+  pass "fm_session_start_resolve_budget: an unreadable registration set falls back to the ${windows}s platform default instead of releasing the bound, and the advisory invents no harness deadline"
+}
+
 # --- 3. the stage marks must not distort what they measure -------------------
 
 test_stage_mark_spawns_no_subprocess() {
@@ -393,6 +461,43 @@ test_truncated_startup_names_the_stage_and_attributes_its_time() {
   pass "fm-session-start.sh: a truncated startup names the stage it died in, attributes its elapsed time per stage, and caps its own remedy at the ${ceiling}s harness ceiling"
 }
 
+# When mktemp fails there is no breadcrumb file, and the path falls back to
+# /dev/null. That sentinel is load-bearing and cannot simply be blanked: a
+# NON-EMPTY FM_SESSION_START_STAGE_FILE is what tells the bounded child from the
+# parent. So it must never reach the cleanup instead. An unprivileged account is
+# saved only by /dev not being writable; a session start running as root in a
+# container would delete /dev/null for everything else running in it.
+#
+# Driven through the real script with mktemp failing, and asserted on what rm was
+# actually ASKED to delete - recorded by a stub on PATH - because that request is
+# what the hazard consists of.
+test_a_failed_breadcrumb_mktemp_never_hands_dev_null_to_rm() {
+  local world root home fakebin rmlog out
+  world=$(new_world devnull-cleanup) || fail "could not build a world"
+  root=${world%%|*}; world=${world#*|}
+  home=${world%%|*}; fakebin=${world#*|}
+  make_fake_toolchain "$fakebin"
+  rmlog="$home/rm.log"
+  : > "$rmlog"
+  printf '#!/bin/sh\nexit 1\n' > "$fakebin/mktemp"
+  # shellcheck disable=SC2016  # The stub body is deferred; it expands when the stub runs.
+  printf '#!/bin/sh\nprintf "%%s\\n" "$@" >> "$FM_TEST_RM_LOG"\nfor c in /bin/rm /usr/bin/rm; do [ -x "$c" ] && exec "$c" "$@"; done\nexit 0\n' > "$fakebin/rm"
+  chmod +x "$fakebin/mktemp" "$fakebin/rm"
+  out=$(run_session_start "$home" "$root" "$fakebin" \
+    FM_TEST_RM_LOG="$rmlog" FM_SESSION_START_TIMEOUT=1) \
+    || fail "session start must still exit 0 when it truncates with no breadcrumb file"
+  assert_contains "$out" 'STARTUP TRUNCATED' \
+    'the fixture must reach the cleanup, which only runs after the banner'
+  # The premise, asserted rather than assumed: with no breadcrumb file there are
+  # no marks to render, so a per-stage table here would mean mktemp succeeded
+  # after all and the sentinel was never in force.
+  printf '%s\n' "$out" | grep -q 'per stage' \
+    && fail "a breadcrumb file was created after all, so the /dev/null sentinel was never in force and this case proves nothing"
+  grep -qx -- '/dev/null' "$rmlog" \
+    && fail "the cleanup asked rm to delete /dev/null; running as root in a container that removes /dev/null for everything else running in it"
+  pass "fm-session-start.sh: a failed breadcrumb mktemp leaves the /dev/null sentinel alone instead of handing it to rm"
+}
+
 # The same remedy on a run that was ALREADY bounded at the ceiling. Telling an
 # operator to raise a knob pinned at its maximum spends their next move on a
 # no-op and reads as though nothing was checked, so the remedy has to change
@@ -404,13 +509,20 @@ test_truncated_startup_names_the_stage_and_attributes_its_time() {
 # bound that was really in force; reaching the pinned state through the real
 # script would mean waiting out a several-minute clamped bound, since the clamp
 # is what pins it there in the first place.
+#
+# Hook context is asserted explicitly with the marker bin/fm-sessionstart-run.sh
+# exports, because the remedy is scoped to the paths a cap governs: on a
+# positively established direct run nothing kills this process at a hook timeout
+# and the uncapped advice is the correct one. Leaving the context implicit would
+# make these assertions depend on whether the runner happens to hand the suite a
+# terminal on stderr, which is not a property of the invariant.
 test_the_remedy_stops_advising_a_knob_that_is_already_pinned() {
   local ceiling below at above
   ceiling=$(fm_session_start_hook_ceiling) \
     || fail "no harness hook ceiling could be derived, so there is no pinned state to describe"
-  below=$(fm_session_start_bound_remedy $((ceiling - 1)))
-  at=$(fm_session_start_bound_remedy "$ceiling")
-  above=$(fm_session_start_bound_remedy $((ceiling + 1)))
+  below=$(FM_SESSION_START_UNDER_HOOK=1 fm_session_start_bound_remedy $((ceiling - 1)))
+  at=$(FM_SESSION_START_UNDER_HOOK=1 fm_session_start_bound_remedy "$ceiling")
+  above=$(FM_SESSION_START_UNDER_HOOK=1 fm_session_start_bound_remedy $((ceiling + 1)))
 
   # Below the ceiling the advice is actionable and must carry the cap by number.
   assert_contains "$below" 'raise FM_SESSION_START_TIMEOUT' \
@@ -514,10 +626,12 @@ test_explicit_timeout_wins_on_every_platform
 test_unusable_explicit_bound_falls_back_to_the_platform_default
 test_a_zero_padded_bound_still_produces_a_deadline_that_bites
 test_the_clamp_follows_hook_context_and_undetermined_clamps
+test_an_unreadable_registration_set_caps_rather_than_releasing
 test_stage_mark_spawns_no_subprocess
 test_stage_mark_is_append_only_and_survives_an_unwritable_target
 test_render_attributes_each_stage_and_flags_the_unfinished_one
 test_render_is_quiet_when_it_has_nothing_to_say
 test_truncated_startup_names_the_stage_and_attributes_its_time
+test_a_failed_breadcrumb_mktemp_never_hands_dev_null_to_rm
 test_the_remedy_stops_advising_a_knob_that_is_already_pinned
 test_every_stage_prints_its_header_before_the_stage_runs
