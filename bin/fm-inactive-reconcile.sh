@@ -296,6 +296,8 @@ meta_incarnation() { # <meta>
 # the LOG tier is aligned between them, on the NEWEST matching url, pull request
 # or merge request alike; picking an older one here would present a `done` the
 # forge confirmed against a replacement beside the PR it replaced.
+# newest_pr_url_in_file in bin/fm-fleet-snapshot.sh is the third reader on that
+# tier and is aligned the same way, for the same reason.
 #
 # Above that tier the two can still name different PRs for one task: when meta
 # carries no `pr=` and the run record or coarse row carries a url, that reader

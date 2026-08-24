@@ -529,10 +529,10 @@ EOF
 }
 
 # A run record with NO `status:` key at all, and no active step. The reader's own
-# arms disagreed about this one shape: the status dispatch maps an absent status
+# arms disagreed about this one shape: the status dispatch mapped an absent status
 # to working/"run active", while crew_liveness rules the same record `terminated`
 # because an absent status is no evidence of liveness. Nothing else in the suite
-# produced a record without a status word.
+# produces a record without a status word.
 run_no_status_word() {  # <branch>
   cat <<EOF
 run:
@@ -2415,13 +2415,15 @@ test_terminal_pass_without_ci_evidence_supersedes_a_stale_gate_log() {
   pass "a terminal pass without CI evidence supersedes a stale gate log"
 }
 
-# Column padding. The recorded tables are unpadded, but the ci status column now
-# decides done versus unknown for every full-path terminal pass, and the
-# active_steps status column decides whether a live run is recognised at all. A
-# no-mistakes version that emits `ci, completed,0,0` would otherwise demote every
-# terminal pass fleet-wide and silently stop the liveness override, both in the
-# conservative direction and both invisible. The sibling readers of these same
-# tables already tolerate the padding; these assert that this one does too.
+# Column padding, in the table HEADER as well as the rows. The recorded tables are
+# unpadded, but the ci status column now decides done versus unknown for every
+# full-path terminal pass, and the active_steps status column decides whether a
+# live run is recognised at all. A no-mistakes version that emits
+# `ci, completed,0,0` would otherwise demote every terminal pass fleet-wide and
+# silently stop the liveness override, both in the conservative direction and both
+# invisible. Both readers key their columns by NAME off the header, so a padded
+# header is the same outage by the other side of that lookup: ` status` names no
+# column, and every row then reports an empty status word.
 #
 # The PR here is deliberately OPEN. This case paired the padded row with a MERGED
 # forge answer once, and a LATER ruling - a confirmed merge settles done whatever
@@ -2436,7 +2438,9 @@ test_padded_step_columns_do_not_change_the_verdict() {
   make_repo_on_branch "$d/wt" fm/feat-padded
   make_fakebin "$d" >/dev/null
   fm_write_meta "$d/state/padded.meta" "window=fm:fm-padded" "worktree=$d/wt" "kind=ship" "harness=claude"
-  FM_FAKE_AXI_STATUS="$(run_passed fm/feat-padded | sed 's/^    ci,completed,0,0$/    ci , completed , 0, 0/')"
+  FM_FAKE_AXI_STATUS="$(run_passed fm/feat-padded \
+    | sed -e 's/^    ci,completed,0,0$/    ci , completed , 0, 0/' \
+      -e 's/^  steps\[\([0-9]*\)\]{step,status,findings,duration_ms}:$/  steps[\1]{step, status , findings,duration_ms }:/')"
   FM_FAKE_GH_PR='{"mergeStateStatus":"BLOCKED","state":"OPEN","url":"https://github.com/o/r/pull/1"}'
   out=$(run_crew_state "$d" padded)
   assert_contains "$out" "state: done" "a padded ci,completed row is still CI evidence"
@@ -2450,11 +2454,31 @@ test_padded_step_columns_do_not_change_the_verdict() {
   make_fakebin "$d" >/dev/null
   fm_write_meta "$d/state/paddedlive.meta" "window=fm:fm-paddedlive" "worktree=$d/wt" "kind=ship" "harness=claude"
   FM_FAKE_AXI_STATUS="$(run_live_active_step fm/feat-paddedlive "$run_head" |
-    sed 's/^    test,running,3m38s,/    test , running , 3m38s , /')"
+    sed -e 's/^    test,running,3m38s,/    test , running , 3m38s , /' \
+      -e 's/^  active_steps\[1\]{step,status,active_for,/  active_steps[1]{step, status , active_for ,/')"
   out=$(run_crew_state "$d" paddedlive)
   assert_contains "$out" "state: working" "a padded active_steps row is still an executing step"
   assert_contains "$out" "test running" "the padded step and status words are reported unpadded"
   assert_contains "$out" "active 3m38s" "so is the padded active_for column"
+  assert_contains "$out" "last activity 3m11s ago" "and the padded header still located every column"
+
+  # The third reader of the same column: the ci-step word that licenses the
+  # ci-log-green override. A padded `ci , running` row used to match nothing here,
+  # so the override never fired and a crew whose checks were already green read as
+  # still validating - the conservative direction, and invisible.
+  reset_fakes
+  d=$(new_case padded-ci-monitor)
+  make_repo_on_branch "$d/wt" fm/feat-paddedci
+  make_fakebin "$d" >/dev/null
+  fm_write_meta "$d/state/paddedci.meta" "window=fm:fm-paddedci" "worktree=$d/wt" "kind=ship" "harness=claude"
+  FM_FAKE_AXI_STATUS="$(run_ci_monitoring fm/feat-paddedci \
+    | sed -e 's/^    ci,running,0,0$/    ci , running , 0, 0/' \
+      -e 's/^  steps\[\([0-9]*\)\]{step,status,findings,duration_ms}:$/  steps[\1]{step, status , findings,duration_ms }:/')"
+  FM_FAKE_CI_LOGS="all CI checks passed - still monitoring until merged or closed"
+  forge_answers_open
+  out=$(run_crew_state "$d" paddedci)
+  assert_contains "$out" "checks green" "a padded ci,running row is still an executing ci step"
+  assert_not_contains "$out" "validating (running)" "so the crew is not reported as still validating"
   pass "padded step columns do not change the verdict"
 }
 
@@ -3096,12 +3120,12 @@ test_a_pre_validation_ship_reads_differently_from_a_run_that_landed_nothing() {
 }
 
 # The absent-`status:` record, and the one shape on which this reader contradicted
-# itself. The status dispatch maps a record with no status word to
+# itself. The status dispatch mapped a record with no status word to
 # working/"run active"; crew_liveness rules the same record `terminated`, because
-# an absent status is no evidence of liveness at all. emit_checks_green asserted
-# `live` on the strength of the first, so an unconfirmed forge answer emitted a
-# liveness claim the record does not support - the same defect just closed one arm
-# over, on the permissive side.
+# an absent status is no evidence of liveness at all. Both arms now ask that one
+# owner, so the two ROUTES out of this record are asserted separately, because
+# either one alone leaves the other free to claim liveness the record does not
+# carry.
 test_a_record_with_no_status_word_does_not_assert_liveness() {
   reset_fakes
   local d out
@@ -3116,6 +3140,24 @@ test_a_record_with_no_status_word_does_not_assert_liveness() {
   assert_not_contains "$out" "state: working" "a record with no status word proves no liveness"
   assert_not_contains "$out" "state: done" "and an unread merge state still cannot rule out a close"
   assert_contains "$out" "state: unknown" "neither the landing nor the liveness is established"
+
+  # The OTHER route out of the same record: no ci-ready status log, so the status
+  # dispatch answers alone. It used to report working/"run active" here - a
+  # liveness claim whose only evidence is the absent word - and the forge is
+  # answering MERGED to show that a `done` is not what is being avoided: the
+  # record cannot say this crew is alive, and that is the whole finding.
+  reset_fakes
+  d=$(new_case no-status-word-no-ci-log)
+  make_repo_on_branch "$d/wt" fm/feat-nostatus2
+  make_fakebin "$d" >/dev/null
+  fm_write_meta "$d/state/nostatus2.meta" "window=fm:fm-nostatus2" "worktree=$d/wt" "kind=ship" "harness=claude"
+  printf 'working: implementing the change\n' > "$d/state/nostatus2.status"
+  FM_FAKE_AXI_STATUS="$(run_no_status_word fm/feat-nostatus2)"
+  FM_FAKE_GH_PR='{"mergeStateStatus":"CLEAN","state":"MERGED","url":"https://github.com/o/r/pull/4"}'
+  out=$(run_crew_state "$d" nostatus2)
+  assert_not_contains "$out" "state: working" "the status dispatch cannot assert liveness on its own either"
+  assert_contains "$out" "state: unknown" "an absent status word is no evidence, so the answer is unknown"
+  assert_contains "$out" "no status word" "and the reason names what the record is missing"
   pass "a record with no status word does not assert liveness"
 }
 

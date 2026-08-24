@@ -277,11 +277,14 @@ fm_crew_step_status() {  # <run-output> <step-name>
 # "<step>|<status>|<active_for>|<last_activity>". Empty when the run has no
 # active step, which is the daemon's own statement that nothing is executing.
 #
-# Columns are read by NAME from the table header rather than by position, each
-# split value is trimmed before the status word is compared - a padded
-# `test, running, 3m38s` must not silently stop the liveness override - and the
-# row is split quote-aware, because `last_activity` is a quoted free-text field
-# that routinely contains commas of its own:
+# Columns are read by NAME from the table header rather than by position, and
+# BOTH sides of that lookup are trimmed - the header's column names and each
+# split row value - before the status word is compared. A padded
+# `test, running, 3m38s` must not silently stop the liveness override, and a
+# padded HEADER stops it just as completely: an untrimmed ` status` name matches
+# no column, so the running/fixing test never fires and the run reads as nothing
+# executing. The row is split quote-aware, because `last_activity` is a quoted
+# free-text field that routinely contains commas of its own:
 #   review,fixing,1h27m,"9m52s ago: log: I'll review the changes, then...","2010043",fix 3
 #
 # The table ends at a blank line, a line with no comma, or ANY following TOON
@@ -297,6 +300,9 @@ fm_crew_active_step() {  # <run-output>
       sub(/^[^{]*\{/, "", hdr)
       sub(/\}.*$/, "", hdr)
       ncol = split(hdr, col, ",")
+      for (i = 1; i <= ncol; i++) {
+        gsub(/^[[:space:]]+|[[:space:]]+$/, "", col[i])
+      }
       in_table = 1
       next
     }

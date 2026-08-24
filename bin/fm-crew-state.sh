@@ -399,13 +399,20 @@ log_reports_ci_ready() {
   esac
 }
 
+# The `ci` step's word when that step is EXECUTING, which is what licenses the
+# ci-log-green override below. fm_crew_step_status is the OWNER of that column -
+# anchored to the `steps` table, keyed by column name, tolerant of padding and
+# quoting - so this asks it rather than matching a row shape of its own. A
+# private pattern here carried the same two defects that owner exists to prevent:
+# an `active_steps` row begins with a step name too, so a `ci,running,2m,...`
+# ACTIVE row answered for the step history, and a padded `ci , running` answered
+# not at all, silently withholding the ready-for-review signal a captain waits on.
 nm_ci_step_status() {
-  local row rest
-  row=$(nm_run_object | grep -E '^[[:space:]]*ci,[[:space:]]*"?(running|fixing)"?[[:space:]]*,' | head -1)
-  [ -n "$row" ] || return 0
-  row=$(trim "$row")
-  rest=${row#*,}
-  strip_quotes "$(trim "${rest%%,*}")"
+  local step_status
+  step_status=$(fm_crew_step_status "$(nm_run_object)" ci)
+  case "$step_status" in
+    running|fixing) printf '%s' "$step_status" ;;
+  esac
 }
 
 nm_effective_ci_step_status() {
@@ -610,25 +617,28 @@ fi
 # to the captain beside the word. Reading it here asks the forge about that url
 # before the verdict rather than after it.
 #
-# The two readers OUGHT to agree on WHICH url, because the state word and the PR
-# shown beside it describing different pull requests is the same self-contradiction
-# this reader exists to remove. They agree on ONE TIER so far, and the rest is
+# The readers that PRESENT a url beside a state word OUGHT to agree with this one
+# about WHICH url, because the state word and the PR shown beside it describing
+# different pull requests is the same self-contradiction this reader exists to
+# remove. There are three in all: this one, pr_for_task in
+# bin/fm-inactive-reconcile.sh, and newest_pr_url_in_file in
+# bin/fm-fleet-snapshot.sh. They agree on ONE TIER so far, and the rest is
 # bounded and accepted rather than closed - do not read the paragraph above as an
 # invariant.
 #
 # The chains are different lengths. This function resolves FOUR tiers: the run
 # record's `pr:` when RUN_SOURCE is full, then COARSE_PR, then meta `pr=`, then
-# the status log's newest matching url. pr_for_task resolves TWO: meta `pr=`,
+# the status log's newest matching url. The other two resolve TWO: meta `pr=`,
 # then the status log's newest matching url. Only the LOG tier was aligned, on
 # the NEWEST matching url, pull request or merge request alike, because the
-# newest is the one that answers "which PR is this crew's current one";
-# pr_for_task previously took the FIRST url and matched pull requests only.
+# newest is the one that answers "which PR is this crew's current one"; both of
+# those readers previously took the FIRST url and matched pull requests only.
 #
-# So the two can still name DIFFERENT PRs for one task whenever meta carries no
+# So they can still name DIFFERENT PRs for one task whenever meta carries no
 # `pr=` while the run record or the coarse row carries a url - the tiers this
-# function has and that reader does not. bin/fm-pr-check.sh is the only writer of
+# function has and those readers do not. bin/fm-pr-check.sh is the only writer of
 # meta `pr=`, so that window is open until firstmate acts on a replacement url.
-# Closing it means removing the second selection rule rather than aligning
+# Closing it means removing the other selection rules rather than aligning
 # another tier - the reader that produced the word supplying the url it asked
 # about - and that is deferred as its own follow-up.
 crew_pr_url() {
@@ -809,7 +819,20 @@ if [ "$HAVE_RUN" = 1 ]; then
           ;;
         failed)         RUN_STATE=failed;  RUN_DETAIL="run failed" ;;
         cancelled)      RUN_STATE=failed;  RUN_DETAIL="run cancelled" ;;
-        "")             RUN_STATE=working; RUN_DETAIL="run active" ;;
+        "")
+          # An ABSENT status word is not a non-terminal one, so this arm cannot
+          # assert liveness on its own: crew_liveness owns that question for the
+          # whole reader, and it rules such a record terminated unless the
+          # daemon's own active_steps table says otherwise. Restating the answer
+          # here is what made one record read `working` by this route and
+          # `unknown` by the ci-ready one, and the governing preference between
+          # those two is unknown over a confident wrong answer.
+          if [ "$(crew_liveness)" = live ]; then
+            RUN_STATE=working; RUN_DETAIL="run active"
+          else
+            RUN_STATE=unknown; RUN_DETAIL="run record carries no status word"
+          fi
+          ;;
         *)              RUN_STATE=working; RUN_DETAIL="run active ($status)" ;;
       esac
       if [ "$RUN_STATE" = working ]; then
@@ -857,12 +880,16 @@ if [ "$HAVE_RUN" = 1 ]; then
   # cannot read - a coarse row carries no steps table and no `status:` key.
   #
   # Asserting `live` for both was wrong for one full-path record shape, and
-  # wrong in the permissive direction: the absent-`status:` arm below maps a
+  # wrong in the permissive direction: the absent-`status:` arm above mapped a
   # record with no status word to working/"run active", while crew_liveness rules
   # that same record `terminated` on the ground that an absent status is no
   # evidence at all. Two functions in one reader disagreeing about one record is
-  # the self-contradiction this whole change exists to remove, so the full path
-  # now asks the one owner instead of restating its own answer.
+  # the self-contradiction this whole change exists to remove, so BOTH sides now
+  # ask the one owner - that arm and this call site - instead of restating an
+  # answer of their own. With the arm deferring too, no full-path record reaches
+  # here `terminated` any more; the derived argument stays because it is the
+  # honest expression of who owns liveness, and the property it carried is now
+  # guarded at the arm.
   emit_checks_green() {  # <source> <detail> <liveness: live|terminated>
     local verdict
     crew_ask_forge

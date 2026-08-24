@@ -861,8 +861,79 @@ SH
   pass "the snapshot narrows the per-task forge bound"
 }
 
+# The url this snapshot prints BESIDE the state word, when the only place a url
+# is recorded is the status log.
+#
+# The state word here is `done`, confirmed against the replacement PR by
+# bin/fm-crew-state.sh, and the log names the PR that replacement replaced first.
+# Presenting the older one is the false landing this branch exists to stop,
+# reassembled on the captain-facing surface: the captain reads "done" against a
+# PR that is closed and unmerged. So this reader selects the NEWEST matching url,
+# the same rule crew_pr_url and bin/fm-inactive-reconcile.sh's pr_for_task use,
+# and counts a merge request as a match because a GitLab crew's state is settled
+# from one.
+test_snapshot_presents_the_newest_pr_url_the_status_log_names() {
+  local home fb out
+  home=$(make_home newest-pr-url)
+  mkdir -p "$home/projects/replaced-worktree" "$home/projects/gitlab-worktree"
+  for wt in replaced gitlab; do
+    git -C "$home/projects/$wt-worktree" init -q
+    git -C "$home/projects/$wt-worktree" commit -q --allow-empty -m init
+    git -C "$home/projects/$wt-worktree" checkout -q -b "fm/feat-$wt"
+  done
+  # No meta `pr=`: the status log is the only tier that can answer, which is the
+  # tier the three readers are aligned on.
+  fm_write_meta "$home/state/replaced-task.meta" \
+    "window=firstmate:fm-replaced-task" \
+    "worktree=$home/projects/replaced-worktree" \
+    "project=alpha" \
+    "harness=claude" \
+    "kind=ship" \
+    "mode=ship"
+  cat > "$home/state/replaced-task.status" <<'EOF'
+blocked: https://github.com/o/r/pull/1 was closed unmerged
+done: replacement https://github.com/o/r/pull/2 merged
+EOF
+  fm_write_meta "$home/state/gitlab-task.meta" \
+    "window=firstmate:fm-gitlab-task" \
+    "worktree=$home/projects/gitlab-worktree" \
+    "project=alpha" \
+    "harness=claude" \
+    "kind=ship" \
+    "mode=ship"
+  printf 'done: https://gitlab.com/o/r/-/merge_requests/5 merged\n' \
+    > "$home/state/gitlab-task.status"
+  record_claude_idle "$home/state" replaced-task >/dev/null
+  record_claude_idle "$home/state" gitlab-task >/dev/null
+  fb=$(make_fakebin "$home")
+  # The forge answers for the PR the state word is about, so `done` is a
+  # confirmed landing rather than an unverified one.
+  cat > "$fb/gh" <<'SH'
+#!/usr/bin/env bash
+printf '{"mergeStateStatus":"CLEAN","state":"MERGED","url":"https://github.com/o/r/pull/2"}\n'
+SH
+  chmod +x "$fb/gh"
+  out=$(PATH="$fb:$PATH" FM_HOME="$home" FM_SNAPSHOT_NOW=2026-07-11T18:00:00Z \
+    "$SNAPSHOT" --json)
+  printf '%s' "$out" | jq -e '
+    .tasks[] | select(.id == "replaced-task")
+    | .pr.source == "status_event"
+      and .pr.url == "https://github.com/o/r/pull/2"
+  ' >/dev/null || fail "the presented PR is not the newest url the status log names: $(printf '%s' "$out" | jq -r '.tasks[] | select(.id == "replaced-task") | .pr.url')"
+  printf '%s' "$out" | jq -e '
+    .tasks[] | select(.id == "replaced-task") | .current_state.state == "done"
+  ' >/dev/null || fail "the forge-confirmed merge must still read done beside that url"
+  printf '%s' "$out" | jq -e '
+    .tasks[] | select(.id == "gitlab-task")
+    | .pr.source == "status_event"
+      and .pr.url == "https://gitlab.com/o/r/-/merge_requests/5"
+  ' >/dev/null || fail "a merge request is not presented beside the state word it settled: $(printf '%s' "$out" | jq -r '.tasks[] | select(.id == "gitlab-task") | .pr.url')"
+  pass "the snapshot presents the newest PR url the status log names"
+}
+
 test_empty_fleet_json
 test_snapshot_narrows_the_per_task_forge_bound
+test_snapshot_presents_the_newest_pr_url_the_status_log_names
 test_fixture_snapshot_json
 test_main_inventory_orphan_and_unstructured_disclosure
 test_normalized_roles_and_plural_blocker_readiness

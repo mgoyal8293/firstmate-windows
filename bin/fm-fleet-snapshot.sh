@@ -290,9 +290,25 @@ status_event_json() {  # <status-log>
     '{path:$path,present:$present,kind:"event_history",last_event:{state:$verb,note:$note,raw:$raw}}'
 }
 
-first_pr_url_in_file() {  # <file>
+# The status-log tier of the PR url this snapshot presents beside a task's crew
+# state, selected the way crew_pr_url in bin/fm-crew-state.sh selects the url its
+# state word was confirmed against: the NEWEST matching url the log names, pull
+# request or merge request alike.
+#
+# This is the THIRD reader on that tier, after crew_pr_url and pr_for_task in
+# bin/fm-inactive-reconcile.sh, and it is the one that prints a url beside a word
+# crew_pr_url just asked the forge about. Taking an OLDER url here - the first
+# `/pull/` in a log that names a closed PR and then its replacement - would print
+# the replaced PR beside a `done` confirmed against the replacement, which is the
+# false landing that forge read exists to prevent, reassembled on the
+# captain-facing surface. Matching merge requests too is the same rule for a
+# GitLab crew, whose state was settled from one.
+#
+# Above this tier the chains still differ in length, and that gap is recorded at
+# crew_pr_url; nothing here is a third selection rule.
+newest_pr_url_in_file() {  # <file>
   [ -f "$1" ] || return 1
-  grep -Eo 'https?://[^[:space:])"]+/pull/[0-9]+' "$1" 2>/dev/null | head -1
+  grep -Eo 'https?://[^[:space:])"]+/(pull|merge_requests)/[0-9]+' "$1" 2>/dev/null | tail -1
 }
 
 backlog_json() {  # [<backlog-path>] - defaults to this home's $BACKLOG
@@ -480,7 +496,7 @@ task_json_lines() {
     pr=$(meta_value "$meta" pr)
     pr_source=meta
     if [ -z "$pr" ]; then
-      pr_from_status=$(first_pr_url_in_file "$status_log" || true)
+      pr_from_status=$(newest_pr_url_in_file "$status_log" || true)
       pr=$pr_from_status
       pr_source=status_event
     fi

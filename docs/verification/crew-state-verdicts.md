@@ -8,7 +8,7 @@ Refresh this record after any change to run selection, code binding, ownership p
 
 ## Suite
 
-Date: 2026-08-23.
+Date: 2026-08-24, re-run after the padded-header, ci-step-owner, absent-status-arm and snapshot-PR-url round.
 Branch: `fm/fm-crew-state-stale-run-masks-live`.
 `no-mistakes` v1.48.0, `gh` 2.x, ShellCheck 0.11.0.
 
@@ -18,15 +18,15 @@ $ bash tests/fm-crew-state.test.sh | grep -c '^ok'
 $ bash tests/fm-inactive-reconcile.test.sh 2>/dev/null | grep -c '^ok'
 18
 $ bash tests/fm-fleet-snapshot-view.test.sh 2>/dev/null | grep -c '^ok'
-16
+17
 $ bash tests/fm-watch-triage.test.sh 2>/dev/null | grep -c '^ok'
 50
 ```
 
 The count is the evidence, not the exit status: a green step does not prove its assertions ran.
-The later suites are listed because six guards below belong to those callers and are pinned there.
+The later suites are listed because eight guards below belong to those callers and are pinned there.
 Four are forge-read bounds: the bound the scan derives for this reader's forge read, the fixed per-task bound the snapshot chooses, and the per-crew bound the watcher's triage chooses.
-The other two are the scan's status-log PR-url selection, the one tier on which it was aligned with this reader, since a state word presented beside the wrong pull request is this change's own failure reassembled at the captain's boundary.
+The other four are status-log PR-url selection in the two readers that PRESENT a url beside this reader's word - the scan and the fleet snapshot - on the one tier all three were aligned on, since a state word presented beside the wrong pull request is this change's own failure reassembled at the captain's boundary.
 
 ## Falsification matrix
 
@@ -60,8 +60,11 @@ Every row must fail, and must fail on the named assertion.
 | The `active_steps` table ends at any following TOON table header | end it only at a blank or comma-free line | `test_a_table_after_active_steps_is_not_read_as_an_active_step` | fails: `unexpected: 'test running'` |
 | Gate and step reads are scoped to the run object, not the whole record | let `nm_gate_status` scan raw `$RUN_OUT` again | `test_branch_sync_gate_status_does_not_park_a_running_run` | fails: `unexpected: 'state: parked'` |
 | A terminal pass with no CI evidence reads unknown, never parked | return `parked` for that verdict again | `test_terminal_pass_without_ci_evidence_supersedes_a_stale_gate_log` | fails: `missing: 'status-log superseded'` |
-| The ci status column is read tolerant of padding and quoting | drop the trim, restoring the bare `[^,]*` capture | `test_padded_step_columns_do_not_change_the_verdict` | fails: `missing: 'state: done'` |
+| The ci status column is read tolerant of padding and quoting | drop the per-value trim in `fm_crew_step_status`' row split | `test_padded_step_columns_do_not_change_the_verdict` | fails: `missing: 'state: done'` |
+| So are that reader's column NAMES, which are the other side of the same lookup | drop the header trim in `fm_crew_step_status` | the same case | fails: `missing: 'state: done'` |
 | So is every `active_steps` column | drop the per-value trim in the row split | the same case | fails: `missing: 'test running'` |
+| So are `fm_crew_active_step`'s column NAMES | drop the header trim there | the same case | fails: `missing: 'test running'` |
+| The ci-step word that licenses the ci-log-green override comes from that same owner | restore `nm_ci_step_status`' private `ci,<word>,` row pattern | the same case | fails: `missing: 'checks green'` |
 | A forge-confirmed MERGE settles a terminated run done whatever the ci step says | drop the merge arm from the ranking | `test_forge_confirmed_merge_settles_a_ci_skipped_run` | fails: `missing: 'state: done'` |
 | A forge-confirmed CLOSE settles it failed, because a closed-unmerged PR is not a landing | rank `closed` with `merged` on the done arm again | `test_forge_confirmed_close_is_failed_not_done` | fails: `missing: 'state: failed'` |
 | A host with no `gh` is a structural non-answer, not a transient one | report an absent client as `unverified` again | `test_absent_forge_client_is_structural_not_transient` | fails: `missing: 'no forge client for github'` |
@@ -90,28 +93,43 @@ Every row must fail, and must fail on the named assertion.
 | A pre-validation ship names the moment, distinctly from a run that landed nothing | drop the `reported` arm from `fm_crew_ship_no_pr_phrase`, leaving one phrase for both moments | `test_a_pre_validation_ship_reads_differently_from_a_run_that_landed_nothing` | fails: `missing: 'reported complete, not yet validated'` |
 | That crew stays `unknown` rather than `working` | pass `working` as `fm_crew_reported_done_verdict`'s unconfirmed state | the same case | fails: `missing: 'state: unknown'` |
 | And `crew_absorb_class` does not absorb it, which is what makes `unknown` safe | let the absorb whitelist admit `unknown` alongside `working` | the same case | fails: `a pre-validation crew must not be absorbed as provably working` |
-| Liveness on the full-path ci-ready route is DERIVED from the record, not asserted | pass the literal `live` from that call site again | `test_a_record_with_no_status_word_does_not_assert_liveness` | fails: `unexpected: 'state: working'` |
+| A record with NO status word asserts liveness by neither route out of it | restore the status dispatch's unconditional working/"run active" for an absent status | `test_a_record_with_no_status_word_does_not_assert_liveness` | fails: `unexpected: 'state: working'` |
 | When `pr_for_task` falls through to the status log, the url it presents is the NEWEST one the log names | restore `head -1` in `pr_for_task` | `test_presented_pr_is_the_newest_url_the_status_log_names` (`tests/fm-inactive-reconcile.test.sh`) | fails: `the presented PR is not the newest url the status log names: 'https://example.test/owner/repo/pull/1'` |
 | And a merge request counts as that url, since this reader settles a GitLab crew's state from one | narrow `pr_for_task` back to `/pull/` only | the same case | fails: `a merge request is not presented beside the state word it settled: ''` |
 | The ci word the terminal ranking reads comes from the `steps` table, whichever TOON table the record emits first | restore the unanchored `sed` in `fm_crew_step_status` | `test_the_ci_word_comes_from_the_steps_table_whatever_its_position` | fails: `missing: 'state: done'` |
+| The url the fleet snapshot prints beside a state word is the NEWEST one the status log names | restore `head -1` in `newest_pr_url_in_file` | `test_snapshot_presents_the_newest_pr_url_the_status_log_names` (`tests/fm-fleet-snapshot-view.test.sh`) | fails: `the presented PR is not the newest url the status log names: https://github.com/o/r/pull/1` |
+| And a merge request counts as that url there too | narrow that reader back to `/pull/` only | the same case | fails: `a merge request is not presented beside the state word it settled: null` |
 
-56 of 56 re-derived in full on 2026-08-23 - once per fix round since the decay was found - and the three rows added after that date were derived when they were written, for 59 of 59.
+56 of 56 re-derived in full on 2026-08-23 - once per fix round since the decay was found - and the eight rows added after that date were derived when they were written, for 64 of 64.
+Five of those eight were derived on 2026-08-24, together with a re-derivation of the two padding rows they sit beside, because that round changed what those two rows' case feeds the readers.
 
-The last row was added by the round that anchored `fm_crew_step_status` to its own table.
+The last two rows were added by the round that made the fleet snapshot the third reader aligned on the status-log PR-url tier.
+It presents a url beside the very state word this reader confirmed against the forge, so taking an older url there reassembles the false landing on the captain-facing surface exactly as `pr_for_task` did - and each half needs its own mutation for the same reason the scan's pair does.
+Its case differs from the scan's in one way worth recording: it drives the real `bin/fm-crew-state.sh` rather than stubbing it, so the `done` and the url it is printed beside are produced by the two readers under test at once, which is the comparison the scan's case cannot make.
+
+The other three rows that round added sit higher up, beside the padding rows they extend, and they were added because the padding guard covered only half of its own lookup.
+Both table readers key their columns by NAME off the `{...}` header, so an untrimmed ` status` name is the same outage from the other side: it matches no column, and every row then reports an empty status word.
+`fm_crew_active_step` trimmed its row values and not its header names, and the consequence was not symmetric with its sibling's - an empty active step disables `fm_crew_run_admits`' liveness override, so a demonstrably live pipeline reads as terminated, which is the failure acceptance criterion 4 names.
+The case's fixture now pads both headers as well as both rows, which is also what made the sibling's own header trim falsifiable for the first time.
+The third row retires the private `ci,<word>,` pattern `nm_ci_step_status` used for the word that licenses the ci-log-green override, in favour of the anchored owner every other reader of that column already asks: the private pattern was padding-blind, and an `active_steps` row begins with a step name too, so it could answer for the step history from the ACTIVE table.
+Its anchoring half comes free with the owner and no recorded shape distinguishes it, so the row claims only the padding half, which does falsify.
+
+The row before those was added by the round that anchored `fm_crew_step_status` to its own table.
 `fm_crew_active_step` already keyed its columns off the `active_steps[N]{...}` header and stopped at any following table header, and said so; its sibling matched any indented `<step>,<word>,` row and so read whichever table came first.
 An `active_steps` row begins with a step name too, so the two readers disagreed about one record, and the ci word is the one acceptance criterion 1 rests on.
 The case's fixture is synthetic and says so: it puts a `ci` row in BOTH tables with different words, which no recorded shape does, because a record where only `steps` carries such a row cannot tell an anchored reader from an unanchored one.
 
-The two rows before it were added by the round that aligned the scan's status-log PR-url selection with this reader's.
+The two rows before that were added by the round that aligned the scan's status-log PR-url selection with this reader's.
 They are the only rows here that guard a CONSUMER's presentation rather than this reader's own answer, and they belong in this table because a `done` this reader confirmed against a replacement PR, printed beside the PR it replaced, is the false landing this change exists to stop, reassembled at the boundary.
 Each half needs its own mutation because `pr_for_task` diverged from `crew_pr_url` in two independent ways at once, and a case exercising only a pull-request log cannot see the merge-request half.
 
 What those two rows do NOT establish has to be stated here, because the Guard column is narrower than the problem and a reader could take the pair for a closed invariant.
 The two selection chains are different lengths: `crew_pr_url` resolves the run record's `pr:`, then the coarse row, then meta `pr=`, then the log, while `pr_for_task` resolves meta `pr=` then the log.
-Only the LOG tier is aligned, so when meta carries no `pr=` and the run record or coarse row carries a url, the two readers can still name different PRs for one task and no case here can see it - the guard's own case stubs `fm-crew-state.sh` with a canned answer, so it pins `pr_for_task`'s selection alone and never compares it to what `crew_pr_url` chose.
+Only the LOG tier is aligned, so when meta carries no `pr=` and the run record or coarse row carries a url, the readers can still name different PRs for one task and no case here can see it - the guard's own case stubs `fm-crew-state.sh` with a canned answer, so it pins `pr_for_task`'s selection alone and never compares it to what `crew_pr_url` chose.
+The snapshot's two rows have the same ceiling for the same reason: its case gives the task no meta `pr=`, so the log tier is the only tier either reader consults there.
 That gap is bounded and ACCEPTED for this change rather than closed, and the closing work is a follow-up recorded at `crew_pr_url` in `bin/fm-crew-state.sh`: have the reader that produced the state word supply the url it asked about, which removes the second selection rule instead of aligning a third tier.
 
-The four rows before those were added by the round that separated the two ship-with-no-PR moments and stopped the ci-ready route asserting liveness it had not established.
+The four rows before those were added by the round that separated the two ship-with-no-PR moments and stopped the ci-ready route asserting liveness it had not established - the fourth of them being the absent-status row above, whose guard has since moved to the dispatch arm.
 
 Three of those four share one case, because the ruling they carry has three parts that only hold together: the pre-validation crew must NAME its moment, must stay `unknown`, and must not be ABSORBED.
 Each part is falsified by a different mutation - collapsing the phrase, reporting `working`, and widening the absorb whitelist - so the shared case is not a shared guard.
@@ -138,10 +156,10 @@ The strictness of the PR-URL rules themselves is not listed as a guard of this f
 The look-alike-host case above pins that reuse behaviourally, since a loosened parse would send `https://evil-github.com/o/r/pull/6` to the real forge.
 The unknown-not-parked row is pointed at the case that shows the HARM, not just the word: with `parked` restored, the answered `needs-decision:` line stops being reconciled as superseded, which is what let a resolved decision resurface as a captain demand.
 The 7-character floor in `fm_crew_sha_matches` is deliberately absent from the table: it is defensive against a degenerate abbreviation and has no observed trigger, so there is no honest case to pin it with.
-Six rows live in other suites because what they guard belongs to those callers, and they are listed here because what those callers choose is what keeps this reader's answer affordable and honest once it is presented.
+Eight rows live in other suites because what they guard belongs to those callers, and they are listed here because what those callers choose is what keeps this reader's answer affordable and honest once it is presented.
 Four are bounds: two in `tests/fm-inactive-reconcile.test.sh` for the scan's derived share, one in `tests/fm-fleet-snapshot-view.test.sh` for the snapshot's fixed per-task bound, and one in `tests/fm-watch-triage.test.sh` for the watcher's per-crew bound.
 Four bound rows across three callers, which is why the Suite section counts four bounds while naming three: the scan's share is pinned twice, once for the third-of-budget ceiling and once for its refusal to shrink a budget too small to spare the read at all.
-The last two are also in `tests/fm-inactive-reconcile.test.sh` and are not bounds at all: they pin the scan's PR-url selection to the url this reader asked the forge about, so four of the six live in that one file.
+The other four are not bounds at all: they pin PR-url selection in the two readers that print a url beside this reader's word to the url this reader asked the forge about, two of them in `tests/fm-inactive-reconcile.test.sh` for the scan and two in `tests/fm-fleet-snapshot-view.test.sh` for the snapshot, so four of the eight live in each file.
 The snapshot row is only falsifiable because that bound is TIGHTER than the library default.
 While the two coincided at 3s, removing the snapshot's override changed nothing and the row proved nothing - the same decay mode the ci-padding row taught, caught here before it was recorded rather than after.
 
@@ -168,9 +186,9 @@ The remaining rows all still falsify on their named assertion, including every r
 
 The mutations are ordinary one-line edits to a copy of `bin/`; nothing in the tree needs to change to re-derive them.
 For each row, copy the tree to a scratch directory, apply the mutation named above, run the one case, and confirm it fails on the named assertion.
-The case names are the functions in `tests/fm-crew-state.test.sh`, except the six rows whose cases live in the other suites named above.
-Those six are SCATTERED through the table rather than gathered at its end, so find them by the file named in their Case column and never by position - reading only the bottom of the table is how the watch-triage row gets silently skipped.
-Four of the six name the file outright; the other two read `the same case` and inherit the file from the row directly above them, and both of those inherit `tests/fm-inactive-reconcile.test.sh`.
+The case names are the functions in `tests/fm-crew-state.test.sh`, except the eight rows whose cases live in the other suites named above.
+Those eight are SCATTERED through the table rather than gathered at its end, so find them by the file named in their Case column and never by position - reading only the bottom of the table is how the watch-triage row gets silently skipped.
+Five of the eight name the file outright; the other three read `the same case` and inherit the file from the row directly above them, two inheriting `tests/fm-inactive-reconcile.test.sh` and one `tests/fm-fleet-snapshot-view.test.sh`.
 Running any of those files' whole runner list also works and is slower.
 
 ## Amended acceptance criterion: done by itself
@@ -324,10 +342,16 @@ What was removed is only the terminated run's ability to borrow that answer, and
 
 Making liveness an argument left one caller still asserting it, and that caller was wrong on exactly one record shape.
 `emit_checks_green` passed the literal `live`, justified by the claim that every call sits under a record that "reported a non-terminal status word".
-The absent-`status:` arm falsifies that claim: it maps a record with NO status word to working/"run active", while `crew_liveness` rules the same record `terminated`, on the ground that an absent status is no evidence of liveness at all.
+The absent-`status:` arm falsified that claim: it mapped a record with NO status word to working/"run active", while `crew_liveness` rules the same record `terminated`, on the ground that an absent status is no evidence of liveness at all.
 Two functions in one reader disagreeing about one record is the self-contradiction this branch exists to remove, and the asserted side was the permissive one - an unconfirmed forge answer emitted a liveness claim the record does not support.
 
-The full path now asks the one owner instead of restating its own answer.
+The full path now asks the one owner instead of restating its own answer, and so does the DISPATCH ARM itself, which a later round closed.
+That arm answers `unknown` when `crew_liveness` says `terminated`, because the same record reading `working` by one route and `unknown` by the other was the contradiction restated rather than removed, and the governing preference between the two is unknown.
+
+The order in which those two were closed changed what the matrix can prove, and the honest record of it is this.
+With the arm deferring, no full-path record reaches `emit_checks_green` `terminated` any more, so the mutation that used to falsify the derived argument - passing the literal `live` from that call site - was re-run on 2026-08-24 and the case PASSED.
+The property therefore moved: the row now names the arm, whose mutation does falsify, and the derived argument at the call site stays because it is the honest expression of who owns liveness, not because a record shape distinguishes it.
+A row claiming otherwise would be the decay this table exists to catch.
 The COARSE caller still passes `live`, and that is not the same mistake: its admission test was `COARSE_STATUS=running`, which is genuine liveness that `crew_liveness` cannot read, because a coarse runs-list row carries no steps table and no `status:` key at all.
 The rule the two callers now share is that whoever can prove liveness states it, and nobody infers it from a control-flow position.
 
