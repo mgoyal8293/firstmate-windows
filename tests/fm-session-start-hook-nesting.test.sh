@@ -235,7 +235,7 @@ min_registered_digest_timeout() {
 }
 
 test_an_explicit_override_is_clamped_below_the_shortest_registration() {
-  local harness cap got plat
+  local harness cap got plat armcap wincap
   harness=$(min_registered_digest_timeout) \
     || fail "no digest-tier session-start timeout could be read at all, so the override cases below would verify nothing"
 
@@ -252,20 +252,39 @@ test_an_explicit_override_is_clamped_below_the_shortest_registration() {
   # registration must still end up with a bound that bites first, on every
   # platform arm - the Windows one especially, since its default is already the
   # closest to the registrations.
+  #
+  # Each arm's own ceiling is what it is compared against, since the nesting
+  # margin is per platform and reaches the resolver through the same call-time
+  # override the budget uses. Comparing every arm against the ceiling this shell
+  # derived would compare the Windows arms against the HOST's number, which is
+  # how these iterations previously ran without ever exercising the arm they name.
   for plat in $FM_TEST_SESSION_START_PLATFORMS; do
+    armcap=$(FM_PLATFORM_UNAME_OVERRIDE="$plat" fm_session_start_hook_ceiling) \
+      || fail "no ceiling could be derived on '$plat', so an explicit bound there is not clamped at all"
     got=$(FM_SESSION_START_UNDER_HOOK=1 FM_PLATFORM_UNAME_OVERRIDE="$plat" \
       fm_session_start_resolve_budget "$((harness * 10))")
     case "$got" in ''|*[!0-9]*|0) fail "an over-cap override on '$plat' resolved to '$got', which is not a usable bound" ;; esac
+    [ "$got" -eq "$armcap" ] \
+      || fail "an over-cap override on '$plat' resolved to ${got}s rather than that arm's own ${armcap}s ceiling: the platform override is not reaching the nesting margin, so this iteration is checking some other arm's number"
     [ "$got" -lt "$harness" ] \
       || fail "FM_SESSION_START_TIMEOUT=$((harness * 10)) on '$plat' resolves to ${got}s, at or above the ${harness}s harness hook timeout: the harness kills the hook first, so there is no STARTUP TRUNCATED banner, no named stage and no reconcile list"
   done
 
+  # Anti-vacuity for that loop: the Windows arms must actually resolve a DIFFERENT
+  # ceiling from the portable ones, or the per-arm comparison above is one number
+  # checked twelve times.
+  [ "$(FM_PLATFORM_UNAME_OVERRIDE=MINGW64_NT-10.0-26200 fm_session_start_hook_ceiling)" \
+    -lt "$(FM_PLATFORM_UNAME_OVERRIDE=Linux fm_session_start_hook_ceiling)" ] \
+    || fail "the MINGW ceiling is not below the Linux one, so the platform arms are not distinguishable here and the loop above proves nothing about Windows"
+
   # Clamped, never reduced to the default and never rejected: an operator who
   # asked for MORE time must not be handed LESS than the machine can give.
+  wincap=$(FM_PLATFORM_UNAME_OVERRIDE=MINGW64_NT-10.0-26200 fm_session_start_hook_ceiling) \
+    || fail "no Windows-arm ceiling could be derived"
   got=$(FM_SESSION_START_UNDER_HOOK=1 FM_PLATFORM_UNAME_OVERRIDE=MINGW64_NT-10.0-26200 \
     fm_session_start_resolve_budget "$((harness * 10))")
-  [ "$got" -eq "$cap" ] \
-    || fail "an over-cap override must land ON the ${cap}s cap, got ${got}s"
+  [ "$got" -eq "$wincap" ] \
+    || fail "an over-cap override must land ON the Windows arm's ${wincap}s cap, got ${got}s"
   [ "$got" -gt "$(FM_PLATFORM_UNAME_OVERRIDE=MINGW64_NT-10.0-26200 fm_session_start_default_budget)" ] \
     || fail "an over-cap override resolved to ${got}s, no more than the Windows default: asking for more time must not yield less"
 

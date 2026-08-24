@@ -49,9 +49,10 @@ set -u
 # FM_PLATFORM_UNAME_OVERRIDE still wins at CALL time in
 # fm_session_start_default_budget, which is the seam every platform-arm test
 # drives; caching the host's answer here only removes the `uname` that arm used
-# to fork on every call. It is what lets the nesting margin below be a single
-# variable, readable by the clamp and by the banner alike, rather than a function
-# each of them would have to remember to call.
+# to fork on every call. It is also what lets the nesting margin below stay a
+# single variable, readable by the clamp and by the banner alike, while still
+# answering per platform: that margin is bound from this string rather than from
+# a fresh `uname` on every read.
 #
 # Assigned once per shell rather than once per source: this file is sourced by
 # both the parent and the bounded child, and re-running a prologue per source is
@@ -182,13 +183,33 @@ FM_SESSION_START_DIGEST_WRAPPERS='fm-session-start.sh fm-sessionstart-run.sh fm-
 # a tidiness preference. fm_session_start_hook_ceiling subtracts it to derive the
 # highest bound it will allow; fm_session_start_budget_advisory and
 # fm_session_start_bound_remedy add it back to name the deadline the harness will
-# actually kill at. A second literal or a second derivation anywhere would let
-# the number the operator is told diverge from the number in force, which is the
-# failure this margin exists to prevent.
-case "${FM_PLATFORM_UNAME_OVERRIDE:-$FM_SESSION_START_PLATFORM}" in
-  MINGW*|MSYS*|CYGWIN*) FM_SESSION_START_NESTING_MARGIN=4 ;;
-  *) FM_SESSION_START_NESTING_MARGIN=1 ;;
-esac
+# actually kill at. Each of the three binds it first, so all three read the same
+# variable resolved against the same platform within the same call. A second
+# literal or a second derivation anywhere would let the number the operator is
+# told diverge from the number in force, which is the failure this margin exists
+# to prevent.
+#
+# RESOLVED AT CALL TIME, THROUGH THE SAME SEAM AS THE BUDGET, and that symmetry
+# is load-bearing rather than cosmetic. fm_session_start_default_budget consults
+# FM_PLATFORM_UNAME_OVERRIDE every time it is called; when this margin was a
+# source-time constant instead, an in-process
+# `FM_PLATFORM_UNAME_OVERRIDE=MINGW... fm_session_start_resolve_budget ...` got
+# the Windows BUDGET and the HOST's MARGIN. Cases written to exercise the Windows
+# arm were then quietly checking a number that arm never uses, which is the
+# vacuous-guard shape this branch has already been bitten by twice. Binding it
+# rather than printing it keeps that call-time resolution free of a subshell, so
+# the pre-fork window the margin itself pays for does not grow to measure it.
+fm_session_start_bind_margin() {
+  case "${FM_PLATFORM_UNAME_OVERRIDE:-$FM_SESSION_START_PLATFORM}" in
+    MINGW*|MSYS*|CYGWIN*) FM_SESSION_START_NESTING_MARGIN=4 ;;
+    *) FM_SESSION_START_NESTING_MARGIN=1 ;;
+  esac
+}
+
+# Bound once here as well, so the variable is never unset for a reader that takes
+# it straight off the sourced library rather than through one of the three
+# functions below.
+fm_session_start_bind_margin
 
 # The highest bound the harness will actually let a session start reach: the
 # SHORTEST timeout any registered digest-tier session-start hook declares, minus
@@ -224,6 +245,7 @@ esac
 # (matched case-insensitively, since Claude and Codex spell it `SessionStart`).
 fm_session_start_hook_ceiling() {
   local root dir min f
+  fm_session_start_bind_margin
   local -a regs=()
   if [ -n "${FM_SESSION_START_REGISTRATION_ROOT:-}" ]; then
     root=$FM_SESSION_START_REGISTRATION_ROOT
@@ -319,8 +341,7 @@ fm_session_start_hook_ceiling() {
   ' "${regs[@]}" 2>/dev/null) || return 1
   case "$min" in ''|*[!0-9]*|0) return 1 ;; esac
   [ "$min" -gt "$FM_SESSION_START_NESTING_MARGIN" ] || return 1
-  _FM_SESSION_START_CEILING=$((min - FM_SESSION_START_NESTING_MARGIN))
-  printf '%s\n' "$_FM_SESSION_START_CEILING"
+  printf '%s\n' "$((min - FM_SESSION_START_NESTING_MARGIN))"
 }
 
 # Is this process running as a registered harness session-start hook?
@@ -352,16 +373,31 @@ fm_session_start_hook_ceiling() {
 # terminal and the `direct` branch would be dead code. Command substitution does
 # not touch fd 2. An operator who redirects stderr gets `undetermined`, which
 # clamps - the safe side, by construction.
-fm_session_start_hook_context() {
+#
+# THE BINDING FORM IS THE PRIMARY ONE, for the same reason the bound has one: a
+# printing function can only be consumed through a command substitution, and a
+# subshell discards what it learned. The parent probes the context before forking
+# the bounded child, and every extra probe there is paid inside the window the
+# nesting margin covers, so the answer is bound to a variable that survives the
+# call and is then threaded to the cap and to the advisory.
+fm_session_start_bind_context() {
   if [ "${FM_SESSION_START_UNDER_HOOK:-}" = 1 ]; then
-    printf 'hook\n'
+    FM_SESSION_START_CONTEXT=hook
     return 0
   fi
   if [ -t 2 ]; then
-    printf 'direct\n'
+    FM_SESSION_START_CONTEXT=direct
     return 0
   fi
-  printf 'undetermined\n'
+  FM_SESSION_START_CONTEXT=undetermined
+}
+
+# The printing form, for callers that want the answer as a value. One predicate,
+# not two: it delegates rather than repeating the tests above, so the two forms
+# cannot drift apart.
+fm_session_start_hook_context() {
+  fm_session_start_bind_context
+  printf '%s\n' "$FM_SESSION_START_CONTEXT"
 }
 
 # The cap actually in force for an explicit bound on this path, and the reason it
@@ -392,7 +428,10 @@ fm_session_start_hook_context() {
 # for a cap that did not come from the harness.
 fm_session_start_cap() {  # [hook-context]
   local context=${1:-} ceiling
-  [ -n "$context" ] || context=$(fm_session_start_hook_context)
+  if [ -z "$context" ]; then
+    fm_session_start_bind_context
+    context=$FM_SESSION_START_CONTEXT
+  fi
   [ "$context" != direct ] || return 1
   if ceiling=$(fm_session_start_hook_ceiling); then
     printf '%s harness\n' "$ceiling"
@@ -492,17 +531,24 @@ fm_session_start_resolve_budget() {  # [explicit-seconds] [cap-spec]
 # survives its own call, so the clamp and the advisory read one cap, resolved
 # once, and cannot disagree about it.
 #
-# Sets FM_SESSION_START_BOUND to the bound in force, and FM_SESSION_START_CAP to
-# the cap spec that produced it - `none` when no cap applies, and empty when no
-# cap was needed at all because there was no explicit value to clamp. Leaving it
-# empty on the default path is deliberate: every ordinary session start then pays
-# nothing for a derivation whose only consumer is a value that was never set.
+# Sets FM_SESSION_START_BOUND to the bound in force, FM_SESSION_START_CAP to the
+# cap spec that produced it - `none` when no cap applies - and
+# FM_SESSION_START_CONTEXT to the hook context both were resolved against.
+#
+# All three are ALWAYS assigned, including on the default path where the last two
+# are left empty. The caller runs under `set -u`, so a variable this function can
+# return without defining is an unbound-variable abort on every ordinary session
+# start, not a missing optimisation. Empty is the "nothing to clamp, so nothing
+# was derived" value, and every consumer treats it as "derive it yourself if you
+# get that far" - which on the default path none of them do, because the advisory
+# returns before it needs either.
 # shellcheck disable=SC2034  # Both variables are the return values of this
 # function; bin/fm-session-start.sh reads them in the shell that calls it, which
 # is the whole reason this assigns rather than prints.
 fm_session_start_bind_budget() {  # [explicit-seconds]
   local explicit=${1:-}
   FM_SESSION_START_CAP=
+  FM_SESSION_START_CONTEXT=
   case "$explicit" in
     ''|*[!0-9]*)
       FM_SESSION_START_BOUND=$(fm_session_start_default_budget)
@@ -513,7 +559,8 @@ fm_session_start_bind_budget() {  # [explicit-seconds]
     FM_SESSION_START_BOUND=$(fm_session_start_default_budget)
     return 0
   fi
-  FM_SESSION_START_CAP=$(fm_session_start_cap) || FM_SESSION_START_CAP=none
+  fm_session_start_bind_context
+  FM_SESSION_START_CAP=$(fm_session_start_cap "$FM_SESSION_START_CONTEXT") || FM_SESSION_START_CAP=none
   FM_SESSION_START_BOUND=$(fm_session_start_resolve_budget "$explicit" "$FM_SESSION_START_CAP")
 }
 
@@ -581,6 +628,7 @@ fm_session_start_delivery_bound() {  # [explicit-seconds]
 # property while it was true of the bound and false of the cap beside it.
 fm_session_start_budget_advisory() {  # <requested> <effective> [context] [cap-spec]
   local requested=${1:-} effective=${2:-} context=${3:-} cap=${4:-} capsource=none
+  fm_session_start_bind_margin
   case "$requested" in ''|*[!0-9]*) return 0 ;; esac
   case "$effective" in ''|*[!0-9]*|0) return 0 ;; esac
   requested=$((10#$requested))
@@ -634,6 +682,7 @@ fm_session_start_budget_advisory() {  # <requested> <effective> [context] [cap-s
 # construction the number in force.
 fm_session_start_bound_remedy() {  # <effective-budget>
   local effective=${1:-} cap capvalue capsource
+  fm_session_start_bind_margin
   case "$effective" in ''|*[!0-9]*) effective=0 ;; esac
   if ! cap=$(fm_session_start_cap); then
     printf '●  If it truncates again, raise FM_SESSION_START_TIMEOUT and report the slow\n'

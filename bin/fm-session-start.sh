@@ -296,13 +296,14 @@ if [ -z "${FM_SESSION_START_STAGE_FILE:-}" ]; then
   # platform, because the identical digest costs about 40x more per subprocess
   # under MSYS than on Linux. bin/fm-session-start-bound-lib.sh owns that
   # resolution, its evidence, and the unusable-value fallback.
-  # Bound and cap are BOUND to variables rather than captured from a command
-  # substitution, so the cap the clamp used is the cap the advisory describes -
-  # one derivation, in the parent, inside the window the nesting margin covers.
+  # Bound, cap and hook context are all BOUND to variables rather than captured
+  # from command substitutions, so the cap and the context the clamp used are the
+  # ones the advisory describes - one derivation each, in the parent, inside the
+  # window the nesting margin covers.
   fm_session_start_bind_budget "${FM_SESSION_START_TIMEOUT:-}"
   SESSION_START_BUDGET=$FM_SESSION_START_BOUND
   fm_session_start_budget_advisory "${FM_SESSION_START_TIMEOUT:-}" "$SESSION_START_BUDGET" \
-    '' "$FM_SESSION_START_CAP"
+    "$FM_SESSION_START_CONTEXT" "$FM_SESSION_START_CAP"
   SESSION_START_STAGE_FILE=$(mktemp "${TMPDIR:-/tmp}/fm-session-start-stage.XXXXXX" 2>/dev/null) || SESSION_START_STAGE_FILE=
   if [ -z "$SESSION_START_STAGE_FILE" ]; then
     # Without a breadcrumb the bound still holds; only the banner's precision

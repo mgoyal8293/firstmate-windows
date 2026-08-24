@@ -56,15 +56,16 @@ fm_test_max_session_start_bound() {
 # fm_test_session_start_margin <uname-s>: the nesting margin the library resolves
 # for that platform, in seconds.
 #
-# Run in a FRESH SHELL with the override already set, because the margin is
-# resolved when bin/fm-session-start-bound-lib.sh is sourced - which is exactly
-# what a Git Bash session does - and not on every call the way the default budget
-# is. Reading the variable that is already in scope here would answer for the
-# host running the suite, which is the one platform whose margin is smallest.
+# Asked of the library through the SAME call-time override the default budget
+# answers to, so a caller cannot get one platform's budget beside another's
+# margin. Reading the FM_SESSION_START_NESTING_MARGIN already in scope would
+# answer for the host running the suite instead, which is the one platform whose
+# margin is smallest - and that mismatch is what let Windows-labelled cases check
+# the host's number.
 fm_test_session_start_margin() {  # <uname-s>
   local got
   got=$(FM_PLATFORM_UNAME_OVERRIDE="$1" bash -c \
-    '. "$1"; printf "%s\n" "$FM_SESSION_START_NESTING_MARGIN"' _ \
+    '. "$1"; fm_session_start_bind_margin; printf "%s\n" "$FM_SESSION_START_NESTING_MARGIN"' _ \
     "$ROOT/bin/fm-session-start-bound-lib.sh") || return 1
   case "$got" in ''|*[!0-9]*|0) return 1 ;; esac
   printf '%s\n' "$got"

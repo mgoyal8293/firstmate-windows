@@ -623,10 +623,15 @@ test_tracked_registration_covers_the_primary_events() {
   # time it was preempting the truncation banner on MSYS.
   # tests/fm-session-start-hook-nesting.test.sh owns the same invariant across
   # every registration; this keeps the Cursor one honest where it is registered.
-  bound=$(fm_test_max_session_start_bound) \
-    || fail "could not derive bin/fm-session-start.sh's highest default budget"
-  jq -e --argjson bound "$bound" '[.hooks.sessionStart[]] | all(.timeout > $bound)' "$reg" >/dev/null 2>&1 \
-    || fail "the session-open timeout must sit strictly above bin/fm-session-start.sh's highest default budget (${bound}s), or Cursor kills the hook before the truncation banner is printed"
+  # And the floor is the bound PLUS its nesting margin, not the bound alone. The
+  # margin is what pays for the parent's pre-fork prologue and its post-kill
+  # banner, so a registration that merely exceeds the bound still preempts the
+  # banner mid-print - the same off-by-a-number this assertion was already caught
+  # by once, one term further along.
+  bound=$(fm_test_min_registration_floor) \
+    || fail "could not derive bin/fm-session-start.sh's highest default budget plus its nesting margin"
+  jq -e --argjson bound "$bound" '[.hooks.sessionStart[]] | all(.timeout >= $bound)' "$reg" >/dev/null 2>&1 \
+    || fail "the session-open timeout must reach bin/fm-session-start.sh's highest default budget plus its nesting margin (${bound}s), or Cursor kills the hook before the truncation banner is printed"
   pass "cursor registration: covers every primary event with a bounded stop loop"
 }
 

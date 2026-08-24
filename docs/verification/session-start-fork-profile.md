@@ -195,33 +195,34 @@ The 2574 ms end-to-end corroboration recorded with that derivation is retracted 
 ### What the margin owes, on the path that actually reaches the ceiling
 
 Counted with the same `LD_PRELOAD` interposer described above, validated against the same known-count program before use, and counted rather than grepped.
-Process creations, on the deduplicated tree:
+Process creations, re-counted on the current tree after both the cap and the hook-context derivations were deduplicated:
 
 | Side of the bound | Work | Subprocesses |
 |---|---|---|
-| Before the fork | `bin/fm-session-start.sh`'s `SCRIPT_DIR`/`FM_ROOT` resolution, the `fm-session-start-bound-lib.sh`, `fm-timeout-lib.sh` and `fm-session-lock-lib.sh` sources with their transitive prologues, and the stage-file `mktemp` | 10 |
-| Before the fork | the cap derivation: the hook-context probe, the registration glob, and the `awk` over the registration JSONs | 4 |
-| After the kill | `fm_session_stage_last`, the pending-stage `awk`/`tr` pipeline, `fm_session_start_bound_remedy` and `fm_session_stage_render` | 12 |
-| | | **26** |
+| Before the fork | `bin/fm-session-start.sh`'s `SCRIPT_DIR`/`FM_ROOT` resolution, the `fm-session-start-bound-lib.sh`, `fm-timeout-lib.sh` and `fm-session-lock-lib.sh` sources with their transitive prologues, `fm_session_start_bind_budget` on the default path, and the stage-file `mktemp` | 11 |
+| Before the fork | what a CLAMPED bound additionally pays: the registration glob, the `awk` over the registration JSONs, and the advisory only a clamp emits | 6 |
+| After the kill | `fm_session_stage_last`, the pending-stage `awk`/`tr` pipeline, `fm_session_start_bound_remedy` and `fm_session_stage_render` | 15 |
+| | | **32** |
 
-It is 26 only because the cap is derived ONCE.
-Before the dedup the same path measured 30, because `fm_session_start_resolve_budget` and `fm_session_start_budget_advisory` each derived it independently.
-`fm_session_start_bind_budget` is what holds it to one derivation, which makes that function load-bearing for this number rather than an efficiency tidy-up.
+Both derivations the parent used to run twice now run once.
+The cap was deduplicated first; the hook-context probe after it, because `fm_session_start_cap` resolved the context inside a command substitution, so the answer died with the subshell exactly as the cap had, and the advisory then probed a second time in the parent.
+`fm_session_start_bind_context` binds it instead and `bin/fm-session-start.sh` threads it to the advisory, so the pre-fork window pays for one probe.
 
-The dedup was re-measured here directly, driving the library the way `bin/fm-session-start.sh` drives it - resolve the bound, then emit the advisory - under the same interposer:
+Measured effect of that second dedup, same interposer, same box:
 
-| Path | Before the dedup | After |
+| Path | Before | After |
 |---|---|---|
-| Clamped: resolve the bound and emit the advisory | 13 forks, 3 execs | 9 forks, 2 execs |
-| Default: resolve the bound, advisory returns early | 4 forks, 1 exec | 3 forks, 1 exec |
+| Clamped pre-fork prologue | 19 forks | 17 forks |
+| Post-kill banner | 16 forks | 15 forks |
+| Clamped path, total | 35 | 32 |
 
-Four process creations removed from the clamped path, which is the saving the 26 depends on, and one from the default path as well, because the resolution no longer happens inside a command substitution.
+### The count history, kept rather than overwritten
 
-### The count is disputed, and the margin is chosen not to depend on it
-
-An independent re-measurement of the same clamped path on this box, with the same interposer, came out at **31** rather than 26: 11 for the default prologue, 4 for the cap derivation, and 16 for the banner.
-A reading of 32 was argued for separately.
-Both are recorded rather than reconciled, because the margin does not turn on which is right - see the derivation below - and because a single number silently replaced is how a measured claim turns into remembered prose.
+Three counts of this path exist and they do not agree, so all three stay on the page.
+26 is what the margin was derived from.
+31 came from an independent re-measurement on this box with the same interposer, and 32 was argued for separately.
+**32 is what the current tree measures**, after both dedups, so the measurement and the most pessimistic argued figure have converged.
+That does not move the margin, for the reason below, but a single number silently replaced is how a measured claim turns into remembered prose.
 
 ### The per-fork cost on the target
 
@@ -252,12 +253,14 @@ Every count on record lands on the same answer:
 | 26 (derivation) | 3224 ms | 4 s | 776 ms |
 | 28 | 3472 ms | 4 s | 528 ms |
 | 30 (before the dedup) | 3720 ms | 4 s | 280 ms |
-| 31 (re-measured here) | 3844 ms | 4 s | 156 ms |
-| 32 (argued for) | 3968 ms | 4 s | 32 ms |
+| 31 (earlier re-measurement) | 3844 ms | 4 s | 156 ms |
+| 32 (**measured on the current tree**) | 3968 ms | 4 s | 32 ms |
 
 So the choice of 4 s does not depend on resolving whether the count is 26 or 32.
-The SLACK does, and that is stated rather than implied: 4 s is comfortable at the low end of that range and nearly exhausted at the high end.
-The dedup is what keeps the count near the low end - it removes 4 process creations from exactly this path - so it is a correctness dependency of this margin, not a performance nicety.
+The SLACK does, and the current tree sits at the pessimistic end of it: **32 ms**, not the 776 ms the derivation's own count would have implied.
+That is the honest headline of this section - the margin is sufficient against the worst measured per-fork cost, and it is not roomy.
+The two dedups are what keep it sufficient at all: together they removed 3 process creations from exactly this path, and without them the count is 35 and the product 4340 ms, which is over the margin.
+They are correctness dependencies of this number rather than performance niceties, and anything that adds a subprocess to the pre-fork window or the banner has to be weighed against those 32 ms.
 [`../../tests/fm-session-start-hook-nesting.test.sh`](../../tests/fm-session-start-hook-nesting.test.sh) holds the margin to the WORST count on record rather than the one it was derived from, so a shrunk margin fails there even if the optimistic count is the true one.
 
 What this does NOT claim: the per-fork cost rises with contention, so no fixed margin is safe at unbounded contention.
@@ -282,6 +285,32 @@ The result is not lost, it still surfaces as a durable wake, but it stops arrivi
 `bin/fm-session-start.sh` now resolves the bound once and exports it as `FM_SESSION_START_RESOLVED_BOUND` on the same `env` that forks the bounded child, which the worker inherits.
 `fm_session_start_delivery_bound` prefers it and falls back to a local resolution only when there is no digest to inherit from, which is the standalone case.
 
+## Windows verification: what is measured there, and what is NOT
+
+Acceptance criterion 6 for this work says the change must be verified on the real Windows box, and that a clean Linux run is necessary but not sufficient.
+This section exists so nobody has to infer from the rest of the page which half is which.
+As it stands, **criterion 6 is not satisfied by this document alone.**
+
+Windows-measured, on `MINGW64_NT-10.0-26200`, bash 5.2.37, 22 cores:
+
+- The per-fork contention curve the margin is derived from: 30.6 ms idle, 44.5 ms at 3 fork-heavy competitors, 61.7 ms at 6, 124.0 ms at 12.
+- The elapsed figures for an empty home, 74 s before the subprocess reductions and 64-70 s after, and the 72 s / 76 s / 123 s runs the raised bound is argued from.
+- The per-stage attribution a truncated startup prints, including the 9.9 s `startup` stage.
+- `fm_session_start_default_budget` and `fm_session_start_resolve_budget` answering `300` / `300` / `45` / `300`.
+
+All of that was taken BEFORE the fix rounds, so what it verifies is the margin's cost INPUT and the original resolver, not the behaviour those rounds introduced.
+
+NOT yet exercised on MINGW64, and this is the outstanding step:
+
+- The 4 s nesting margin actually in force, and the 356 s ceiling it derives there rather than 359 s.
+- The fail-closed fallback to the platform default when no registration can be read.
+- `fm_session_start_bind_budget` and `fm_session_start_bind_context`, which assign rather than print, and the two-argument `fm_session_start_resolve_budget`.
+- The `FM_SESSION_START_RESOLVED_BOUND` handover that `bin/fm-startup-network.sh`'s `delivery_budget` now depends on.
+- The clamped-path subprocess count, which is the Linux count above; the count is portable but it has not been re-confirmed on the target.
+
+Why it is not in this document: this pipeline runs on Linux, and the worker that would run the probe cannot read the pipeline-owned commits, so the Windows behaviour run has to happen against the pushed branch instead.
+That run is owed before this work is reported complete, and until it is recorded here the Linux evidence on this page is explicitly not a substitute for it.
+
 ## What the per-platform margin cost, measured
 
 Same interposer, counting process creations for the library alone rather than for a whole session start, since that is where the change is:
@@ -290,9 +319,11 @@ Same interposer, counting process creations for the library alone rather than fo
 |---|---|---|
 | Parent: source the library and resolve the DEFAULT bound | 4 forks, 1 exec | 3 forks, 1 exec |
 | Bounded child: source the library only | 0 | 2 forks, 1 exec |
-| Parent: source, clamp an explicit over-cap bound, and emit the advisory | 13 forks, 3 execs | 9 forks, 2 execs |
+| Parent: source, clamp an explicit over-cap bound, and emit the advisory | 13 forks, 3 execs | 7 forks, 2 execs |
 
 The `uname -s` moved from `fm_session_start_default_budget`'s body to a single resolution when the file is sourced, so the parent's default path did not get more expensive - it got one fork cheaper, because `fm_session_start_bind_budget` assigns instead of printing and so no longer needs a command substitution around the resolution.
+The clamped row fell twice: to 9 when the cap stopped being derived twice, and to 7 when the hook context stopped being probed twice.
+Both derivations run only when an explicit `FM_SESSION_START_TIMEOUT` is set, so no ordinary session start reaches either.
 The bounded child, which sources the library for its stage marks and never asks for a bound, now pays that `uname`: **3 process creations it did not pay before**, against the 789 the blocking path costs, which is 0.4%.
 That is the price of the margin being a plain variable that the clamp and the banner both read, and it is recorded rather than rounded away.
 
@@ -391,6 +422,37 @@ $ # M9, re-run
 not ok - with no readable registration an over-default bound must fall back to the 300s platform default, got 3000s: honouring it in full is the same silent kill a wrong 'not a hook' produces
 ```
 
+### Third round: the platform seam, the Cursor floor and the second dedup
+
+| # | Guard | Mutation | Suite |
+|---|---|---|---|
+| M19 | a platform override reaches the MARGIN, not just the budget | the margin goes back to being resolved only at source time | bound, and again in hook-nesting |
+| M20 | the Cursor registration clears bound-plus-margin | `.cursor/hooks.json` sessionStart timeout lowered 360 -> 302 | cursor-primary |
+| M22 | the clamp lands on the arm's own ceiling | the clamp shifted by a literal, the shape a second margin would produce | hook-nesting |
+| M23 | the binder defines every value it returns | the hook context left unbound on the default path | bound |
+
+```console
+$ # M19, bound suite
+not ok - the MINGW ceiling 359s is not below the host's 359s: the platform override is not reaching the nesting margin, so every MINGW assertion here is checking the host's number
+$ # M19, hook-nesting suite
+not ok - the MINGW ceiling is not below the Linux one, so the platform arms are not distinguishable here and the loop above proves nothing about Windows
+$ # M20
+not ok - the session-open timeout must reach bin/fm-session-start.sh's highest default budget plus its nesting margin (304s), or Cursor kills the hook before the truncation banner is printed
+$ # M22
+not ok - on 'MINGW64_NT-10.0-26200' an over-ceiling override did not resolve to the 356s ceiling the assertion above checked
+$ # M23
+not ok - fm_session_start_bind_budget '' left one of its return values undefined, so a caller running under 'set -u' aborts before forking the bounded child: _: line 4: FM_SESSION_START_CONTEXT: unbound variable
+```
+
+M23 is a regression this round INTRODUCED and the suite caught, recorded because the near-miss is the useful part.
+Threading the hook context to the advisory bound it only on the clamped path, so on the default path - every ordinary session start - `bin/fm-session-start.sh` read a variable that was never set, under `set -u`, before forking the bounded child.
+The binder now always assigns all three of its return values, and the case above runs a real `set -u` shell that reads every one of them on every input class.
+
+M19 is the one worth reading twice.
+Before the seam was made symmetric, an in-process `FM_PLATFORM_UNAME_OVERRIDE=MINGW... fm_session_start_resolve_budget ...` returned the Windows BUDGET beside the HOST's MARGIN, so every case labelled MINGW was checking a ceiling that arm never uses - 359 s where the arm resolves 356 s.
+The mutation restores exactly that state, and the cross-arm assertions now added to both suites are what refuse it.
+M22's failure message naming `MINGW64_NT-10.0-26200` and 356 s is the same seam working: before this round that case could only ever see the host's number.
+
 ### What is NOT independently falsifiable, said plainly
 
 **The cap dedup has no guard and cannot have one.**
@@ -399,9 +461,31 @@ There is no observable behaviour to assert, so no mutation of it can be made to 
 Its evidence is the measurement above instead: 13 forks to 9 on the clamped path, taken with the validated interposer.
 That matters here rather than being a performance footnote, because the margin's slack depends on the count and those four process creations are inside the window the margin pays for.
 
+**The per-arm equality inside the override loop is redundant, not load-bearing.**
+`[ "$got" -eq "$armcap" ]` compares the resolver's answer against a ceiling derived through the same code on the same arm, so it is an identity in the same way the clamped-path invariant below is.
+Deleting that one line leaves the suite green, which is stated here rather than left for someone to discover.
+What actually refuses the seam regression is the CROSS-arm assertion beside it - the MINGW ceiling must be strictly below the host's - and M19 is that line failing.
+The equality is kept because it extends to all twelve arms a check the later cases make on two, not because it is a second opinion.
+
 **The clamped-path invariant overlaps its neighbours by construction.**
 `cap + margin <= min_registration` is an identity given that the ceiling IS `min_registration - margin`, so every mutation of the ceiling is caught by more than one case.
 It is asserted first, and over every platform arm rather than the two the equality checks cover, which is what M15 demonstrates - but it is a restatement of the invariant, not an independent probe of it, and it should not be read as a second opinion.
+
+## The truncation fixtures raced the improvement they ship beside
+
+Three cases in `tests/fm-session-start-bound.test.sh` assert what a startup prints when it hits its bound, and the smallest bound `timeout` accepts is 1 s.
+Whether the digest against a stubbed toolchain and an empty home outlasts one second is a property of the box, not of the code under test - and this branch keeps making that digest cheaper, so the fixture was racing its own subject.
+
+Measured directly, running the real script against the fixture's shape and counting how often the banner appeared:
+
+| Tree | Truncated |
+|---|---|
+| before this round's dedups | 6 runs out of 6 |
+| after them | 3 runs out of 6 |
+
+So it was not yet flaky when it shipped and it became flaky here, which is the useful part: the failure mode arrives with the next fork saved, not with a bad edit.
+The detection stubs now carry a fixed delay, applied after the toolchain is built so the `rm` and `env` recorders those cases add are not slowed with it, and the digest is reliably longer than its bound.
+Five consecutive full runs of the suite pass 18 of 18 afterwards, against roughly one failure in three before.
 
 ## The lock-pid race case, and what shortening it cost
 

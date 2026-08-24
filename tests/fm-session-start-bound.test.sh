@@ -69,6 +69,32 @@ make_fake_toolchain() {
     'no-mistakes version v1.31.2 (fake) 2026-06-27T00:02:18Z'
 }
 
+# slow_toolchain <fakebin> <seconds>: add a fixed delay to every stub already in
+# <fakebin>, preserving what each one does.
+#
+# WHY THE TRUNCATION CASES NEED THIS. Three cases below assert what a startup
+# prints when it hits its bound, and the smallest bound `timeout` accepts is 1 s.
+# Whether a digest against a stubbed toolchain and an empty home takes longer
+# than that is a property of the box, not of the code under test - and this
+# branch is actively making that digest faster, so the fixture races the very
+# improvement it ships beside. Measured here: before this round's dedups the
+# digest outlasted 1 s on 6 runs out of 6, after them on 3 out of 6.
+#
+# A delay on the detection stubs removes the race in the only direction that
+# matters: the digest is then reliably longer than its bound, so the banner is
+# always the thing under test. It is applied to the detection toolchain only, and
+# after it is built, so a case that adds its own stub afterwards - the `rm` and
+# `env` recorders below - is not slowed with it.
+slow_toolchain() {  # <fakebin> <seconds>
+  local fakebin=$1 delay=$2 tool
+  for tool in "$fakebin"/*; do
+    [ -f "$tool" ] || continue
+    { printf '#!/bin/sh\n'; printf 'sleep %s\n' "$delay"; tail -n +2 "$tool"; } > "$tool.slow" || return 1
+    mv "$tool.slow" "$tool" || return 1
+    chmod +x "$tool" || return 1
+  done
+}
+
 # run_session_start <home> <root> <fakebin> - drops every harness env marker so a
 # local claude/pi/grok session cannot leak into the fixture, exactly as
 # tests/fm-session-start.test.sh does.
@@ -213,7 +239,13 @@ test_a_zero_padded_bound_still_produces_a_deadline_that_bites() {
 # entirely. So `undetermined` clamps.
 test_the_clamp_follows_hook_context_and_undetermined_clamps() {
   local cap got ctx
-  cap=$(fm_session_start_hook_ceiling) \
+  # THE CEILING IS DERIVED ON THE ARM THE ASSERTIONS NAME. The nesting margin is
+  # per platform and resolved through the same call-time override as the budget,
+  # so a ceiling taken in the suite's own shell is the HOST's, and comparing a
+  # MINGW resolve against it would be checking a number that arm never uses -
+  # which is what these cases silently did while the margin was a source-time
+  # constant.
+  cap=$(FM_PLATFORM_UNAME_OVERRIDE=MINGW64_NT-10.0 fm_session_start_hook_ceiling) \
     || fail "no harness ceiling could be derived from this checkout, so none of the clamp branches below mean anything"
 
   # (a) POSITIVELY under a hook: the marker bin/fm-sessionstart-run.sh exports.
@@ -224,6 +256,10 @@ test_the_clamp_follows_hook_context_and_undetermined_clamps() {
     fm_session_start_resolve_budget "$((cap * 10))")
   [ "$got" -eq "$cap" ] \
     || fail "under a registered hook an over-ceiling bound must clamp to ${cap}s, got ${got}s"
+  # The Windows arm's ceiling must be STRICTLY below the host's, or the margin is
+  # not per platform at all and the override above proved nothing.
+  [ "$cap" -lt "$(fm_session_start_hook_ceiling)" ] \
+    || fail "the MINGW ceiling ${cap}s is not below the host's $(fm_session_start_hook_ceiling)s: the platform override is not reaching the nesting margin, so every MINGW assertion here is checking the host's number"
 
   # (b) THE SAFETY PROPERTY. Hook context cannot be established either way - no
   # marker, and stderr is not a terminal because this assertion redirects it -
@@ -243,7 +279,7 @@ test_the_clamp_follows_hook_context_and_undetermined_clamps() {
     ctx=$(fm_test_on_pty 'fm_session_start_hook_context')
     [ "$ctx" = direct ] \
       || fail "with a terminal on stderr and no hook marker the context must be 'direct', got '$ctx'"
-    got=$(fm_test_on_pty "fm_session_start_resolve_budget $((cap * 10))")
+    got=$(fm_test_on_pty "FM_PLATFORM_UNAME_OVERRIDE=MINGW64_NT-10.0 fm_session_start_resolve_budget $((cap * 10))")
     [ "$got" -eq "$((cap * 10))" ] \
       || fail "a positively established direct run must be honoured IN FULL ($((cap * 10))s), got ${got}s: the operator's own rerun is the remedy the truncation banner prescribes and nothing kills it at the hook timeout"
   else
@@ -373,6 +409,37 @@ test_the_delivery_bound_follows_the_digest_and_not_the_workers_own_context() {
   pass "fm_session_start_delivery_bound: a detached worker uses the ${raised}s bound the digest resolved rather than the ${cap}s its own context would clamp to"
 }
 
+# --- 2e. the binder's outputs are all defined, on every path ------------------
+#
+# fm_session_start_bind_budget returns THREE values through variables rather than
+# through stdout, and bin/fm-session-start.sh reads all three under `set -u`. A
+# path that returns early without defining one is therefore not a missing
+# optimisation, it is an unbound-variable abort before the bounded child is even
+# forked - on the DEFAULT path, which is every ordinary session start.
+#
+# That is a regression this suite caught rather than a hypothetical: threading the
+# hook context through to the advisory bound it only on the clamped path, and the
+# default path then aborted. Asserted by running a real `set -u` shell that reads
+# every one of them, which is exactly what the caller does.
+test_the_binder_defines_every_value_it_returns_on_every_path() {
+  local out rc arg
+  for arg in '' 0 00 abc 45 9999; do
+    out=$(FM_SESSION_START_UNDER_HOOK=1 bash -u -c '
+      . "$1"
+      fm_session_start_bind_budget "$2"
+      printf "%s|%s|%s\n" "$FM_SESSION_START_BOUND" "$FM_SESSION_START_CAP" "$FM_SESSION_START_CONTEXT"
+    ' _ "$ROOT/bin/fm-session-start-bound-lib.sh" "$arg" 2>&1)
+    rc=$?
+    [ "$rc" -eq 0 ] \
+      || fail "fm_session_start_bind_budget '$arg' left one of its return values undefined, so a caller running under 'set -u' aborts before forking the bounded child: $out"
+    case "$out" in
+      [0-9]*'|'*'|'*) : ;;
+      *) fail "fm_session_start_bind_budget '$arg' did not return a usable bound, got: $out" ;;
+    esac
+  done
+  pass "fm_session_start_bind_budget: every path defines all three return values, so a 'set -u' caller never aborts on one it did not set"
+}
+
 # --- 3. the stage marks must not distort what they measure -------------------
 
 test_stage_mark_spawns_no_subprocess() {
@@ -479,6 +546,8 @@ test_truncated_startup_names_the_stage_and_attributes_its_time() {
   root=${world%%|*}; world=${world#*|}
   home=${world%%|*}; fakebin=${world#*|}
   make_fake_toolchain "$fakebin"
+  slow_toolchain "$fakebin" 0.4 \
+    || fail "could not slow the detection toolchain, so the 1s bound would race the digest"
   # A 1s bound truncates any real digest, so this exercises the actual banner
   # path rather than a reconstruction of it.
   out=$(run_session_start "$home" "$root" "$fakebin" FM_SESSION_START_TIMEOUT=1) \
@@ -527,6 +596,8 @@ test_the_parent_hands_its_resolved_bound_to_the_bounded_child() {
   root=${world%%|*}; world=${world#*|}
   home=${world%%|*}; fakebin=${world#*|}
   make_fake_toolchain "$fakebin"
+  slow_toolchain "$fakebin" 0.4 \
+    || fail "could not slow the detection toolchain, so the 1s bound would race the digest"
   envlog="$home/env.argv"
   : > "$envlog"
   # shellcheck disable=SC2016  # The stub body is deferred; it expands when the stub runs.
@@ -560,6 +631,8 @@ test_a_failed_breadcrumb_mktemp_never_hands_dev_null_to_rm() {
   root=${world%%|*}; world=${world#*|}
   home=${world%%|*}; fakebin=${world#*|}
   make_fake_toolchain "$fakebin"
+  slow_toolchain "$fakebin" 0.4 \
+    || fail "could not slow the detection toolchain, so the 1s bound would race the digest"
   rmlog="$home/rm.log"
   : > "$rmlog"
   printf '#!/bin/sh\nexit 1\n' > "$fakebin/mktemp"
@@ -711,6 +784,7 @@ test_a_zero_padded_bound_still_produces_a_deadline_that_bites
 test_the_clamp_follows_hook_context_and_undetermined_clamps
 test_an_unreadable_registration_set_caps_rather_than_releasing
 test_the_delivery_bound_follows_the_digest_and_not_the_workers_own_context
+test_the_binder_defines_every_value_it_returns_on_every_path
 test_stage_mark_spawns_no_subprocess
 test_stage_mark_is_append_only_and_survives_an_unwritable_target
 test_render_attributes_each_stage_and_flags_the_unfinished_one
