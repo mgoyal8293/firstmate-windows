@@ -368,9 +368,11 @@ calls_for() {  # <command> -> matching log lines
   load_adapter "$CASE"
   FM_BACKEND_CONPTY_SHELL='C:\fake\bash.exe'
 
-  # A CR-bearing copy of the tracked file, in a case-local backend directory the
-  # adapter resolves the rcfile from - the same FM_BACKEND_CONPTY_DIR override the
-  # client and the dependency probe honour. Only the rcfile lookup reads it here.
+  # A CR-bearing copy of the tracked file, in a case-local root the adapter
+  # resolves the rcfile from. FM_BACKEND_CONPTY_ROOT, not FM_BACKEND_CONPTY_DIR:
+  # the rcfile is resolved from the adapter's own location on purpose, so that a
+  # test pointing the node-pty deps hook elsewhere cannot disarm a real spawn.
+  # Only the rcfile lookup reads this at call time.
   # awk, not `sed -i 's/$/\r/'`: bare -i and a \r replacement are both GNU
   # extensions, and on a BSD sed the copy would silently stay LF and fail this
   # case against a correct implementation.
@@ -388,7 +390,7 @@ calls_for() {  # <command> -> matching log lines
   crgot=$(( $(wc -c < "$crcopy") ))
   [ "$crgot" -eq "$crexpect" ] \
     || fail "the copy is $crgot bytes, not the $crexpect a CRLF rewrite produces, so this case would prove nothing"
-  FM_BACKEND_CONPTY_DIR="$CASE/repo/bin/backends/conpty"
+  FM_BACKEND_CONPTY_ROOT="$CASE/repo"
 
   write_create_task_fake_node "$CASE"
 

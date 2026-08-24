@@ -257,10 +257,15 @@ fm_backend_conpty_shell() {
 # session shell announce whether it is at a prompt, as a Windows path, or
 # nothing at all when it must not be used.
 #
-# Resolved through FM_BACKEND_CONPTY_DIR, the same override the client and the
-# dependency probe resolve through, so this backend's own files always come from
-# one place: an operator who repoints that variable at a relocated copy must not
-# get the client from there and the rcfile from the checkout root.
+# Resolved SOURCE-RELATIVE, from this adapter's own location, and deliberately
+# NOT through FM_BACKEND_CONPTY_DIR. That variable is a narrow test hook for the
+# node-pty dependency probe (see its own comment above): a caller that points it
+# at a deps-only fixture directory, which is exactly what it is for, would then
+# also redirect the rcfile a real spawn arms its session shell with - and a
+# missing rcfile is silent by design, so gap 2's whole foreground-scoping
+# mechanism would switch off with nothing printed. This file is a tracked sibling
+# of conpty.sh, not an installed dependency, so BASH_SOURCE is the one lookup
+# nothing can repoint. Do not "unify" the two.
 #
 # It refuses on a CR-bearing copy rather than passing it to bash, because a
 # sourced bash file whose lines end in CR does not merely lose the marks - it
@@ -275,7 +280,7 @@ fm_backend_conpty_shell() {
 # that rewrote line endings - where bash would otherwise choke on the CR. The
 # dedicated test has to synthesise the CRLF file to reach this branch at all.
 fm_backend_conpty_shell_integration_rcfile() {
-  local rc="$FM_BACKEND_CONPTY_DIR/fm-shell-integration.bash"
+  local rc="$FM_BACKEND_CONPTY_ROOT/bin/backends/conpty/fm-shell-integration.bash"
   [ -f "$rc" ] || return 1
   if LC_ALL=C grep -Uq $'\r' "$rc" 2>/dev/null; then
     return 1

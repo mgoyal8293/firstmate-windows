@@ -74,8 +74,15 @@ make_settle_case() {
   fakebin=$(make_settle_fakebin "$case_dir/fake")
   mkdir -p "$home/data" "$home/projects" "$home/state" "$home/config"
   printf 'codex\n' > "$home/config/crew-harness"
-  fm_git_worktree "$proj" "$wt" "wt-$name"
-  fm_git_init_commit "$stale"
+  # THE GIT FIXTURES MUST NOT SHARE THIS HELPER'S STDOUT. This function returns
+  # its record THROUGH stdout, and `git commit -q` still writes "On branch
+  # master / nothing to commit, working tree clean" to STDOUT when nothing is
+  # staged - `-q` suppresses the success summary, not that status. Anything git
+  # prints would be prepended to the record inside the caller's command
+  # substitution, and the caller then builds real paths from it. Redirected to
+  # STDERR rather than to /dev/null so a genuine git failure is still visible.
+  fm_git_worktree "$proj" "$wt" "wt-$name" >&2
+  fm_git_init_commit "$stale" >&2
   mkdir -p "$home/data/$id"
   printf 'brief for %s\n' "$id" > "$home/data/$id/brief.md"
   touch "$home/state/.last-watcher-beat"
@@ -283,7 +290,9 @@ make_acquire_case() {  # <name> <id> -> case dir
   home="$case_dir/home"; proj="$case_dir/project"; wt="$case_dir/wt"
   mkdir -p "$home/data" "$home/projects" "$home/state" "$home/config"
   printf 'codex\n' > "$home/config/crew-harness"
-  fm_git_worktree "$proj" "$wt" "wt-$name"
+  # Redirected for the reason spelled out in make_settle_case: this helper
+  # returns its case dir through stdout, so no fixture command may write there.
+  fm_git_worktree "$proj" "$wt" "wt-$name" >&2
   mkdir -p "$home/data/$id"
   printf 'brief for %s\n' "$id" > "$home/data/$id/brief.md"
   touch "$home/state/.last-watcher-beat"
@@ -551,6 +560,73 @@ test_unreadable_pool_still_prints_the_operator_command() {
   pass "an abort that cannot read the pool keeps the exact one-line release command, because unknown is not the same as none"
 }
 
+# THE FIXTURE HELPERS' RETURN CHANNEL. Every case here builds real paths out of
+# the value a case-dir helper hands back, so that value sharing its stdout with a
+# fixture command is not a cosmetic problem: a polluted value is used verbatim as
+# a path prefix by `mkdir -p` and `cat >`, which writes the fixture into whatever
+# relative location the pollution implies. That is not hypothetical - it put two
+# generated stubs under a repo-root directory whose name was git's own "On branch
+# master / nothing to commit, working tree clean" (embedded newlines and all)
+# into a commit on this branch, and a path component containing a newline is
+# invalid on Win32, so a Windows checkout of that tree fails outright.
+#
+# The trigger is reproduced rather than described: calling a helper a SECOND time
+# for the same case name leaves nothing staged for `git commit -qm initial`,
+# which then writes its status to STDOUT - `-q` suppresses the success summary,
+# not that status. Against an unredirected helper this case fails on the second
+# call, reporting a three-line value; the assertions are the shape of the return
+# channel (one line, an existing directory, under this test's own temp root),
+# which is what a leak from any future fixture command would also break.
+assert_returned_case_dir() {  # <value> <helper> <call>
+  local value=$1 helper=$2 which=$3
+  case "$value" in
+    *$'\n'*)
+      fail "$which call to $helper returned a MULTI-LINE value, so a fixture command wrote to the helper's stdout and the caller would build paths from the leaked text: <$value>" ;;
+  esac
+  [ -n "$value" ] || fail "$which call to $helper returned an empty value"
+  case "$value" in
+    "$TMP_ROOT"/*) ;;
+    *) fail "$which call to $helper returned '$value', which is not under this test's own temp root" ;;
+  esac
+  [ -d "$value" ] || fail "$which call to $helper returned '$value', which is not an existing directory"
+}
+
+test_case_dir_helpers_keep_their_return_channel_clean() {
+  local dir err record
+  err="$TMP_ROOT/return-channel.err"
+
+  dir=$(make_acquire_case return-channel "return-channel-z9" 2>"$err")
+  assert_returned_case_dir "$dir" make_acquire_case first
+  # THE SECOND CALL IS THE TRIGGER, and its stderr is the proof. Nothing is
+  # staged this time, so `git commit -qm initial` DOES write its status - the
+  # assertions below pin both halves of the split: stdout carries only the path,
+  # and that status really was produced and went to stderr. An unredirected
+  # helper fails the first half AND leaves this file empty, so neither half can
+  # pass vacuously.
+  : > "$err"
+  dir=$(make_acquire_case return-channel "return-channel-z9" 2>"$err")
+  assert_returned_case_dir "$dir" make_acquire_case second
+  [ -s "$err" ] \
+    || fail "the repeat make_acquire_case call produced nothing on stderr, so this case never reached the 'nothing to commit' path it exists to pin"
+
+  # The settle helper returns a pipe-delimited RECORD, and read_settle_record
+  # splits it, so a leaked line lands in the first field and every later field
+  # shifts.
+  record=$(make_settle_case return-channel-settle "return-channel-settle-z9" 0 2>"$err")
+  assert_returned_case_dir "${record%%|*}" make_settle_case first
+  : > "$err"
+  record=$(make_settle_case return-channel-settle "return-channel-settle-z9" 0 2>"$err")
+  assert_returned_case_dir "${record%%|*}" make_settle_case second
+  [ -s "$err" ] \
+    || fail "the repeat make_settle_case call produced nothing on stderr, so this case never reached the 'nothing to commit' path it exists to pin"
+  read_settle_record "$record"
+  [ -d "$HOME_DIR" ] \
+    || fail "make_settle_case's record split to HOME_DIR='$HOME_DIR', which is not a directory, so the fields shifted"
+  [ "$STALE_READS" = 0 ] \
+    || fail "make_settle_case's record split to STALE_READS='$STALE_READS' rather than the 0 it was given, so the fields shifted"
+  pass "the case-dir fixture helpers return exactly one existing path on stdout, so a fixture command's output can never be used as a path prefix"
+}
+
 test_single_stale_first_read_is_not_accepted
 test_already_settled_pane_costs_one_confirm_sleep
 test_default_backend_sends_bare_treehouse_get
@@ -561,5 +637,6 @@ test_no_recorded_lease_is_reported_without_claiming_either_way
 test_unreadable_pool_still_prints_the_operator_command
 test_non_array_status_payload_is_treated_as_unknown
 test_pathless_holder_row_still_attempts_the_release
+test_case_dir_helpers_keep_their_return_channel_clean
 
 echo "# all fm-spawn-worktree-settle tests passed"
