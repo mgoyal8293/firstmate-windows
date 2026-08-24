@@ -115,7 +115,14 @@ fm_conpty_live_cleanup() {
   done
   fm_test_cleanup
 }
-trap fm_conpty_live_cleanup EXIT INT TERM
+# Mirror tests/lib.sh's three traps rather than collapsing them into one: a
+# bare INT handler that only cleans up RESUMES the guard afterwards, so a
+# Ctrl-C would tear the labs and sessions down and then run every remaining
+# case against deleted fixture roots, reporting a cascade of failures that
+# say nothing about the code under test.
+trap fm_conpty_live_cleanup EXIT
+trap 'fm_conpty_live_cleanup; exit 130' INT
+trap 'fm_conpty_live_cleanup; exit 143' TERM
 SESSION_SHELL=${FM_BACKEND_CONPTY_SHELL:-C:\\Program Files\\Git\\bin\\bash.exe}
 
 winpath() { cygpath -w "$1" 2>/dev/null || printf '%s' "$1"; }
@@ -422,7 +429,14 @@ for harness in claude codex opencode grok kimi pi cursor-agent muse; do
   [ -n "$tr" ] && [ -s "$tr" ] || tr="$STATE/$id/transcript.log"
   [ -s "$tr" ] \
     || fail "no readable transcript for $harness (last tried '$tr'), so the untagged-mark check would have proved nothing"
-  stray=$(grep -ao $'\033\]133;[^\a]*' "$tr" 2>/dev/null | grep -vc 'fmpty=1' || true)
+  # Bound each match on EITHER terminator. OSC accepts BEL or ST (ESC \), and
+  # the tracker accepts both, so a class that stops only at BEL lets an
+  # ST-terminated UNTAGGED mark run greedily on and swallow the next TAGGED mark
+  # on that line; the joined match then contains fmpty=1, the filter below drops
+  # it, and this check reports zero strays for the exact vendor regression it
+  # exists to catch. Excluding ESC as well stops the match at an ST terminator
+  # and at the start of any following sequence.
+  stray=$(grep -ao $'\033\]133;[^\a\033]*' "$tr" 2>/dev/null | grep -vc 'fmpty=1' || true)
   [ "${stray:-0}" -eq 0 ] \
     || fail "$harness emitted $stray OSC 133 mark(s) without firstmate's tag; switch to a private marker"
 
