@@ -78,6 +78,7 @@ On its own that list cannot say which attached process is actually *running* the
 The shell answers that directly instead: the session shell is launched with [`fm-shell-integration.bash`](../bin/backends/conpty/fm-shell-integration.bash) as its rcfile, which has bash emit OSC 133 semantic prompt marks (the FinalTerm/FTCS sequences Microsoft documents for Windows Terminal shell integration), and the daemon tracks the last one as it parses the pty stream it already owns.
 A shell at a prompt means nothing else is in charge, so a harness still attached is not running the session — exactly what tmux reads off a foreground process group holding nothing but a shell.
 The marks cost nothing per poll: no syscall, no process sweep, no PowerShell.
+None of it displaces the crewmate's own shell environment: `--rcfile` takes the place of `~/.bashrc`, so the rcfile sources that file first, and the marks are prepended to an operator's `PS0` and `PROMPT_COMMAND` and wrapped around their `PS1` rather than assigned over them.
 
 The agent runs in the shell that carries the marks.
 A bare `treehouse get` opens the pooled worktree in a provider subshell that lives for the whole task, which used to host the agent one level below the marked shell; on this backend `fm-spawn` leases the slot (`treehouse get --lease --lease-holder firstmate-<id>`) and `cd`s into it in the session shell instead.
