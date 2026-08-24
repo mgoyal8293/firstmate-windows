@@ -43,14 +43,22 @@
 # is the second backend (and the first non-tmux one) that can declare
 # `cursor=1` to the shared composer classifier.
 #
-# KNOWN FIDELITY GAP, stated up front because it is real. tmux scopes liveness
-# to the pane tty's FOREGROUND process group, which is how a harness-named
-# process idling in the BACKGROUND of an otherwise idle pane still classifies
-# `dead`. A ConPTY console has a process list but no foreground concept, so that
-# case cannot be detected the same way. It is narrowed here by using the screen
-# as an independent second source (see fm_backend_conpty_agent_state), and the
-# residual gap is documented in docs/conpty-backend.md "Active limits" rather
-# than papered over.
+# HOW FOREGROUND SCOPING IS RECOVERED. tmux scopes liveness to the pane tty's
+# FOREGROUND process group, which is how a harness-named process idling in the
+# BACKGROUND of an otherwise idle pane still classifies `dead`. A ConPTY console
+# has a process list and no foreground concept, so that set cannot be narrowed
+# the same way - but the shell can be asked the same question directly. The
+# session shell is launched with fm-shell-integration.bash as its rcfile, which
+# has bash emit OSC 133 prompt marks; the daemon reads them off the pty stream it
+# already parses and treats "the shell is at a prompt" as tmux treats a
+# foreground group holding nothing but a shell. The agent runs in that same
+# shell: fm-spawn leases the worktree and `cd`s into it on this backend instead
+# of sending a bare `treehouse get`, whose provider subshell used to host the
+# task one level down and could lose the mark carrier to its own rc files. The
+# rcfile still exports its hooks, so a shell nested by hand keeps marking too and
+# the last mark is the innermost shell's answer. A session that emits no mark -
+# an older bash, or a non-bash session shell - falls back to the process list and
+# the screen, never to a false `dead`.
 #
 # Requires: node (already a universal firstmate tool), the installed
 # dependencies in bin/backends/conpty/node_modules, and a Windows host. The
@@ -245,13 +253,49 @@ fm_backend_conpty_shell() {
   return 1
 }
 
+# fm_backend_conpty_shell_integration_rcfile: the tracked rcfile that makes the
+# session shell announce whether it is at a prompt, as a Windows path, or
+# nothing at all when it must not be used.
+#
+# Resolved SOURCE-RELATIVE, from this adapter's own location, and deliberately
+# NOT through FM_BACKEND_CONPTY_DIR. That variable is a narrow test hook for the
+# node-pty dependency probe (see its own comment above): a caller that points it
+# at a deps-only fixture directory, which is exactly what it is for, would then
+# also redirect the rcfile a real spawn arms its session shell with - and a
+# missing rcfile is silent by design, so gap 2's whole foreground-scoping
+# mechanism would switch off with nothing printed. This file is a tracked sibling
+# of conpty.sh, not an installed dependency, so BASH_SOURCE is the one lookup
+# nothing can repoint. Do not "unify" the two.
+#
+# It refuses on a CR-bearing copy rather than passing it to bash, because a
+# sourced bash file whose lines end in CR does not merely lose the marks - it
+# fails mid-file and prints syntax errors into the session the composer
+# classifier then reads. No rcfile is the safe outcome: liveness falls back to
+# the reading this backend shipped with.
+#
+# This is belt-and-braces, not a state a clone reaches: .gitattributes pins
+# `* text=auto eol=lf`, which overrides core.autocrlf and core.eol, so even a
+# Windows checkout gets LF here. What it defends is a tree that arrived some
+# other way - hand-copied, unpacked from an archive, or run through a filter
+# that rewrote line endings - where bash would otherwise choke on the CR. The
+# dedicated test has to synthesise the CRLF file to reach this branch at all.
+fm_backend_conpty_shell_integration_rcfile() {
+  local rc="$FM_BACKEND_CONPTY_ROOT/bin/backends/conpty/fm-shell-integration.bash"
+  [ -f "$rc" ] || return 1
+  if LC_ALL=C grep -Uq $'\r' "$rc" 2>/dev/null; then
+    return 1
+  fi
+  fm_backend_conpty_winpath "$rc"
+}
+
 # fm_backend_conpty_create_task: create the task's session, refusing an existing
 # live one. The pipe doubles as the mutex (a second daemon on the same name gets
 # EADDRINUSE), so this check is a clear error rather than the only thing
 # standing between two daemons and one session id. Echoes the scoped session id,
 # which IS the endpoint target.
 fm_backend_conpty_create_task() {  # <label> <cwd> -> prints session id
-  local label=$1 cwd=$2 sid shell out
+  local label=$1 cwd=$2 sid shell out rc
+  local -a rcargs=()
   sid=$(fm_backend_conpty_scoped_id "$label")
   if fm_backend_conpty_client exists --id "$sid" --plain >/dev/null 2>&1; then
     echo "error: conpty session '$sid' already exists" >&2
@@ -261,8 +305,19 @@ fm_backend_conpty_create_task() {  # <label> <cwd> -> prints session id
     echo "error: backend=conpty could not find a bash for the task session; set FM_BACKEND_CONPTY_SHELL" >&2
     return 1
   }
+  # Shell integration is added only for bash, and only as extra arguments: an
+  # operator-pinned FM_BACKEND_CONPTY_SHELL that is not bash would reject
+  # --rcfile outright, and a session that never gets the flag is exactly the
+  # documented fallback rather than a failure.
+  case "${shell##*[/\\]}" in
+    bash|bash.exe)
+      if rc=$(fm_backend_conpty_shell_integration_rcfile); then
+        rcargs=(--arg --rcfile --arg "$rc")
+      fi
+      ;;
+  esac
   out=$(fm_backend_conpty_client spawn --id "$sid" \
-    --cmd "$shell" --arg -i \
+    --cmd "$shell" "${rcargs[@]+"${rcargs[@]}"}" --arg -i \
     --cwd "$(fm_backend_conpty_winpath "$cwd")" \
     --cols "$FM_BACKEND_CONPTY_COLS" --rows "$FM_BACKEND_CONPTY_ROWS" \
     --scrollback "$FM_BACKEND_CONPTY_SCROLLBACK" 2>&1) || {
@@ -508,12 +563,15 @@ fm_backend_conpty_busy_state() {  # <target>
 # fm_backend_conpty_agent_state: recovery-grade agent state. See
 # bin/fm-backend.sh's fm_backend_agent_state for the shared vocabulary.
 #
-# The daemon owns the decision because it owns both sources of evidence: the
+# The daemon owns the decision because it owns every source of evidence: the
 # ConPTY console process list (with per-pid identity validated by name AND
-# process start time, so a recycled pid cannot be reported as the agent) and the
-# screen. Only `dead` and `missing` license recovery, so every genuinely
-# conflicting reading resolves to `ambiguous` instead - a false `dead` is the
-# one outcome that can launch a duplicate agent onto a live worktree.
+# process start time, so a recycled pid cannot be reported as the agent), the
+# session shell's own OSC 133 prompt marks - the FOREGROUND source, which is
+# what scopes a reading to whoever actually holds the console - and the screen,
+# which is only the FALLBACK, consulted when no mark has arrived (an unarmed or
+# non-bash session shell). Only `dead` and `missing` license recovery, so every
+# genuinely conflicting reading resolves to `ambiguous` instead - a false `dead`
+# is the one outcome that can launch a duplicate agent onto a live worktree.
 #
 # A session whose pipe does not answer is classified from the DURABLE RECORD,
 # not guessed: `crashed` and `clean` both mean the endpoint is authoritatively

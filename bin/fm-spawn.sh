@@ -28,10 +28,10 @@
 #   positional, and batch pairs are all refused alongside it; only harness,
 #   model, and effort may change, which is what makes a harness switch one
 #   ordinary relaunch. It refuses unless the recorded endpoint is positively
-#   agent-free on a backend with a recovery-grade agent-state classifier (tmux
-#   or herdr), refuses unless the endpoint's shell is sitting in the recorded
-#   worktree, and clears the previous harness's per-task wiring before arming
-#   the new incarnation.
+#   agent-free on a backend with a recovery-grade agent-state classifier (tmux,
+#   herdr, or conpty), refuses unless the endpoint's shell is sitting in the
+#   recorded worktree, and clears the previous harness's per-task wiring before
+#   arming the new incarnation.
 #   --harness <name> is the explicit per-spawn harness/profile adapter. The old
 #   positional harness arg still works for back-compat.
 #   --model <name> and --effort <low|medium|high|xhigh|max> are concrete profile
@@ -47,7 +47,7 @@
 #   docs/cmux-backend.md),
 #   then tmux.
 #   Spawn-capable backends are the reference tmux adapter and experimental
-#   herdr, zellij, orca, and cmux. Orca owns both the task worktree and
+#   herdr, zellij, orca, cmux, and conpty. Orca owns both the task worktree and
 #   terminal, so ship/scout Orca spawns do not run treehouse get; cmux is a
 #   session provider only, exactly like herdr/zellij, so it does. An
 #   auto-detected herdr or cmux spawn prints a loud stderr notice;
@@ -651,6 +651,8 @@ ORCA_ABORT_CLEANUP=0
 ORCA_WORKTREE_ID=
 ORCA_TERMINAL=
 CONPTY_SESSION=
+CONPTY_LEASE_ABORT_CLEANUP=0
+CONPTY_LEASE_HOLDER=
 HERDR_PROJECTION_ABORT_CLEANUP=0
 HERDR_PROJECTION_ABORT_SESSION=
 HERDR_PROJECTION_ABORT_TASK_PANE=
@@ -691,6 +693,106 @@ parse_orca_worktree_result() {
   else
     ORCA_TERMINAL=
   fi
+}
+
+# conpty_release_spawn_lease: release the durable lease this spawn took, on the
+# abort path where the record teardown would read does not exist yet.
+#
+# What it gives back is the LEASE, not the slot, and the distinction is measured
+# rather than assumed: on Windows the release leaves `lease_id` and
+# `lease_holder` empty while the slot still reads `in-use`, because the aborted
+# session's own shell is still sitting in it, and the slot returns to
+# `available` when that window closes. The lease is the part worth releasing
+# here because it is the part that would otherwise outlive the aborted spawn
+# with no record left to reclaim it from. Nothing here kills that endpoint: the
+# abort tells the operator to inspect it, and a spawn abort must not destroy the
+# evidence of why it aborted.
+#
+# Only this backend needs it, and only because the lease is what makes the slot
+# outlive its acquirer: everywhere else `treehouse get`'s subshell holds the slot
+# and releases it when the endpoint dies, so an aborted spawn leaked nothing.
+#
+# The slot is looked up by THIS task's holder label first, because the abort can
+# happen before the cwd poll ever landed and $WT is then empty. When that scan
+# yields no path the code does fall back to $WT, rejected or not, and
+# `--if-lease-holder` is what makes that fallback safe: treehouse refuses the
+# return unless that holder still holds the lease. Naming a wrong target would
+# therefore take two firstmate homes sharing one treehouse pool with the same
+# task id, which no firstmate-provisioned layout produces - the pool is keyed per
+# clone path, and every home clones into its own projects/.
+#
+# THE RETURN IS ALWAYS ATTEMPTED, AND THE SCAN ONLY CHOOSES WHAT TO SAY. Do not
+# reintroduce an early return on "the pool reported no lease for this holder",
+# however cheap it looks: no answer the scan gives is a negative that can carry
+# that weight. A row can match this holder and carry no usable path, or the
+# `lease_holder`/`path` keys can drift, and skipping the release on either would
+# leak exactly the slot this function exists to hand back. The scan cannot even
+# settle whether a lease was taken: the in-session `treehouse get --lease` may
+# still be running, and the commonest abort cannot tell that from a lease that
+# FAILED, because a failure leaves the substitution empty and `cd ""` is a no-op,
+# so both leave the shell in the project and both time out the cwd poll
+# identically. Since `--if-lease-holder` already makes the return harmless when
+# this holder holds nothing, attempting it unconditionally costs nothing and
+# removes the whole question. Harmless is not the same as silent, and the
+# difference is load-bearing below: treehouse no-ops the ACTION but still reports
+# it by EXITING NON-ZERO, measured against real treehouse 2.1.1 in a throwaway
+# pool (exit 1 with `lease_holder` intact for a wrong holder, exit 0 and cleared
+# for the right one) and asserted by tests/fm-conpty-liveness-live-e2e.test.sh.
+# Reading that word as "exits 0" is what would turn the silent arm into a claim
+# that a release happened when it did not.
+#
+# So the three outcomes are all about wording. A confirmed release is silent. A
+# release that failed where the pool read cleanly and held no row for this holder
+# says only that - none is recorded at this moment - names the in-flight
+# possibility, and still hands over the reclaim command. Anything else, including
+# a payload that is not the array of rows this expects, is genuinely unknown and
+# keeps the leaked-slot warning.
+#
+# Best-effort by design. A failed abort is worse than a leaked slot, so when the
+# release cannot be made this prints the exact one-line command instead of
+# failing.
+conpty_release_spawn_lease() {  # <holder>
+  local holder=$1 path='' probe='' pool_read='' holder_row=''
+  [ -n "$holder" ] || return 0
+  if command -v treehouse >/dev/null 2>&1 && command -v node >/dev/null 2>&1; then
+    probe=$( cd "${PROJ_ABS:-.}" 2>/dev/null && treehouse status --json 2>/dev/null | node -e '
+      let s = "";
+      process.stdin.on("data", function (d) { s += d; });
+      process.stdin.on("end", function () {
+        try {
+          const rows = JSON.parse(s);
+          if (!Array.isArray(rows)) return;
+          const hit = rows.find(function (r) {
+            return r && r.lease_holder === process.argv[1];
+          });
+          if (!hit) { process.stdout.write("none"); return; }
+          process.stdout.write("held\n" + (hit.path ? String(hit.path) : ""));
+        } catch (e) { /* no readable pool: the state is unknown, not empty */ }
+      });
+    ' "$holder" ) || probe=
+  fi
+  case "$probe" in
+    none)
+      pool_read=1
+      ;;
+    held*)
+      pool_read=1
+      holder_row=1
+      path=${probe#held}
+      path=${path#$'\n'}
+      ;;
+  esac
+  [ -n "$path" ] || path=${WT:-}
+  if [ -n "$path" ] \
+     && ( cd "${PROJ_ABS:-.}" 2>/dev/null && treehouse return --force --if-lease-holder "$holder" "$path" ) >/dev/null 2>&1; then
+    return 0
+  fi
+  if [ "$pool_read" = 1 ] && [ -z "$holder_row" ]; then
+    echo "note: no worktree lease is recorded for $holder right now, so task $ID's abort released none; an in-session 'treehouse get --lease' that is still running can land one after this check, so if 'treehouse status' shows a slot leased to $holder, reclaim it with: treehouse return --force --if-lease-holder $holder ${path:-<path from 'treehouse status'>}" >&2
+    return 0
+  fi
+  echo "warning: task $ID's worktree lease was not released; the slot stays leased to $holder until you run: treehouse return --force --if-lease-holder $holder ${path:-<path from 'treehouse status'>}" >&2
+  return 0
 }
 
 spawn_abort_cleanup() {
@@ -764,6 +866,10 @@ spawn_abort_cleanup() {
         fi
       fi
     fi
+  fi
+  if [ "$CONPTY_LEASE_ABORT_CLEANUP" = 1 ]; then
+    CONPTY_LEASE_ABORT_CLEANUP=0
+    conpty_release_spawn_lease "$CONPTY_LEASE_HOLDER" || true
   fi
   if [ "$SPAWN_TASK_LOCK_HELD" = 1 ]; then
     SPAWN_TASK_LOCK_HELD=0
@@ -2243,9 +2349,38 @@ if [ "$RELAUNCH" -eq 1 ]; then
   fi
   [ "$KIND" = secondmate ] || validate_spawn_worktree "relaunch" "$T"
 elif [ "$KIND" != secondmate ] && [ "$BACKEND" != orca ]; then
-  spawn_send_text_line "$WT_TARGET" 'treehouse get'
+  # conpty acquires the worktree IN the session shell rather than in a provider
+  # subshell. A bare `treehouse get` opens $SHELL and hosts the task in that
+  # child, one level below the shell firstmate armed with its OSC 133 prompt
+  # marks; that child reads the operator's own rc files, and an ordinary
+  # `PROMPT_COMMAND='history -a'` there destroys the finished-mark carrier while
+  # leaving PS0 intact, so the session emits `C` and never `D` and `exit` can
+  # never prove the agent stopped. Leasing the slot and `cd`ing into it keeps
+  # the agent in the marked shell (measured on real Windows: DABCDABCDABCDABC
+  # even with that clobbering rc file). It also un-blocks the mark-less
+  # fallback: `treehouse.exe` used to stay attached for the task's whole life
+  # and count as sawOther, so that table's only `dead` arm was unreachable;
+  # with nothing but shells attached it is reachable again once the harness
+  # itself leaves the console list.
+  #
+  # The cost, stated plainly: the pool slot is released by an explicit
+  # `treehouse return --force`, not by a subshell dying. fm-teardown does that
+  # once the record exists and this script's own abort path does it before then
+  # (conpty_release_spawn_lease), so what is left is a crash that reaches
+  # neither - and that leaves the slot leased, attributable on purpose because
+  # the holder is firstmate-<id>. The `$( )` must reach the session unexpanded;
+  # $ID expands here.
+  if [ "$BACKEND" = conpty ]; then
+    WT_ACQUIRE="treehouse get --lease and cd"
+    CONPTY_LEASE_HOLDER="firstmate-$ID"
+    CONPTY_LEASE_ABORT_CLEANUP=1
+    spawn_send_text_line "$WT_TARGET" "cd \"\$(treehouse get --lease --lease-holder $CONPTY_LEASE_HOLDER)\""
+  else
+    WT_ACQUIRE="treehouse get"
+    spawn_send_text_line "$WT_TARGET" 'treehouse get'
+  fi
 
-  # Wait for the treehouse subshell: the pane's cwd moves from the project to the worktree.
+  # Wait for the acquisition to land: the pane's cwd moves from the project to the worktree.
   # Target the stable window id, not the name: if the name is ever lost (e.g. an
   # automatic-rename slips through), display-message -t <bad-name> falls back to the
   # active client's window, which would misread firstmate's OWN pane path as the
@@ -2285,11 +2420,11 @@ elif [ "$KIND" != secondmate ] && [ "$BACKEND" != orca ]; then
     sleep 1
   done
   if [ -z "$WT" ]; then
-    echo "error: treehouse get did not enter a worktree within 60s; inspect window $T" >&2
+    echo "error: $WT_ACQUIRE did not enter a worktree within 60s; inspect window $T" >&2
     exit 1
   fi
 
-  validate_spawn_worktree "treehouse get" "$T"
+  validate_spawn_worktree "$WT_ACQUIRE" "$T"
 fi
 if [ "$RELAUNCH" -eq 0 ] && [ "$KIND" != secondmate ]; then
   freshen_spawn_worktree_base "$WT" || exit 1
@@ -2754,6 +2889,9 @@ if [ "$SPAWN_TASK_SET_LOCK_HELD" = 1 ]; then
   fm_lock_release "$SPAWN_TASK_SET_LOCK"
 fi
 [ "$BACKEND" = orca ] && ORCA_ABORT_CLEANUP=0
+# The record now carries worktree=, so fm-teardown can reclaim the leased slot;
+# the abort path's own release is only for the window before this point.
+CONPTY_LEASE_ABORT_CLEANUP=0
 
 sq_brief=$(shell_quote "$BRIEF")
 sq_turnend=$(shell_quote "$TURNEND")
