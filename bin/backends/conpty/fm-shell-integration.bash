@@ -225,7 +225,12 @@ if _fm_conpty_bash_has_ps0; then
   #
   # The status is captured first and restored last, so prepending this to a
   # PROMPT_COMMAND the captain already had cannot change what that hook sees in
-  # $?. PROMPT_COMMAND is a string on every bash that reaches here and an array
+  # $?. The restore is `:` for a zero status and a subshell only for a non-zero
+  # one, because a subshell is the only way to set `$?` to an arbitrary value and
+  # msys fork is the expensive syscall on this platform: this hook runs on every
+  # prompt draw, in the session shell and in every interactive bash that
+  # inherits the exported carrier, and the status is zero almost every time.
+  # PROMPT_COMMAND is a string on every bash that reaches here and an array
   # from 5.1 on; only the string form can cross into a child through the
   # environment, so an inherited array is flattened into one list. The join is by
   # NEWLINE, not `; `, because an element carrying a trailing `#` comment would
@@ -244,7 +249,7 @@ if _fm_conpty_bash_has_ps0; then
   # floor `_fm_conpty_bash_has_ps0` applies at arm time, written as one
   # comparison here because it has to fit in an exported string. An unset
   # BASH_VERSINFO reads 0 and stays silent, which is the safe direction.
-  _fm_conpty_mark_finished='_fm_conpty_status=$?; case "${PS0-}" in *"133;C;fmpty=1"*) [ "$(( ${BASH_VERSINFO[0]:-0} * 100 + ${BASH_VERSINFO[1]:-0} ))" -ge 404 ] && printf "\033]133;D;%s;fmpty=1\007" "$_fm_conpty_status" ;; esac; ( exit "$_fm_conpty_status" )'
+  _fm_conpty_mark_finished='_fm_conpty_status=$?; case "${PS0-}" in *"133;C;fmpty=1"*) [ "$(( ${BASH_VERSINFO[0]:-0} * 100 + ${BASH_VERSINFO[1]:-0} ))" -ge 404 ] && printf "\033]133;D;%s;fmpty=1\007" "$_fm_conpty_status" ;; esac; case "$_fm_conpty_status" in 0) : ;; *) ( exit "$_fm_conpty_status" ) ;; esac'
   _fm_conpty_pc_decl=$(declare -p PROMPT_COMMAND 2>/dev/null || true)
   case "$_fm_conpty_pc_decl" in
     'declare -a'*|'declare -ax'*)

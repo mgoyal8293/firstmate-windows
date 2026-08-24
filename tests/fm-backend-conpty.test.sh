@@ -368,8 +368,9 @@ calls_for() {  # <command> -> matching log lines
   load_adapter "$CASE"
   FM_BACKEND_CONPTY_SHELL='C:\fake\bash.exe'
 
-  # A CR-bearing copy of the tracked file, in a case-local root the adapter
-  # resolves the rcfile from. Only the rcfile lookup reads this at call time.
+  # A CR-bearing copy of the tracked file, in a case-local backend directory the
+  # adapter resolves the rcfile from - the same FM_BACKEND_CONPTY_DIR override the
+  # client and the dependency probe honour. Only the rcfile lookup reads it here.
   # awk, not `sed -i 's/$/\r/'`: bare -i and a \r replacement are both GNU
   # extensions, and on a BSD sed the copy would silently stay LF and fail this
   # case against a correct implementation.
@@ -387,7 +388,7 @@ calls_for() {  # <command> -> matching log lines
   crgot=$(( $(wc -c < "$crcopy") ))
   [ "$crgot" -eq "$crexpect" ] \
     || fail "the copy is $crgot bytes, not the $crexpect a CRLF rewrite produces, so this case would prove nothing"
-  FM_BACKEND_CONPTY_ROOT="$CASE/repo"
+  FM_BACKEND_CONPTY_DIR="$CASE/repo/bin/backends/conpty"
 
   write_create_task_fake_node "$CASE"
 
@@ -1081,6 +1082,32 @@ PRE
   [ "$p_ops" = "$p_marks" ] \
     || fail "an operator's pre-set PS0 appeared $p_ops times against $p_marks command-start marks; equal counts were expected (zero copies means arming clobbered it, half means the mark was prepended twice)"
   pass "conpty shell integration: an operator's pre-set PS0 survives arming, and re-sourcing adds no second mark"
+
+  # AN OPERATOR'S OWN PROMPT HOOK MUST STILL SEE THE COMMAND'S EXIT STATUS. The
+  # mark hook is PREPENDED, so an operator's existing hook runs after it and
+  # reads whatever `$?` the mark left behind - which is the status of the mark
+  # machinery, not of the command the operator's hook is reporting on. The
+  # restore is what makes that safe, and it is a subshell for a non-zero status
+  # and `:` for a zero one, so both arms have to be exercised.
+  #
+  # The discriminator is the NON-ZERO reading: a hook that lost the restore
+  # reports 0 for every command, so `false` producing a 1 is what separates a
+  # working restore from a silently swallowed status. The zero reading is
+  # asserted too, because the cheap arm must not report the previous status.
+  pre_status="$CASE/pre-status.bash"
+  cat > "$pre_status" <<'PRE'
+PROMPT_COMMAND='printf "FMST[%s]\n" "$?"'
+PRE
+  printf '. %s\n' "$RC" >> "$pre_status"
+  statused=$(printf 'false\ntrue\nexit\n' \
+    | env -i HOME="$H" PATH="$PATH" bash --rcfile "$pre_status" -i 2>&1)
+  s_nonzero=$(printf '%s' "$statused" | grep -ao 'FMST\[1\]' | wc -l | tr -d ' ')
+  s_zero=$(printf '%s' "$statused" | grep -ao 'FMST\[0\]' | wc -l | tr -d ' ')
+  [ "$s_nonzero" -ge 1 ] \
+    || fail "an operator's prompt hook saw no non-zero status across a failing command; the mark hook's restore was lost, so every command reports success to it"
+  [ "$s_zero" -ge 1 ] \
+    || fail "an operator's prompt hook never saw a zero status; the restore reported $s_zero zeroes, so a succeeding command is misreported"
+  pass "conpty shell integration: an operator's own prompt hook still reads the command's exit status through the mark hook, on both the zero and the non-zero arm"
 ) || exit 1
 
 pass "conpty adapter unit tests complete"

@@ -251,16 +251,19 @@ Claude Code 2.1.220 on MINGW64_NT-10.0-26200, Git for Windows 2.50.1, node v22.1
 | The change lands on the branch | Commit `e255fd7` on `fm/winfm-e2e-typo`, a one-line comment fix, `git diff main..HEAD` exactly one changed line, clean tree, `bash -n` still parsing |
 | Teardown refuses unlanded work | With the commit on the branch but not yet on local `main`, `bin/fm-teardown.sh` refused: `REFUSED: local-only worktree <path> has work not yet merged into main and not on any remote`, listed `e255fd7` as the commit at risk, and named the merge, push, and explicit-discard routes out. The task metadata, status log, and live session were all still present afterwards |
 | Approved landing | `bin/fm-merge-local.sh` fast-forwarded the project's `main` to `e255fd7` |
-| The polite exit is not available | `bin/fm-control.sh <id> exit` refused: `task <id> runs on the conpty backend, which has no recovery-grade agent-state classifier, so 'exit' cannot prove the agent actually stopped; refusing rather than reporting an unproven transition as done`. So a Windows crewmate cannot be stopped through the control plane at all, and [`conpty-backend.md`](conpty-backend.md) "Active limits" owns why |
+| The polite exit was not available | `bin/fm-control.sh <id> exit` refused: `task <id> runs on the conpty backend, which has no recovery-grade agent-state classifier, so 'exit' cannot prove the agent actually stopped; refusing rather than reporting an unproven transition as done`. On the day of this run a Windows crewmate could not be stopped through the control plane at all. **Since fixed**, and no longer a limit: see the paragraph below the table |
 | Clean teardown | After landing, teardown released everything: the task's `state/<id>.*` records were retired, the ConPTY session reported `absent`, and the pooled worktree returned to the pool at a detached HEAD with `fm/winfm-e2e-typo` no longer checked out. Its reaper did the stopping, reporting `reaping leaked worktree process(es)` and then `force-killing leaked worktree process(es)`, and needing a second pass for one survivor |
 | Restart into the same home | Sixteen seconds after the previous session exited, with its stale MSYS pid still sitting in `state/.lock` and `state/.lock.session` already cleared by `SessionEnd`, a fresh session reclaimed the home: `bin/fm-lock.sh status` reported `lock: held by this session's token`, and `state/.lock.session` equalled that session's own `CLAUDE_CODE_SESSION_ID`. No four-hour freshness window was waited out |
 
 All six steps completed on the real machine.
 A Windows firstmate can therefore take its own home, put a real crewmate on real work, supervise it through a real wake, land the commit, and release the task, which is the whole loop rather than a set of passing parts.
-Three gaps came out of it.
-There is no way to stop a crewmate politely, because the control plane refuses every verb on this backend and teardown's reaper is what actually ends the agent (tracked as `winfm-conpty-graceful-stop`, queued in firstmate-windows).
-Teardown also leaves a completed task's ConPTY session directory behind, which [`conpty-backend.md`](conpty-backend.md) "Active limits" owns.
-Neither of those blocks the loop, though the first is a reduction against tmux.
+Three gaps came out of it, and the first has since been closed.
+On the day of this run there was no way to stop a crewmate politely: the control plane refused every verb on this backend and teardown's reaper was what actually ended the agent.
+**That is no longer true, and `winfm-conpty-graceful-stop` is closed rather than queued.**
+`exit`, `interrupt` and `relaunch` all work on a genuinely spawned conpty task, demonstrated end to end on real Windows: `fm-control exit` returned in 9 s, the shared classifier read `dead`, the endpoint was still `present`, and the leased worktree was still on disk - so a graceful stop is now the routine way to stop a Windows crewmate, and a force-kill is not the only route.
+[`runtime-backends.md`](verification/runtime-backends.md) "The shipped spawn path, end to end on real Windows" records the readings, and [`conpty-backend.md`](conpty-backend.md) explains how the stop is proven.
+Teardown does still leave a completed task's ConPTY session directory behind, which [`conpty-backend.md`](conpty-backend.md) "Active limits" owns.
+That one does not block the loop.
 The third is an outright defect: a merged task branch was left behind in the project (`winfm-merged-branch-prune`).
 The run needed no code change of its own: what it produced is this record and those three documented gaps.
 

@@ -257,6 +257,11 @@ fm_backend_conpty_shell() {
 # session shell announce whether it is at a prompt, as a Windows path, or
 # nothing at all when it must not be used.
 #
+# Resolved through FM_BACKEND_CONPTY_DIR, the same override the client and the
+# dependency probe resolve through, so this backend's own files always come from
+# one place: an operator who repoints that variable at a relocated copy must not
+# get the client from there and the rcfile from the checkout root.
+#
 # It refuses on a CR-bearing copy rather than passing it to bash, because a
 # sourced bash file whose lines end in CR does not merely lose the marks - it
 # fails mid-file and prints syntax errors into the session the composer
@@ -270,7 +275,7 @@ fm_backend_conpty_shell() {
 # that rewrote line endings - where bash would otherwise choke on the CR. The
 # dedicated test has to synthesise the CRLF file to reach this branch at all.
 fm_backend_conpty_shell_integration_rcfile() {
-  local rc="$FM_BACKEND_CONPTY_ROOT/bin/backends/conpty/fm-shell-integration.bash"
+  local rc="$FM_BACKEND_CONPTY_DIR/fm-shell-integration.bash"
   [ -f "$rc" ] || return 1
   if LC_ALL=C grep -Uq $'\r' "$rc" 2>/dev/null; then
     return 1
