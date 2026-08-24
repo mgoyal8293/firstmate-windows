@@ -32,6 +32,13 @@ make_tools() { # <world>
   mkdir -p "$fake"
   cat > "$fake/fm-crew-state.sh" <<'SH'
 #!/usr/bin/env bash
+# The real reader makes one bounded forge read before it will confirm a merged or
+# closed PR, and the scan is what decides how much of its own budget that read
+# may spend. Record the two knobs it was handed, so a case can assert the bound
+# the scan derived, then answer with the canned state.
+[ -z "${FM_FAKE_FORGE_ENV_LOG:-}" ] ||
+  printf '%s|%s\n' "${FM_CREW_STATE_FORGE_TIMEOUT:-}" "${FM_CREW_STATE_NO_FORGE:-}" \
+    >> "$FM_FAKE_FORGE_ENV_LOG"
 printf 'state: %s · source: fake\n' "${FM_FAKE_CREW_STATE:-unknown}"
 SH
   cat > "$fake/tmux" <<'SH'
@@ -119,6 +126,58 @@ prime_seen() { # <state> <status>
 }
 
 reap() { kill "$1" 2>/dev/null || true; wait "$1" 2>/dev/null || true; }
+
+# Two readers name a crew's PR: fm-crew-state.sh's crew_pr_url asks the forge
+# about it and so produces the state word, and pr_for_task puts a url beside that
+# word for the captain. Their selection chains differ above the status log, but
+# where both reach the log they must pick the SAME url - the newest one. A first
+# PR closed and a replacement opened leaves two urls in one log, and presenting
+# `done` beside the abandoned PR is the false landing this change exists to stop.
+# This pins pr_for_task's own selection; the higher tiers are the accepted gap
+# recorded at crew_pr_url.
+#
+# `pr=` in the fm-terminal-outcome.v1 record is the persisted contract this
+# asserts on; it is the same value report_to_parent puts on the wire.
+test_presented_pr_is_the_newest_url_the_status_log_names() {
+  local record pr
+  make_world newest-pr
+  fm_write_meta "$MAIN/state/child.meta" \
+    "window=firstmate:fm-child" "worktree=$MAIN/projects/child" "project=alpha" \
+    'harness=codex' 'kind=ship' 'mode=no-mistakes' 'yolo=off' \
+    "spawn_gen=s${BASHPID:-$$}.$RANDOM"
+  cat > "$MAIN/state/child.status" <<'EOF'
+working: https://example.test/owner/repo/pull/1 was closed unmerged after a rerun
+done: replacement https://example.test/owner/repo/pull/2 merged
+EOF
+  : > "$MAIN/state/child.turn-ended"
+  age "$MAIN/state/child.meta" "$MAIN/state/child.status" "$MAIN/state/child.turn-ended"
+  FM_FAKE_CREW_STATE='done' run_reconcile "$MAIN" --startup
+  record=$(find "$MAIN/state/terminal-outcomes" -type f -name '*.pending' 2>/dev/null | head -1)
+  [ -n "$record" ] || fail "the inactive terminal child produced no outcome record"
+  pr=$(sed -n 's/^pr=//p' "$record")
+  [ "$pr" = 'https://example.test/owner/repo/pull/2' ] ||
+    fail "the presented PR is not the newest url the status log names: '$pr'"
+
+  # crew_pr_url settles a GitLab crew's state from a merge request, so a reader
+  # that recognises pull requests only would print the state word with no url
+  # beside it for exactly those crews.
+  make_world newest-mr
+  fm_write_meta "$MAIN/state/child.meta" \
+    "window=firstmate:fm-child" "worktree=$MAIN/projects/child" "project=alpha" \
+    'harness=codex' 'kind=ship' 'mode=no-mistakes' 'yolo=off' \
+    "spawn_gen=s${BASHPID:-$$}.$RANDOM"
+  printf 'done: https://gitlab.test/owner/repo/-/merge_requests/7 merged\n' \
+    > "$MAIN/state/child.status"
+  : > "$MAIN/state/child.turn-ended"
+  age "$MAIN/state/child.meta" "$MAIN/state/child.status" "$MAIN/state/child.turn-ended"
+  FM_FAKE_CREW_STATE='done' run_reconcile "$MAIN" --startup
+  record=$(find "$MAIN/state/terminal-outcomes" -type f -name '*.pending' 2>/dev/null | head -1)
+  [ -n "$record" ] || fail "the inactive terminal GitLab child produced no outcome record"
+  pr=$(sed -n 's/^pr=//p' "$record")
+  [ "$pr" = 'https://gitlab.test/owner/repo/-/merge_requests/7' ] ||
+    fail "a merge request is not presented beside the state word it settled: '$pr'"
+  pass "the presented PR is the newest url the status log names"
+}
 
 # The main retains a terminal presentation receipt until the corresponding wake
 # is handled and acknowledged.
@@ -360,8 +419,17 @@ test_watcher_hook_and_idle_secondmate_exemption() {
 
 # A stalled authoritative state read consumes only the aggregate scan budget.
 # The durable scan position lets the next invocation reach the following child.
+#
+# The budget is the outer bound on the WHOLE pass, so it also pays for the
+# re-exec, the library sourcing, and the scan lock before any child is visited.
+# A one-second budget leaves that overhead nothing to spare on a loaded runner:
+# the pass is cancelled having visited no child, the cursor never advances, and
+# the resumption this case is about cannot be observed at all. So the budget here
+# is large enough that startup is never what binds, and the bound being proved -
+# that the 30s stall does not run to completion - is asserted against the budget
+# rather than against a wall-clock constant.
 test_stalled_state_read_is_bounded_and_scan_progresses() {
-  local started elapsed
+  local started elapsed budget=5
   make_world bounded
   write_child "$MAIN" a 'working: state read will stall'
   cat > "$WORLD/fakebin/fm-crew-state.sh" <<'SH'
@@ -375,12 +443,13 @@ SH
   chmod +x "$WORLD/fakebin/fm-crew-state.sh"
 
   started=$(date +%s)
-  FM_INACTIVE_RECONCILE_BUDGET_SECS=1 run_reconcile "$MAIN" --startup
+  FM_INACTIVE_RECONCILE_BUDGET_SECS=$budget run_reconcile "$MAIN" --startup
   elapsed=$(( $(date +%s) - started ))
-  [ "$elapsed" -le 3 ] || fail "stalled state read exceeded aggregate scan budget (${elapsed}s)"
+  [ "$elapsed" -le $((budget * 3)) ] \
+    || fail "stalled state read exceeded aggregate scan budget (${elapsed}s)"
 
   write_child "$MAIN" b 'done: green'
-  FM_INACTIVE_RECONCILE_BUDGET_SECS=1 run_reconcile "$MAIN" --startup
+  FM_INACTIVE_RECONCILE_BUDGET_SECS=$budget run_reconcile "$MAIN" --startup
   grep -Fq 'child=b state=done' "$MAIN/state/.wake-queue" \
     || fail "next bounded scan did not resume with the following child"
   pass "stalled state reads are bounded without starving later children"
@@ -432,8 +501,10 @@ test_notice_recovery_does_not_duplicate_wake() {
   pass "notice recovery remains idempotent across queue acknowledgement"
 }
 
-# Forge command shims fail loudly. A successful scan proves this path never uses
-# them while reconciling a local terminal outcome.
+# Forge command shims fail loudly. A successful scan proves the scan itself never
+# uses them while reconciling a local terminal outcome. The reader it delegates
+# to may make one bounded forge read of its own for a child whose run reached a
+# terminal pass; the case below is what bounds that.
 test_reconciliation_never_calls_forge() {
   make_world forge; write_child "$MAIN" child 'done: green'
   FM_FAKE_CREW_STATE='done' run_reconcile "$MAIN" --startup
@@ -441,7 +512,67 @@ test_reconciliation_never_calls_forge() {
   pass "reconciliation makes zero forge or PR API calls"
 }
 
+# fm-crew-state.sh makes one bounded forge read before it will confirm a merged or
+# closed PR, and this scan runs it inside an AGGREGATE budget covering every child
+# it visits. A per-child bound equal to that whole budget is a starvation bug: one
+# hung `gh` and the pass advances a single child. So the bound comes from what the
+# budget still has left, at most a third of it, and the read is skipped outright
+# when what remains cannot spare it - safe, because a skipped read is a TRANSIENT
+# non-answer, and no path resolves one to `done`, let alone to a landing.
+test_forge_bound_is_derived_from_the_remaining_budget() {
+  local recorded bound skipped
+  # Full default budget: the read is affordable, and the share is what binds -
+  # a third of 10s, well under the reader's own looser default.
+  make_world forge-bound; write_child "$MAIN" child 'done: green'
+  FM_FAKE_FORGE_ENV_LOG="$WORLD/forge-env.log"
+  export FM_FAKE_FORGE_ENV_LOG
+  : > "$FM_FAKE_FORGE_ENV_LOG"
+  FM_FAKE_CREW_STATE='done' run_reconcile "$MAIN" --startup
+  recorded=$(head -1 "$FM_FAKE_FORGE_ENV_LOG")
+  bound=${recorded%%|*}
+  skipped=${recorded#*|}
+  case "$bound" in
+    ''|*[!0-9]*) fail "no whole-second forge bound was passed for the child: '$recorded'" ;;
+  esac
+  [ "$bound" -ge 1 ] || fail "a full 10s budget can spare a forge read: '$recorded'"
+  [ "$bound" -le 3 ] || fail "forge bound exceeds a third of the full 10s budget: '$recorded'"
+  [ -z "$skipped" ] || fail "the forge read was skipped with budget to spare: '$recorded'"
+
+  # A budget small enough for the share to bind: at most a third of it, so a hung
+  # call still leaves the pass most of its sweep.
+  make_world forge-bound-share; write_child "$MAIN" child 'done: green'
+  FM_FAKE_FORGE_ENV_LOG="$WORLD/forge-env.log"
+  export FM_FAKE_FORGE_ENV_LOG
+  : > "$FM_FAKE_FORGE_ENV_LOG"
+  FM_INACTIVE_RECONCILE_BUDGET_SECS=6 FM_FAKE_CREW_STATE='done' run_reconcile "$MAIN" --startup
+  recorded=$(head -1 "$FM_FAKE_FORGE_ENV_LOG")
+  [ -n "$recorded" ] || fail "the child was never visited under a 6s budget"
+  bound=${recorded%%|*}
+  case "$bound" in
+    ''|*[!0-9]*) fail "no whole-second forge bound was passed under a 6s budget: '$recorded'" ;;
+  esac
+  [ "$bound" -le 2 ] || fail "forge bound exceeds a third of the 6s budget: '$recorded'"
+  [ "$bound" -ge 1 ] || fail "a 6s budget can still spare a second of forge read: '$recorded'"
+
+  # Too little left to spare: the read is skipped outright, which reports the
+  # merge state as unverified and never as a landing.
+  make_world forge-bound-tight; write_child "$MAIN" child 'done: green'
+  FM_FAKE_FORGE_ENV_LOG="$WORLD/forge-env.log"
+  export FM_FAKE_FORGE_ENV_LOG
+  : > "$FM_FAKE_FORGE_ENV_LOG"
+  FM_INACTIVE_RECONCILE_BUDGET_SECS=2 FM_FAKE_CREW_STATE='done' run_reconcile "$MAIN" --startup
+  recorded=$(head -1 "$FM_FAKE_FORGE_ENV_LOG")
+  [ -n "$recorded" ] || fail "the child was never visited under a tight budget"
+  bound=${recorded%%|*}
+  skipped=${recorded#*|}
+  [ -z "$bound" ] || fail "a 2s budget cannot spare a whole second of forge read: '$recorded'"
+  [ -n "$skipped" ] || fail "a budget too small to spare the read must skip it: '$recorded'"
+  unset FM_FAKE_FORGE_ENV_LOG
+  pass "the per-child forge bound comes from the remaining scan budget"
+}
+
 test_main_direct_terminal_presentation_receipt
+test_presented_pr_is_the_newest_url_the_status_log_names
 test_local_secondmate_reports_terminal_child
 test_local_secondmate_rejects_relative_parent_home
 test_invalid_secondmate_marker_blocks_routing
@@ -457,5 +588,6 @@ test_stalled_state_read_is_bounded_and_scan_progresses
 test_full_scan_budget_includes_wake_lock_wait
 test_notice_recovery_does_not_duplicate_wake
 test_reconciliation_never_calls_forge
+test_forge_bound_is_derived_from_the_remaining_budget
 
 echo "all inactive reconciliation tests passed"

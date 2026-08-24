@@ -34,7 +34,7 @@ It never tears down a task, merges a PR, dispatches new work, steers a worker, a
    It is the single bounded, deterministic fleet-state source for Bearings and renders TOON by default.
    Do not create or consult a second fleet-state reader, parser contract, status-event-tail interpretation, visible-session recap, ad-hoc project probe, or ad-hoc `gh-axi`/`gh` query.
    The command's header and `--help` output own its exact fields, bounds, opt-ins, and output contract.
-   Keep the default local-only read unless the captain asks to include PRs.
+   Keep the default read unless the captain asks to include PRs.
    For registered secondmates, use the snapshot's structured-home classification and provenance.
    A parent event or bounded terminal contradiction is fallback evidence, never authority over readable structured home state.
    Structured captain-held decisions come from `decision-hold-lifecycle` and appear under `decisions_open`.

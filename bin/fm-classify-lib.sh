@@ -15,8 +15,11 @@
 #
 # There are two documented exceptions. The absorb classification
 # (crew_absorb_class and its working/paused wrappers) is NOT a pure status-file
-# read: it reuses bin/fm-crew-state.sh, which may make a bounded no-mistakes call,
-# to decide whether a crew that just stopped its turn or went stale is working,
+# read: it reuses bin/fm-crew-state.sh, which may make a bounded no-mistakes call
+# and, on any path that could report `done`, one outbound forge read (`gh pr
+# view`, the only source a merged-or-closed claim may come from) bounded to
+# FM_CLASSIFY_CREW_FORGE_TIMEOUT below, to
+# decide whether a crew that just stopped its turn or went stale is working,
 # deliberately paused, or neither. Callers run it ONLY on no-verb signal handling
 # and first sighting of a stale hash, never on every wake, so the per-wake triage
 # stays cheap. status_open_decisions_incremental (see "incremental (cursor-backed)
@@ -1098,13 +1101,38 @@ signal_reason_is_actionable() {  # <file> ...
 # One fm-crew-state.sh read serves BOTH absorb reasons at once. Reading the state
 # authoritatively (not the status log) is what keeps run-step precedence: a crew
 # that appended paused: but then STARTED a run reports working, never paused.
-# NOT a pure read: fm-crew-state.sh may make a bounded no-mistakes call, so callers
-# run it only on no-verb signal and first-sighting stale paths, never every wake.
+# NOT a pure read: fm-crew-state.sh may make a bounded no-mistakes call, plus one
+# forge read (`gh pr view`) on any path that could report `done`. That is wider
+# than a terminal pass: `outcome: checks-passed`, the ci-log-green override, a
+# ci-ready status log and a no-run `done:` log line all qualify, and those are
+# the steady state of a crew waiting on merge rather than rare terminal moments,
+# so callers run this only on no-verb signal and first-sighting stale paths,
+# never every wake. bin/fm-crew-state.sh's header owns the invariant behind that
+# scope.
+#
+# That reader's own default bound is deliberately loose, for the interactive
+# single-task read where one person waits for one answer. This caller is not
+# that: bin/fm-watch.sh reaches it from pause_state_class once per crew, in a
+# loop, with no fm_run_timed wrapper and no aggregate budget anywhere above it,
+# so one unreachable `gh` would stall the whole poll by the default per crew.
+# 3 seconds, the same figure and the same measurement bin/fm-fleet-snapshot.sh
+# records for the same reason: `gh pr view <n> --repo <owner/repo> --json
+# state,mergeStateStatus` against this repo measured worst 0.61s over five calls
+# on 2026-08-22 and worst 0.96s over fifteen on 2026-08-23, typical ~0.60s, so 3s
+# is about 3x the higher worst observation and 5x typical. Re-measure before
+# changing it.
+#
+# Narrowing costs nothing in correctness: an unread merge state is an UNCONFIRMED
+# answer, which no path resolves to `done`, so a bound that runs out degrades to
+# a conservative word rather than to a false landing.
+FM_CLASSIFY_CREW_FORGE_TIMEOUT=3
+
 # FM_CREW_STATE_BIN lets tests stub the verdict.
 crew_absorb_class() {  # <id>
   local id=$1 line state src
   [ -n "$id" ] || { printf 'none'; return; }
-  line=$("$FM_CREW_STATE_BIN" "$id" 2>/dev/null) || true
+  line=$(FM_CREW_STATE_FORGE_TIMEOUT="$FM_CLASSIFY_CREW_FORGE_TIMEOUT" \
+    "$FM_CREW_STATE_BIN" "$id" 2>/dev/null) || true
   case "$line" in state:*) ;; *) printf 'none'; return ;; esac
   state=${line#state: }; state=${state%% *}
   if [ "$state" = paused ]; then printf 'paused'; return; fi

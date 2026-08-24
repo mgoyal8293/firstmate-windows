@@ -16,7 +16,7 @@ The shared no-mistakes gate refusal for fleet lifecycle entrypoints is summarize
 | `fm-fleet-sync.sh`       | Refresh project clones with safe fast-forwards, self-heals, `STUCK:` reports, branch pruning, and bounded recovery from an orphaned `.git/packed-refs.lock` |
 | `fm-fleet-snapshot.sh`   | Print the read-only structured fleet snapshot JSON (schema `fm-fleet-snapshot.v1`)   |
 | `fm-fleet-view.sh`       | Render the fleet snapshot as a human Markdown view                                   |
-| `fm-bearings-snapshot.sh` | Project the fleet snapshot to the compact TOON bearings view; local-only unless `--include-prs` |
+| `fm-bearings-snapshot.sh` | Project the fleet snapshot to the compact TOON bearings view; live PR discovery only under `--include-prs` |
 | `fm-update.sh`           | Fast-forward-only self-update of firstmate and local or remote secondmate homes       |
 | `fm-on.sh`               | Execute one tracked Firstmate command in a configured remote secondmate home, using its job worker except for the doctor bootstrap |
 | `fm-remote-job-lib.sh`   | Shared bounded remote job queue, worker readiness, LaunchAgent contract, and filesystem-composed PATH |
@@ -73,13 +73,14 @@ The shared no-mistakes gate refusal for fleet lifecycle entrypoints is summarize
 | `fm-watch-arm.sh`        | Verified home-scoped watcher arm wrapper with loud cycle endings and bounded lifecycle ledger |
 | `fm-watch-checkpoint.sh` | Run one bounded foreground watcher checkpoint for Codex-style supervision            |
 | `fm-watch.sh`            | Singleton-safe always-on watcher: absorb benign wakes, queue and exit on actionable ones |
-| `fm-inactive-reconcile.sh` | Reconcile long-inactive direct crewmate terminal outcomes without forge access |
+| `fm-inactive-reconcile.sh` | Reconcile long-inactive direct crewmate terminal outcomes, making no forge call of its own beyond the one budgeted read inside `fm-crew-state.sh` |
 | `fm-afk-start.sh`        | Run the common sourceable away-mode daemon entry in the foreground                      |
 | `fm-afk-launch.sh`       | Own away-mode entry, exit, rollback, and any backend terminal lifecycle                 |
 | `fm-afk-return.sh`       | Own deterministic return shutdown, catch-up evidence, and the firstmate-actionable blocker gate |
 | `fm-supervisor-target-lib.sh` | Resolve the shared supervisor target and backend for the daemon and launcher       |
 | `fm-supervise-daemon.sh` | Presence-gated away-mode sub-supervisor: self-handle routine wakes, guard injection by the detected primary harness, escalate batched digests, alert on failed delivery |
 | `fm-crew-state.sh`       | Print one deterministic current-state line for a crew                                |
+| `fm-crew-run-verdict-lib.sh` | Single owner of the crew run-verdict model: candidate selection, code-identity binding, and the CI and forge evidence gates |
 | `fm-nm-run-lib.sh`       | Shared branch-and-code-identity attribution for no-mistakes runs                    |
 | `fm-tangle-lib.sh`       | Shared default-branch resolution and primary-checkout tangle classification          |
 | `fm-timeout-lib.sh`      | Single owner of hard-bounded command execution and its fallback watchdog |

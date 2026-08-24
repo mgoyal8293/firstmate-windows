@@ -10,6 +10,11 @@ SNAPSHOT="$ROOT/bin/fm-fleet-snapshot.sh"
 VIEW="$ROOT/bin/fm-fleet-view.sh"
 TMP_ROOT=$(fm_test_tmproot fm-fleet-snapshot)
 
+# Fixture worktrees here are real git repos with real commits, and a CI runner
+# carries no git identity of its own, so the commit would abort and leave the
+# fixture without a HEAD to read.
+fm_git_identity fmtest fmtest@example.invalid
+
 command -v jq >/dev/null 2>&1 || { echo "skip: jq not found"; exit 0; }
 
 make_fakebin() {  # <dir>
@@ -779,7 +784,161 @@ test_parked_scout_decision_stays_pending() {
   pass "a scout still parked at a decision stays pending (terminal clear does not over-fire)"
 }
 
+# The snapshot narrows bin/fm-crew-state.sh's per-task forge bound rather than
+# inheriting it, and this asserts the bound that reader actually hands its timeout
+# mechanism for the `gh pr view` call.
+#
+# It matters because the set of paths that make that call widened to every path
+# that could report `done` - `outcome: checks-passed` and the green-checks routes
+# included - which per AGENTS.md section 7 is the long steady state of a crew
+# waiting on merge, not a rare terminal moment. This snapshot is the one caller
+# with no aggregate budget of its own, so the per-task bound is all that stands
+# between a fleet of merge-waiting tasks and a slow captain-facing read.
+test_snapshot_narrows_the_per_task_forge_bound() {
+  local home fb wt log bound
+  home=$(make_home forge-bound)
+  mkdir -p "$home/projects/bound-worktree"
+  wt="$home/projects/bound-worktree"
+  cat > "$home/data/backlog.md" <<'EOF'
+## In flight
+- [ ] bound-task - Bound Task https://github.com/o/r/pull/1 (repo: alpha) (kind: ship) (since 2026-07-07)
+EOF
+  git -C "$wt" init -q
+  git -C "$wt" commit -q --allow-empty -m init
+  git -C "$wt" checkout -q -b fm/feat-bound
+  fm_write_meta "$home/state/bound-task.meta" \
+    "window=firstmate:fm-bound-task" \
+    "worktree=$wt" \
+    "project=alpha" \
+    "harness=claude" \
+    "kind=ship" \
+    "mode=ship"
+  fb=$(make_fakebin "$home")
+  log="$home/timeout.log"
+  : > "$log"
+  # `outcome: checks-passed` is a done-capable path, so the reader consults the
+  # forge; the fake gh answers so nothing depends on a real network.
+  cat > "$fb/no-mistakes" <<SH
+#!/usr/bin/env bash
+set -u
+[ "\${1:-}" = axi ] || exit 0
+[ "\${2:-}" = status ] || exit 0
+cat <<'TOON'
+run:
+  id: "01BOUND"
+  branch: fm/feat-bound
+  status: running
+  head: "$(git -C "$wt" rev-parse HEAD)"
+  pr: "https://github.com/o/r/pull/1"
+  steps[1]{step,status,findings,duration_ms}:
+    ci,running,0,0
+outcome: checks-passed
+TOON
+exit 0
+SH
+  cat > "$fb/gh" <<'SH'
+#!/usr/bin/env bash
+printf '{"mergeStateStatus":"CLEAN","state":"OPEN","url":"https://github.com/o/r/pull/1"}\n'
+SH
+  # bin/fm-timeout-lib.sh is the one owner of the bound, and it reaches `timeout`
+  # in two shapes - bare `<secs> <cmd>` and `-k 1 <secs> bash -c ...` - so this
+  # skips any leading -k pair rather than assuming a position. It records only the
+  # forge call's bound and then runs every command unchanged, so the rest of the
+  # read stays real.
+  cat > "$fb/timeout" <<'SH'
+#!/usr/bin/env bash
+set -u
+args=("$@")
+i=0
+while [ "${args[$i]:-}" = "-k" ]; do i=$((i + 2)); done
+bound=${args[$i]}
+cmd=("${args[@]:$((i + 1))}")
+case "${cmd[*]}" in *"gh pr view"*) printf '%s\n' "$bound" >> "${FM_FAKE_TIMEOUT_LOG:?}" ;; esac
+exec "${cmd[@]}"
+SH
+  chmod +x "$fb/no-mistakes" "$fb/gh" "$fb/timeout"
+  PATH="$fb:$PATH" FM_HOME="$home" FM_FAKE_TIMEOUT_LOG="$log" \
+    FM_SNAPSHOT_NOW=2026-07-11T18:00:00Z "$SNAPSHOT" >/dev/null 2>&1 || true
+  bound=$(head -1 "$log")
+  [ -n "$bound" ] || fail "the snapshot never reached the forge read, so the bound is untested"
+  [ "$bound" = 3 ] \
+    || fail "the snapshot must narrow the per-task forge bound to 3s, got '$bound'"
+  pass "the snapshot narrows the per-task forge bound"
+}
+
+# The url this snapshot prints BESIDE the state word, when the only place a url
+# is recorded is the status log.
+#
+# The state word here is `done`, confirmed against the replacement PR by
+# bin/fm-crew-state.sh, and the log names the PR that replacement replaced first.
+# Presenting the older one is the false landing this branch exists to stop,
+# reassembled on the captain-facing surface: the captain reads "done" against a
+# PR that is closed and unmerged. So this reader selects the NEWEST matching url,
+# the same rule crew_pr_url and bin/fm-inactive-reconcile.sh's pr_for_task use,
+# and counts a merge request as a match because a GitLab crew's state is settled
+# from one.
+test_snapshot_presents_the_newest_pr_url_the_status_log_names() {
+  local home fb out
+  home=$(make_home newest-pr-url)
+  mkdir -p "$home/projects/replaced-worktree" "$home/projects/gitlab-worktree"
+  for wt in replaced gitlab; do
+    git -C "$home/projects/$wt-worktree" init -q
+    git -C "$home/projects/$wt-worktree" commit -q --allow-empty -m init
+    git -C "$home/projects/$wt-worktree" checkout -q -b "fm/feat-$wt"
+  done
+  # No meta `pr=`: the status log is the only tier that can answer, which is the
+  # tier the three readers are aligned on.
+  fm_write_meta "$home/state/replaced-task.meta" \
+    "window=firstmate:fm-replaced-task" \
+    "worktree=$home/projects/replaced-worktree" \
+    "project=alpha" \
+    "harness=claude" \
+    "kind=ship" \
+    "mode=ship"
+  cat > "$home/state/replaced-task.status" <<'EOF'
+blocked: https://github.com/o/r/pull/1 was closed unmerged
+done: replacement https://github.com/o/r/pull/2 merged
+EOF
+  fm_write_meta "$home/state/gitlab-task.meta" \
+    "window=firstmate:fm-gitlab-task" \
+    "worktree=$home/projects/gitlab-worktree" \
+    "project=alpha" \
+    "harness=claude" \
+    "kind=ship" \
+    "mode=ship"
+  printf 'done: https://gitlab.com/o/r/-/merge_requests/5 merged\n' \
+    > "$home/state/gitlab-task.status"
+  record_claude_idle "$home/state" replaced-task >/dev/null
+  record_claude_idle "$home/state" gitlab-task >/dev/null
+  fb=$(make_fakebin "$home")
+  # The forge answers for the PR the state word is about, so `done` is a
+  # confirmed landing rather than an unverified one.
+  cat > "$fb/gh" <<'SH'
+#!/usr/bin/env bash
+printf '{"mergeStateStatus":"CLEAN","state":"MERGED","url":"https://github.com/o/r/pull/2"}\n'
+SH
+  chmod +x "$fb/gh"
+  out=$(PATH="$fb:$PATH" FM_HOME="$home" FM_SNAPSHOT_NOW=2026-07-11T18:00:00Z \
+    "$SNAPSHOT" --json)
+  printf '%s' "$out" | jq -e '
+    .tasks[] | select(.id == "replaced-task")
+    | .pr.source == "status_event"
+      and .pr.url == "https://github.com/o/r/pull/2"
+  ' >/dev/null || fail "the presented PR is not the newest url the status log names: $(printf '%s' "$out" | jq -r '.tasks[] | select(.id == "replaced-task") | .pr.url')"
+  printf '%s' "$out" | jq -e '
+    .tasks[] | select(.id == "replaced-task") | .current_state.state == "done"
+  ' >/dev/null || fail "the forge-confirmed merge must still read done beside that url"
+  printf '%s' "$out" | jq -e '
+    .tasks[] | select(.id == "gitlab-task")
+    | .pr.source == "status_event"
+      and .pr.url == "https://gitlab.com/o/r/-/merge_requests/5"
+  ' >/dev/null || fail "a merge request is not presented beside the state word it settled: $(printf '%s' "$out" | jq -r '.tasks[] | select(.id == "gitlab-task") | .pr.url')"
+  pass "the snapshot presents the newest PR url the status log names"
+}
+
 test_empty_fleet_json
+test_snapshot_narrows_the_per_task_forge_bound
+test_snapshot_presents_the_newest_pr_url_the_status_log_names
 test_fixture_snapshot_json
 test_main_inventory_orphan_and_unstructured_disclosure
 test_normalized_roles_and_plural_blocker_readiness

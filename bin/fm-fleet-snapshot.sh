@@ -197,6 +197,50 @@ last_nonempty_line() {  # <file>
   grep -v '^[[:space:]]*$' "$1" 2>/dev/null | tail -1
 }
 
+# The per-task bound this snapshot allows bin/fm-crew-state.sh for its one
+# `gh pr view`. 3 seconds, from measurement rather than preference:
+#
+#   2026-08-23, 15 sequential calls of the exact shape fm_crew_forge_pr_state
+#   makes (`gh pr view <n> --repo <owner/repo> --json state,mergeStateStatus`,
+#   GH_PROMPT_DISABLED=1 GH_NO_UPDATE_NOTIFIER=1) against this repo: 0.55s-0.96s,
+#   worst observed 0.96s, typical ~0.60s.
+#   2026-08-22, an INDEPENDENT run of the same call against this repo: 0.53s-0.61s,
+#   worst observed 0.61s.
+#
+# 3s is about 3x the higher of the two worst observations and 5x typical. The
+# SPREAD between the two sessions is the argument for that headroom: a bound set
+# to ~1.5x either session's own worst would have been tight against the other.
+# Re-measure before changing it rather than guessing.
+#
+# REVISIT TRIGGER, so this is checkable rather than a feeling. The ruling was made
+# at a fleet of 3 tasks: worst case 3 x 3s = 9s of serial forge reads, typical
+# ~1.8s. If a fleet routinely runs enough concurrent merge-waiting tasks that the
+# snapshot itself becomes slow, an aggregate cap is the answer AT THAT POINT - not
+# before, because an aggregate cap is machinery for a fleet size this does not
+# have.
+FM_SNAPSHOT_CREW_FORGE_TIMEOUT=3
+
+# One bin/fm-crew-state.sh read per task, with that reader's forge bound narrowed
+# to FM_SNAPSHOT_CREW_FORGE_TIMEOUT above, and deliberately WITHOUT
+# FM_CREW_STATE_NO_FORGE.
+#
+# That reader costs up to two 10s-bounded `no-mistakes` calls per task, plus one
+# forge read - bounded at 3s here, at that reader's own default elsewhere - for a
+# task on any path that could report `done`. That is NOT just a terminal pass: it
+# covers `outcome: checks-passed`, the ci-log-green override and a ci-ready status
+# log, which per AGENTS.md section 7 are the LONG steady state of a crew waiting
+# on merge, not rare terminal moments. bin/fm-crew-state.sh's header owns the
+# invariant that decides which paths read the forge.
+#
+# Keeping the forge read is a ruling, not an oversight, and two reasons hold it:
+# this snapshot is the captain-facing surface, which is exactly where a false
+# "merged" claim does its damage, so a live merge state is worth a bounded read
+# here; and the marginal cost is noise beside the no-mistakes calls each task
+# already pays. Answer both before optimising it away. Note the second reason is
+# the one the widened scope pressures, which is why the bound above is narrowed
+# and measured rather than inherited - blinding this reader with
+# FM_CREW_STATE_NO_FORGE would reintroduce exactly the false success it exists to
+# remove, so it waits less rather than not asking.
 crew_state_json() {  # <id>
   local id=$1 raw rest state source detail sep
   raw=$(
@@ -206,6 +250,7 @@ crew_state_json() {  # <id>
       FM_DATA_OVERRIDE="$DATA" \
       FM_PROJECTS_OVERRIDE="$PROJECTS" \
       FM_CONFIG_OVERRIDE="$CONFIG" \
+      FM_CREW_STATE_FORGE_TIMEOUT="$FM_SNAPSHOT_CREW_FORGE_TIMEOUT" \
       "$SCRIPT_DIR/fm-crew-state.sh" "$id" 2>/dev/null || true
   )
   raw=$(printf '%s\n' "$raw" | head -1)
@@ -245,9 +290,25 @@ status_event_json() {  # <status-log>
     '{path:$path,present:$present,kind:"event_history",last_event:{state:$verb,note:$note,raw:$raw}}'
 }
 
-first_pr_url_in_file() {  # <file>
+# The status-log tier of the PR url this snapshot presents beside a task's crew
+# state, selected the way crew_pr_url in bin/fm-crew-state.sh selects the url its
+# state word was confirmed against: the NEWEST matching url the log names, pull
+# request or merge request alike.
+#
+# This is the THIRD reader on that tier, after crew_pr_url and pr_for_task in
+# bin/fm-inactive-reconcile.sh, and it is the one that prints a url beside a word
+# crew_pr_url just asked the forge about. Taking an OLDER url here - the first
+# `/pull/` in a log that names a closed PR and then its replacement - would print
+# the replaced PR beside a `done` confirmed against the replacement, which is the
+# false landing that forge read exists to prevent, reassembled on the
+# captain-facing surface. Matching merge requests too is the same rule for a
+# GitLab crew, whose state was settled from one.
+#
+# Above this tier the chains still differ in length, and that gap is recorded at
+# crew_pr_url; nothing here is a third selection rule.
+newest_pr_url_in_file() {  # <file>
   [ -f "$1" ] || return 1
-  grep -Eo 'https?://[^[:space:])"]+/pull/[0-9]+' "$1" 2>/dev/null | head -1
+  grep -Eo 'https?://[^[:space:])"]+/(pull|merge_requests)/[0-9]+' "$1" 2>/dev/null | tail -1
 }
 
 backlog_json() {  # [<backlog-path>] - defaults to this home's $BACKLOG
@@ -435,7 +496,7 @@ task_json_lines() {
     pr=$(meta_value "$meta" pr)
     pr_source=meta
     if [ -z "$pr" ]; then
-      pr_from_status=$(first_pr_url_in_file "$status_log" || true)
+      pr_from_status=$(newest_pr_url_in_file "$status_log" || true)
       pr=$pr_from_status
       pr_source=status_event
     fi
@@ -635,6 +696,19 @@ main_inventory_json() {  # <backlog-json> <tasks-json>
 # validated parent read needs.
 # This mode never reads parent events or terminal text and never aggregates
 # nested secondmates.
+#
+# ACCEPTED RESIDUAL, not an oversight: a child whose run genuinely cannot be
+# assessed reads `unknown` from bin/fm-crew-state.sh, which lands in
+# $unknown_children, clears $valid and makes the home's single `state` word
+# "unknown" ahead of captain_decision, active_child_work and externally_held.
+# That is a label only. decisions_open, active_children, holds, queued and landed
+# all still pass through - child_current_unavailable is deliberately whitelisted
+# downstream so the summary is not discarded - so a consumer reading the arrays
+# loses nothing, and the honest word for a home containing an unassessable child
+# is not a confident one. Fixing the label would mean new precedence machinery in
+# a second place; the verdict ranking in bin/fm-crew-run-verdict-lib.sh is where
+# an unassessable child gets narrowed, and a forge-confirmed merge already reads
+# `done` there - a forge-confirmed close, `failed` - rather than reaching this list.
 secondmate_home_summary_json() {  # <backlog-json> <tasks-json>
   jq -n \
     --arg generated "$SNAPSHOT_NOW" \

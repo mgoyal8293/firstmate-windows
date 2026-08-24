@@ -8,9 +8,9 @@
 # or blocked and the crew resumes (responds to the gate, the pipeline fixes, it
 # re-validates), the log's last line stays stale. This helper never infers the
 # current state from a tail of the log: it reads the authoritative source (a
-# no-mistakes run-step attributed to this crew's branch and current code
-# identity, else the pane busy-signature) and reconciles the possibly-stale log
-# against it.
+# no-mistakes run-step attributed to this crew's branch, else the pane
+# busy-signature) and reconciles the possibly-stale log against it. Code identity
+# is a QUALIFIER on that run, not a precondition for reading it - see step 2.
 #
 # The determinism lives entirely here - only run-step / pane / log reads plus
 # fixed mapping logic, no heuristics and no LLM. Output is one stable, parseable,
@@ -19,22 +19,40 @@
 #   state: <working|parked|done|blocked|paused|failed|unknown> · source: <run-step|pane|status-log|none> · <detail>
 #
 # Logic, in order:
-#   1. Resolve worktree + backend target + kind from state/<id>.meta.
-#   2. Matching no-mistakes run for this crew's branch AND current code identity,
-#      active or terminal (from `axi status`, or the coarse `no-mistakes runs`
-#      fallback)? Branch name alone is not enough: a historical run on a reused
-#      branch whose head was rewritten or diverged must not be attributed.
-#      A run matches when its head equals the worktree HEAD, or the worktree HEAD
-#      is an ancestor of the run head (pipeline fix commits advanced the run on
-#      the same line of history). Local work that advanced past the run head, or
-#      diverged from it, invalidates attribution.
-#      The run-step is AUTHORITATIVE: running/fixing -> working, ci -> working,
-#      awaiting_approval/fix_review -> parked (with gate findings), terminal
-#      passed/checks-passed -> done, failed/cancelled -> failed. EXCEPT: while
+#   1. Resolve worktree + backend target + kind + delivery mode from
+#      state/<id>.meta.
+#   2. Matching no-mistakes run for this crew? ONE candidate is considered - the
+#      branch's newest run - and bin/fm-crew-run-verdict-lib.sh owns the whole
+#      model: how that candidate is selected, what its code binding is allowed
+#      to support, and which verdict its evidence settles. Read that file's
+#      header before changing anything in this section; every rule there exists
+#      because its absence produced a real wrong verdict in one of the two
+#      unsafe directions. The run-step is AUTHORITATIVE once admitted:
+#      running/fixing -> working, ci -> working, awaiting_approval/fix_review ->
+#      parked (with gate findings), failed/cancelled -> failed, and
+#      checks-passed -> done, since that word is itself a statement about the
+#      checks - though green checks prove only that CI ran, so that arm still
+#      asks the forge where the PR ended up: a confirmed close reads failed, and
+#      an unconfirmed answer reads working for a crew the record still shows
+#      executing and unknown for one that has terminated, since liveness is
+#      established (crew_liveness) rather than assumed from the route
+#      (fm_crew_checks_green_verdict). `passed` is not even that much: it says
+#      only that the PIPELINE completed, so every
+#      terminated run goes through one ranking (fm_crew_terminal_verdict) - a
+#      forge-confirmed merge reads done whatever the ci step says, a
+#      forge-confirmed close reads failed because a closed-unmerged PR is the
+#      opposite of a landing, else this run's own `ci,completed` reads done
+#      unless the forge answer is unconfirmed, else unknown, because a terminated
+#      run whose validation cannot be established is exactly "I cannot tell", not
+#      a gate anyone can respond to. The coarse
+#      runs-list path carries no steps table at all, and passes that into the
+#      same ranking as missing evidence rather than ranking the evidence a
+#      second way. EXCEPT: while
 #      the active step is ci, `axi status` alone cannot tell "still waiting on
 #      checks" from "checks green, waiting on merge" (see nm_ci_checks_state) -
 #      a ci-step log-tail check overrides working -> done once checks read
-#      green, so a green PR is never silently read as still-validating.
+#      green, so a green PR is never silently read as still-validating. That
+#      override answers to the same owner, so a closed PR reads failed there too.
 #   3. Reconcile the status log: if its last line says needs-decision/blocked but
 #      the run-step shows the run moved on, the log is deterministically stale and
 #      is flagged superseded. A genuinely parked run plus a needs-decision log
@@ -42,13 +60,69 @@
 #   4. No run for this crew (pre-validation, or kind=scout): fall back to the
 #      recorded backend's pane busy state, then the status log's last line only
 #      when its verb maps to a recognized run-state. Decision-only events such as
-#      `resolved` never become current state or detail.
+#      `resolved` never become current state or detail. A `done:` verb there is a
+#      landing claim like any other, so it asks the forge too - the invariant
+#      below admits no exemption for the source of a claim.
 #   5. Missing meta or torn-down worktree: report unknown · none. If no run is
 #      attributed to this crew, a dead endpoint also reports unknown · none rather
 #      than trusting a stale status log.
 #
-# Read-only and side-effect free. Always exits 0 on a successful read regardless
-# of state; exit 2 only on a usage error (no id).
+# Read-only: nothing here writes fleet state, and every command it runs is a
+# query. Not process-free, though - at most ONE outbound `gh pr view` per
+# invocation, bounded by FM_CREW_STATE_FORGE_TIMEOUT and skipped entirely when
+# FM_CREW_STATE_NO_FORGE is truthy. Skipping does not merely weaken the detail:
+# an unread merge state is an UNCONFIRMED answer, and no path resolves one to
+# `done` (see the invariant below, and fm_crew_forge_answer_class for the split).
+#
+# THE FORGE-READ INVARIANT, owned here and pointed at from everywhere else that
+# needs it. It is a rule about the CALL, not about the ANSWER and not about the
+# word:
+#
+#   Every path that COULD emit `done` ASKS the forge first. No other path asks.
+#
+# Asking is not the same as being answered, and the invariant deliberately claims
+# only the asking. A path that asked can still emit `done` on an answer that
+# confirmed nothing - a provider with no client here, or a task with no PR at all
+# - because those are gaps no read will ever close, and refusing forever is the
+# worse failure. What such a path may NOT do is emit `done` while an answer
+# exists that it simply does not have.
+#
+# Nor does the word tell you whether the call happened, and reading it that way
+# is how an earlier wording of this paragraph came to be false: a path that asked
+# can resolve to `failed` (the forge confirmed a close), to `working` (it did not
+# answer, but the crew is demonstrably still monitoring) or to `unknown` (it did
+# not answer and nothing else is known). Those words are PRODUCED by the call,
+# not evidence that none was made. What is true is the converse - a crew whose
+# state could never be `done` never asks, so a routine heartbeat over a crew that
+# is validating, parked at a gate, or already failed on its own outcome makes no
+# forge call at all.
+#
+# The paths that can emit `done`, all eight of which ask:
+#   1. full path, `outcome: checks-passed`      -> fm_crew_checks_green_verdict
+#   2. full path, `outcome: passed`             -> fm_crew_terminal_verdict
+#   3. full path, `status: completed`           -> fm_crew_terminal_verdict
+#   4. full path, ci step running + green log   -> fm_crew_checks_green_verdict
+#   5. coarse runs-list `completed` row         -> fm_crew_terminal_verdict
+#   6. coarse path, ci-ready status log         -> fm_crew_checks_green_verdict
+#   7. full path, ci-ready status log           -> fm_crew_checks_green_verdict
+#   8. NO run, status log's own `done:` verb    -> fm_crew_reported_done_verdict
+#
+# Why the invariant is worth its cost: every `done` is a claim a consumer may act
+# on with the DETAIL STRIPPED - bin/fm-inactive-reconcile.sh presents the state
+# word and the PR alone - so a `done` that never asked is how abandoned work
+# reaches a captain as a success.
+#
+# One invocation never makes two calls because the answer is MEMOISED
+# (crew_ask_forge), not because the done-capable paths are mutually exclusive.
+# They are not, and believing they were is what quietly doubled the bound every
+# budgeted caller below had measured: a checks-passed run whose read came back
+# unconfirmed stays `working`, and a `working` run with a ci-ready status log
+# then asked a second time. A caller running this script inside a budget of its own
+# (bin/fm-inactive-reconcile.sh) narrows that bound to a share of what it has
+# left, or skips the read, through those same two knobs; bin/fm-fleet-snapshot.sh
+# and bin/fm-classify-lib.sh's crew_absorb_class each narrow it to a fixed 3s,
+# and the doubling cost the last of those twice per crew polled. Always exits 0 on a successful read
+# regardless of state; exit 2 only on a usage error (no id).
 set -u
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -68,6 +142,15 @@ STATE="${FM_STATE_OVERRIDE:-$FM_HOME/state}"
 . "$SCRIPT_DIR/fm-busy-lib.sh"
 # shellcheck source=bin/fm-nm-run-lib.sh
 . "$SCRIPT_DIR/fm-nm-run-lib.sh"
+# shellcheck source=bin/fm-timeout-lib.sh
+. "$SCRIPT_DIR/fm-timeout-lib.sh"
+# The ONE owner of PR/MR URL identity, for the forge confirmation below. Sourcing
+# it costs nothing here: it initialises variables and pulls bin/fm-proc-lib.sh,
+# which bin/fm-backend.sh above has already loaded.
+# shellcheck source=bin/fm-pr-lib.sh
+. "$SCRIPT_DIR/fm-pr-lib.sh"
+# shellcheck source=bin/fm-crew-run-verdict-lib.sh
+. "$SCRIPT_DIR/fm-crew-run-verdict-lib.sh"
 
 ID=${1:-}
 [ -n "$ID" ] || { echo "usage: fm-crew-state.sh <id>" >&2; exit 2; }
@@ -77,11 +160,47 @@ LOG="$STATE/$ID.status"
 NM_TIMEOUT=${FM_CREW_STATE_NM_TIMEOUT:-10}
 case "$NM_TIMEOUT" in ''|*[!0-9]*) NM_TIMEOUT=10 ;; esac
 # How many of the most recent `no-mistakes runs` rows the cross-branch fallback
-# (nm_runs_status_for_branch, below) scans. Generous enough to still find a
+# (nm_runs_newest_row_for_branch, below) scans. Generous enough to still find a
 # branch's own run on a busy multi-crew fleet without listing the entire
 # history every call.
 FM_CREW_STATE_RUNS_LIMIT=${FM_CREW_STATE_RUNS_LIMIT:-200}
 case "$FM_CREW_STATE_RUNS_LIMIT" in ''|*[!0-9]*) FM_CREW_STATE_RUNS_LIMIT=200 ;; esac
+# Bound on the ONE forge read this script ever makes: the merged/closed
+# confirmation taken before any `done` is emitted (fm_crew_forge_pr_state).
+# FM_CREW_STATE_NO_FORGE=1 skips it, and skipping is an UNCONFIRMED answer, which
+# no path resolves to `done` - see the forge-read invariant in this file's header
+# for what each kind of non-answer licenses.
+#
+# 10s here, and DELIBERATELY LOOSER than any budgeted caller uses. This default
+# serves the interactive single-task read, where the whole cost is one person
+# waiting for one answer and a slow answer is cheaper than a wrong one - the
+# answer this read produces is what stops abandoned work reading as a success.
+# THREE callers narrow it, and that is the whole set - check this list rather
+# than re-deriving one, and add to it when a fourth appears:
+#   * bin/fm-fleet-snapshot.sh - a fixed 3s per task.
+#   * bin/fm-inactive-reconcile.sh - a share of the aggregate budget it has left,
+#     or a skip when what remains cannot spare the read.
+#   * bin/fm-classify-lib.sh - crew_absorb_class, a fixed 3s per crew. This is
+#     the HIGHEST-FREQUENCY caller: bin/fm-watch.sh reaches it once per crew in a
+#     poll loop with no aggregate budget above it, so it is the one that decides
+#     what this reader's widened forge use actually costs.
+# Each figure is recorded where it is chosen, with the measurement behind it.
+#
+# The call itself is nowhere near either figure. `gh pr view --json
+# state,mergeStateStatus` against a real GitHub PR in this repo measured 0.53s
+# 0.59s 0.59s 0.61s 0.53s over five consecutive runs on 2026-08-22 (worst 0.61s),
+# and 0.55s to 0.96s over fifteen on 2026-08-23 (worst 0.96s, typical ~0.60s).
+# Both are ONE host with warm `gh` auth, so these are headroom choices, not
+# latency guarantees, and the spread between the two sessions is why the headroom
+# is a multiple of the worst observation rather than a margin on it. Re-measure
+# before changing either figure.
+#
+# Nothing is lost by waiting: a read that runs out of time is a TRANSIENT
+# non-answer, and no path resolves one to `done` (see fm_crew_terminal_verdict),
+# so a tighter bound trades a delayed answer for a delayed receipt, never for a
+# false one.
+FM_CREW_STATE_FORGE_TIMEOUT=${FM_CREW_STATE_FORGE_TIMEOUT:-10}
+case "$FM_CREW_STATE_FORGE_TIMEOUT" in ''|*[!0-9]*|0) FM_CREW_STATE_FORGE_TIMEOUT=10 ;; esac
 SEP=' · '
 
 # Emit the one canonical line and exit 0. Detail is optional.
@@ -104,6 +223,23 @@ WT=$(meta_value worktree)
 KIND=$(meta_value kind)
 HARNESS=$(meta_value harness)
 [ -n "$KIND" ] || KIND=ship
+
+# The DELIVERY MODE travels beside the kind, because an absent PR is a defect for
+# one ship mode and the CONTRACT for another. A `mode=local-only` task is
+# instructed never to push and never to open a PR - see bin/fm-brief.sh's
+# local-only delivery contract, "no remote, no PR, no pipeline" - and it is landed
+# by bin/fm-merge-local.sh as a fast-forward, so its missing url is what the brief
+# asked for rather than a landing that never happened. Without this field the
+# absent url is indistinguishable from the ship task that owed a PR and has none,
+# and every local-only crew reads `unknown` forever: it runs no pipeline, so its
+# only current-state source is the status log's own `done:`, which is exactly the
+# claim the forge question refuses without one.
+#
+# Left EMPTY when unrecorded, deliberately, rather than defaulted like KIND above.
+# KIND's `ship` default is safe because ship is the STRICT answer; any mode
+# default would be a permissive guess about a task whose contract was never
+# written down. fm_crew_no_pr_class keeps that conservative arm for it.
+MODE=$(meta_value mode)
 
 # A torn-down (or never-created) worktree has no current state to read.
 if [ -z "$WT" ] || [ ! -d "$WT" ]; then
@@ -177,9 +313,12 @@ crew_busy_verdict() {  # <target>
 }
 
 # --- no-mistakes run lookup (authoritative when a run matches this branch) --
-# trim, strip_quotes, the bounded nm_run call, nm_field's TOON parse, and the
-# branch+head attribution rule below are thin wrappers over the ONE owner in
-# bin/fm-nm-run-lib.sh, shared with fm-teardown.sh's pre-teardown run abort.
+# trim, strip_quotes and the bounded nm_run call are thin wrappers over
+# bin/fm-nm-run-lib.sh, whose bounded-call and text primitives are shared with
+# fm-teardown.sh's pre-teardown run abort. The code-identity attribution rule is
+# NOT read from there: bin/fm-crew-run-verdict-lib.sh owns the relation model
+# this script binds with, and nm_field's scalar read is scoped by that same owner
+# so a `branch_sync:` block can never answer a run-object key.
 
 trim() { fm_nm_trim "$@"; }
 strip_quotes() { fm_nm_strip_quotes "$@"; }
@@ -187,18 +326,39 @@ nm_run() {  # <args...>
   fm_nm_run "$WT" "$NM_TIMEOUT" "$@"
 }
 
-# Scalar value of a TOON key in the captured run output ($RUN_OUT).
+# The captured run output ($RUN_OUT) with its `branch_sync:` block removed. Every
+# reader below that scans the record goes through this and never through
+# $RUN_OUT, because that block repeats key names the run object uses - `branch`,
+# `head`, `status`, `run` - and describes the branch's PUSH BINDING, which can
+# belong to a different run than the one being read. An unscoped match therefore
+# lets one section answer the other's question: a `pipeline.status` of
+# awaiting_approval reads as this run's own gate and parks a demonstrably running
+# pipeline. fm_crew_run_scalars in fm-crew-run-verdict-lib.sh is the one owner of
+# that scoping; nm_field composes with it, and the single deliberate reader INSIDE
+# the block is that library's ownership proof, which must clear three equalities
+# before the block may say anything about this run.
+#
+# Computed ONCE, into $RUN_OBJECT, when $RUN_OUT is captured: the record does not
+# change afterwards, and every reader here would otherwise re-fork awk over the
+# same bytes - about fifteen times per classification pass, once per task in
+# bin/fm-fleet-snapshot.sh's fleet-wide loop.
 RUN_OUT=""
+RUN_OBJECT=""
+nm_run_object() {
+  printf '%s\n' "$RUN_OBJECT"
+}
+# Scalar value of a TOON key in the run object. bin/fm-nm-run-lib.sh owns the
+# TOON scalar read; the scoping is already applied to $RUN_OBJECT.
 nm_field() {  # <key>
-  fm_nm_field "$RUN_OUT" "$1"
+  fm_nm_field "$RUN_OBJECT" "$1"
 }
 # Finding count from a findings[N]{...} table header; empty when none.
 nm_findings_count() {
-  printf '%s\n' "$RUN_OUT" | grep -oE 'findings\[[0-9]+\]' | head -1 | grep -oE '[0-9]+'
+  nm_run_object | grep -oE 'findings\[[0-9]+\]' | head -1 | grep -oE '[0-9]+'
 }
 nm_gate_step_row() {
   local row step rest status findings
-  row=$(printf '%s\n' "$RUN_OUT" | grep -E '^[[:space:]]*[^,]+,[[:space:]]*"?(awaiting_approval|fix_review)"?[[:space:]]*,' | head -1)
+  row=$(nm_run_object | grep -E '^[[:space:]]*[^,]+,[[:space:]]*"?(awaiting_approval|fix_review)"?[[:space:]]*,' | head -1)
   [ -n "$row" ] || return 0
   row=$(trim "$row")
   step=$(trim "${row%%,*}")
@@ -210,7 +370,7 @@ nm_gate_step_row() {
 }
 nm_gate_status() {
   local s row
-  s=$(printf '%s\n' "$RUN_OUT" | grep -E '^[[:space:]]*(status|state):[[:space:]]*"?(awaiting_approval|fix_review)"?[[:space:]]*$' | head -1)
+  s=$(nm_run_object | grep -E '^[[:space:]]*(status|state):[[:space:]]*"?(awaiting_approval|fix_review)"?[[:space:]]*$' | head -1)
   if [ -n "$s" ]; then
     s=$(strip_quotes "$(trim "${s#*:}")")
     printf '%s' "$s"
@@ -220,13 +380,13 @@ nm_gate_status() {
   [ -n "$row" ] && { row=${row#*|}; printf '%s' "${row%%|*}"; }
 }
 nm_has_gate() {
-  printf '%s\n' "$RUN_OUT" | grep -Eq '^[[:space:]]*gate:[[:space:]]*'
+  nm_run_object | grep -Eq '^[[:space:]]*gate:[[:space:]]*'
 }
 nm_gate_line_name() {
   local gate step
   gate=$(strip_quotes "$(nm_field gate)")
   [ -n "$gate" ] && { printf '%s' "$gate"; return; }
-  step=$(printf '%s\n' "$RUN_OUT" | sed -n '/^[[:space:]]*gate:[[:space:]]*$/,/^[^[:space:]][^:]*:/s/^[[:space:]]*step:[[:space:]]*\(.*\)/\1/p' | head -1)
+  step=$(nm_run_object | sed -n '/^[[:space:]]*gate:[[:space:]]*$/,/^[^[:space:]][^:]*:/s/^[[:space:]]*step:[[:space:]]*\(.*\)/\1/p' | head -1)
   step=$(strip_quotes "$step")
   [ -n "$step" ] && printf '%s' "$step"
 }
@@ -257,13 +417,20 @@ log_reports_ci_ready() {
   esac
 }
 
+# The `ci` step's word when that step is EXECUTING, which is what licenses the
+# ci-log-green override below. fm_crew_step_status is the OWNER of that column -
+# anchored to the `steps` table, keyed by column name, tolerant of padding and
+# quoting - so this asks it rather than matching a row shape of its own. A
+# private pattern here carried the same two defects that owner exists to prevent:
+# an `active_steps` row begins with a step name too, so a `ci,running,2m,...`
+# ACTIVE row answered for the step history, and a padded `ci , running` answered
+# not at all, silently withholding the ready-for-review signal a captain waits on.
 nm_ci_step_status() {
-  local row rest
-  row=$(printf '%s\n' "$RUN_OUT" | grep -E '^[[:space:]]*ci,[[:space:]]*"?(running|fixing)"?[[:space:]]*,' | head -1)
-  [ -n "$row" ] || return 0
-  row=$(trim "$row")
-  rest=${row#*,}
-  strip_quotes "$(trim "${rest%%,*}")"
+  local step_status
+  step_status=$(fm_crew_step_status "$(nm_run_object)" ci)
+  case "$step_status" in
+    running|fixing) printf '%s' "$step_status" ;;
+  esac
 }
 
 nm_effective_ci_step_status() {
@@ -320,108 +487,253 @@ nm_ci_checks_state() {
 # validating crews on the same underlying repo). A crew whose branch genuinely
 # has no run yet therefore sees another branch's answer here.
 #
-# This fallback used to shell out to `no-mistakes axi` (bare, no subcommand)
-# expecting a `runs[N]{id,branch,status,...}:` TOON table and re-query the
-# matched id via `axi status --run <id>`. Verified against the real installed
-# CLI (v1.32.2): the `axi` surface exposes only abort/logs/respond/run/status -
-# there is no runs-listing subcommand under `axi` at all, so that table never
-# appears and the lookup was silently dead code; whenever the bare `axi
-# status` answer was not this crew's own branch, attribution always failed and
-# the caller fell straight through to the pane/log fallback below. (The
-# PRIMARY cause of the 2026-07 herdr false-surface incidents turned out to be
-# a separate bug in bin/fm-watch.sh's stale_is_terminal precedence - see that
-# file's history - but this cross-branch path was independently confirmed
-# dead code and is worth having actually work.)
+# Two run listings exist, and neither one dominates the other (both verified
+# against the real installed CLI, v1.48.0). The bare `no-mistakes axi` home view
+# emits `runs[N]{id,branch,status,head,pr}` - it HAS run ids, which would allow a
+# follow-up `axi status --run <id>` for full step, activity and branch_sync
+# detail - but it is capped at the 10 most recent runs repo-wide with no limit
+# flag, so on a busy multi-crew repo a branch's own run drops off it. The
+# top-level `no-mistakes runs --limit N` reaches arbitrarily far back but is
+# plain human-oriented text with no run id: newest-first, columns
+# "<status> <branch> <short-sha> <date> <time> [<pr-url>]" separated by runs of
+# spaces, no quoting.
 #
-# The real run-listing command is the top-level `no-mistakes runs` (verified:
-# `no-mistakes --help` lists it separately from `axi`). It is plain, human-
-# oriented text - no run id, no JSON/TOON, newest-first, columns
-# "<status> <branch> <short-sha> <date> [<pr-url>]" separated by runs of
-# spaces (verified: no quoting, so splitting on the first two whitespace runs
-# is exact) - but branch + coarse status is exactly what this predicate needs:
-# is a run for THIS branch active right now. Echoes the first (most recent)
-# matching row's status word (running/completed/cancelled/failed), or empty
-# when the branch has no run within FM_CREW_STATE_RUNS_LIMIT rows.
-nm_runs_status_for_branch() {  # <branch>
-  local branch=$1 out row st rest br sha
+# This path uses `runs` because finding the branch's run at all outranks getting
+# richer detail about it, and branch plus coarse status plus that row's own sha
+# and PR is what the predicate needs. Worth doing later: try the home view first
+# and re-query any id it yields, which would give this path the same full detail
+# the `axi status` path gets - including the ci-step and branch_sync evidence a
+# coarse row cannot carry - and fall back to `runs` when the branch is off the
+# home view's 10-row window.
+#
+# Echoes the branch's NEWEST row only, as "<status>|<short-sha>|<pr-url>".
+# fm-crew-run-verdict-lib.sh owns why nothing older is ever examined.
+nm_runs_newest_row_for_branch() {  # <branch>
+  local out
   out=$(nm_run runs --limit "$FM_CREW_STATE_RUNS_LIMIT")
   [ -n "$out" ] || return 0
-  while IFS= read -r row; do
-    row=$(trim "$row")
-    [ -n "$row" ] || continue
-    st=${row%% *}
-    rest=${row#* }
-    rest=$(trim "$rest")
-    br=${rest%% *}
-    rest=${rest#* }
-    rest=$(trim "$rest")
-    sha=${rest%% *}
-    if [ "$br" = "$branch" ]; then
-      # Same code-identity rule as axi status: skip a same-branch row whose
-      # short-sha does not match this worktree (rewritten or advanced tip).
-      if ! nm_coarse_head_matches_worktree "$sha"; then
-        continue
-      fi
-      printf '%s' "$st"
-      return 0
-    fi
-  done <<< "$out"
-  return 0
+  fm_crew_runs_newest_row_for_branch "$out" "$1"
 }
 
 # CREW_BRANCH is empty at detached HEAD (a just-spawned crew, or a scout's
 # scratch worktree); with no branch there is no run to attribute to this crew.
 CREW_BRANCH=$(git -C "$WT" symbolic-ref --quiet --short HEAD 2>/dev/null || true)
 
-# 0 if the active axi-status run's head field matches this worktree's code
-# identity. Branch match is a precondition (caller). Rule owned by
-# fm_nm_head_matches_worktree in bin/fm-nm-run-lib.sh.
-nm_run_head_matches_worktree() {
-  local run_head
-  run_head=$(strip_quotes "$(nm_field head)")
-  fm_nm_head_matches_worktree "$WT" "$run_head"
-}
-
-# Coarse runs-list rows are "<status> <branch> <short-sha> ...". 0 if the short
-# sha for this branch row matches the worktree head under the same rules as
-# nm_run_head_matches_worktree (equal, or local is ancestor of run tip).
-nm_coarse_head_matches_worktree() {  # <short-sha>
-  fm_nm_head_matches_worktree "$WT" "$1"
-}
-
 HAVE_RUN=0
-# RUN_SOURCE distinguishes the two ways HAVE_RUN=1 can happen: "full" means
-# $RUN_OUT is real `axi status` TOON with step/gate detail; "coarse" means only
-# a bare status word came back from the runs-list fallback above, so the
-# run-step block below skips the TOON field parsing entirely for this crew.
-RUN_SOURCE=full
+# RUN_SOURCE names WHICH RECORD, IF ANY, THIS TASK OWNS: "full" means $RUN_OUT is
+# real `axi status` TOON with step/gate detail whose `branch:` named this crew's
+# branch; "coarse" means only a status word, sha and PR came back from the
+# runs-list fallback below, so the run-step block skips the TOON field parsing
+# entirely for this crew; "none" means attribution never succeeded.
+#
+# It starts at `none`, and that initial value is load-bearing. It started at
+# `full` - before any ownership test had run - so a branch MISMATCH left it
+# saying `full` over another task's record, and crew_pr_url below then read the
+# SIBLING run's `pr:` field. A merged sibling PR made this crew emit a landing
+# claim for a PR that was never its own: the exact false-landing shape this whole
+# change exists to remove, arriving through the documented `axi status` is
+# REPO-scoped trap - a branch mismatch means THIS TASK HAS NO RUN, never "use
+# that one".
+#
+# That hole was a CONSEQUENCE OF THE RULING that put a forge read on the
+# status-log `done:` path, and it is recorded here rather than quietly patched so
+# the cost of that ruling stays visible. Before the ruling, a runless crew
+# reading its own status log never consulted the run record at all, so a stale
+# sibling record could not reach a verdict; routing that path through the forge
+# gave the stale record a way out. The ruling stands - a self-reported `done` is
+# the weakest evidence here and needs the forge most - and the price of it is
+# that every read of the run record now has to prove ownership first.
+RUN_SOURCE=none
 COARSE_STATUS=""
+COARSE_PR=""
 # Scouts and secondmates never drive a no-mistakes validation of their own
 # worktree, so skip the lookup for them and read state from pane/log directly.
 if [ "$KIND" = ship ] && [ -n "$CREW_BRANCH" ] && command -v no-mistakes >/dev/null 2>&1; then
   RUN_OUT=$(nm_run axi status)
+  RUN_OBJECT=$(fm_crew_run_scalars "$RUN_OUT")
   if [ -n "$RUN_OUT" ]; then
     run_branch=$(strip_quotes "$(nm_field branch)")
-    if [ -n "$run_branch" ] && [ "$run_branch" = "$CREW_BRANCH" ] && nm_run_head_matches_worktree; then
-      HAVE_RUN=1
+    if [ -n "$run_branch" ] && [ "$run_branch" = "$CREW_BRANCH" ]; then
+      # This answer IS this branch's newest run: the CLI reports the repo's
+      # active-or-most-recent run, and one branch cannot host two concurrent
+      # runs. So the runs list can only offer this same run again or an OLDER,
+      # superseded one, and is deliberately NOT consulted from here even when
+      # the binding below refuses this run - reaching past the newest run for
+      # this branch is precisely how a dead run masked a live one
+      # (fm-crew-run-verdict-lib.sh's header owns that whole model).
+      RUN_SOURCE=full
+      if fm_crew_run_admits "$WT" "$RUN_OUT" "$(strip_quotes "$(nm_field head)")"; then
+        HAVE_RUN=1
+      fi
     else
-      # The active-or-most-recent run is for another branch, or same branch with
-      # a rewritten/diverged head (the CLI is alive and answered; only the
-      # attribution missed) - try the coarse fallback.
+      # The active-or-most-recent run is for another branch (the CLI is alive
+      # and answered; only the attribution missed) - ask the runs list whether
+      # THIS branch has a newest run of its own.
+      #
+      # DISCARD THE RECORD FIRST, so no reader below can consult a foreign run.
+      # A branch mismatch means this task has no run; keeping the bytes around
+      # for their `pr:` field is how a sibling's merged PR became this crew's
+      # landing claim. Clearing at the source beats testing ownership at each
+      # reader, because the next reader added would have to remember the test.
       # Deliberately nested inside `[ -n "$RUN_OUT" ]`: an empty/timed-out
       # primary call means the CLI itself did not respond, so retrying it
       # immediately with a second bounded call would just double the wait
       # for no better answer.
-      COARSE_STATUS=$(nm_runs_status_for_branch "$CREW_BRANCH")
-      if [ -n "$COARSE_STATUS" ]; then
-        HAVE_RUN=1
-        RUN_SOURCE=coarse
+      RUN_OUT=""
+      RUN_OBJECT=""
+      coarse_row=$(nm_runs_newest_row_for_branch "$CREW_BRANCH")
+      if [ -n "$coarse_row" ]; then
+        COARSE_STATUS=${coarse_row%%|*}
+        coarse_rest=${coarse_row#*|}
+        coarse_sha=${coarse_rest%%|*}
+        COARSE_PR=${coarse_rest#*|}
+        # A coarse row carries no steps and no activity, so its terminality is
+        # read from the status word alone.
+        case "$COARSE_STATUS" in
+          completed|failed|cancelled) coarse_terminality=terminal ;;
+          *) coarse_terminality=live ;;
+        esac
+        if fm_crew_binding_admits \
+          "$(fm_crew_head_relation "$WT" "$coarse_sha")" "$coarse_terminality"; then
+          HAVE_RUN=1
+          RUN_SOURCE=coarse
+        fi
       fi
     fi
   fi
 fi
 
 # --- run-step authoritative path -------------------------------------------
+
+# The forge's own word on this run's PR: merged, closed, open, unverified, or one
+# of the two structural non-answers (optionally with the forge's merge-state
+# qualifier). This is the ONLY source a merged-or-closed claim may come from.
+# Run state cannot supply it: a run reached
+# `outcome: passed` on a PR that was open, conflicted and carried zero checks,
+# and the old "PR merged/closed" reason was pure invention (see
+# fm-crew-run-verdict-lib.sh's header). Called on exactly the paths that can emit
+# `done` and nowhere else; this file's header owns that invariant and states why
+# the emitted word is not a way to tell whether the call happened.
+#
+# `no-pr` is the answer only once crew_pr_url has looked EVERYWHERE a PR url is
+# recorded, so it means "this task has no PR", not "this reader did not look" - a
+# url this reader failed to find would have hidden a close behind a word that
+# never asked. What that absence LICENSES is then decided by the task's recorded
+# kind, which travels with the word: a scout has no landing to claim by
+# construction, so its `done` is not a landing claim, while a ship task exists to
+# land a branch and an absent PR there is the landing question answered badly.
+
+# This task's PR url from every place one is recorded, in decreasing authority:
+# the run record's own `pr:` field, the coarse runs-list row, the task meta, then
+# the status log the worker writes.
+#
+# The last two are not redundancy, they are the fix for a real hole. The coarse
+# runs-list row NEVER carries a url, so a crew on that path used to reach the
+# forge with nothing to ask about and settle `done` unasked - while the very
+# status log this same invocation had already read named the PR, and
+# bin/fm-inactive-reconcile.sh's pr_for_task then dug that url out and showed it
+# to the captain beside the word. Reading it here asks the forge about that url
+# before the verdict rather than after it.
+#
+# The readers that PRESENT a url beside a state word OUGHT to agree with this one
+# about WHICH url, because the state word and the PR shown beside it describing
+# different pull requests is the same self-contradiction this reader exists to
+# remove. There are three in all: this one, pr_for_task in
+# bin/fm-inactive-reconcile.sh, and newest_pr_url_in_file in
+# bin/fm-fleet-snapshot.sh. They agree on ONE TIER so far, and the rest is
+# bounded and accepted rather than closed - do not read the paragraph above as an
+# invariant.
+#
+# The chains are different lengths. This function resolves FOUR tiers: the run
+# record's `pr:` when RUN_SOURCE is full, then COARSE_PR, then meta `pr=`, then
+# the status log's newest matching url. The other two resolve TWO: meta `pr=`,
+# then the status log's newest matching url. Only the LOG tier was aligned, on
+# the NEWEST matching url, pull request or merge request alike, because the
+# newest is the one that answers "which PR is this crew's current one"; both of
+# those readers previously took the FIRST url and matched pull requests only.
+#
+# So they can still name DIFFERENT PRs for one task whenever meta carries no
+# `pr=` while the run record or the coarse row carries a url - the tiers this
+# function has and those readers do not. bin/fm-pr-check.sh is the only writer of
+# meta `pr=`, so that window is open until firstmate acts on a replacement url.
+# Closing it means removing the other selection rules rather than aligning
+# another tier - the reader that produced the word supplying the url it asked
+# about - and that is deferred as its own follow-up.
+crew_pr_url() {
+  local url=""
+  [ "$RUN_SOURCE" = full ] && url=$(strip_quotes "$(nm_field pr)")
+  [ -n "$url" ] || url=$COARSE_PR
+  [ -n "$url" ] || url=$(meta_value pr)
+  [ -n "$url" ] || url=$(grep -Eo 'https?://[^[:space:])"]+/(pull|merge_requests)/[0-9]+' \
+    "$LOG" 2>/dev/null | tail -1 || true)
+  printf '%s' "$url"
+}
+crew_forge_read() {
+  local url
+  case "$(printf '%s' "${FM_CREW_STATE_NO_FORGE:-}" | tr '[:upper:]' '[:lower:]')" in
+    ''|0|false|no|off) : ;;
+    *) printf 'unverified'; return ;;
+  esac
+  url=$(crew_pr_url)
+  # The RECORDED TASK KIND and DELIVERY MODE travel with the answer, because an
+  # absent PR means opposite things for different kinds and different modes, and
+  # the absent url cannot tell any of them apart. fm_crew_no_pr_class owns the
+  # rule: a scout has no landing to claim by construction, a local-only ship was
+  # told not to open a PR, and a remote-backed ship with no PR is precisely where
+  # a `done` would be wrong.
+  #
+  # The mode word is APPENDED rather than always present, so an unrecorded mode
+  # leaves the descriptor exactly the single-word shape it had before and takes
+  # the conservative arm. Emitting an empty third word instead would hand the
+  # parser a mode it cannot distinguish from a recorded one.
+  if [ -z "$url" ]; then
+    printf 'no-pr %s' "$KIND"
+    [ -z "$MODE" ] || printf ' %s' "$MODE"
+    return
+  fi
+  fm_crew_forge_pr_state "$url" "$FM_CREW_STATE_FORGE_TIMEOUT"
+}
+
+# The memoised answer, and the reason this reader has one. The header promises
+# "at most ONE outbound `gh pr view` per invocation", and that promise used to
+# rest on the done-capable paths being mutually exclusive - which they are not.
+# A checks-passed run whose forge read came back UNCONFIRMED stays `working`, and
+# a `working` run with a ci-ready status log falls straight into
+# emit_checks_green, which asked again. Two reads is not a wrong verdict, it is a
+# broken bound: bin/fm-fleet-snapshot.sh's per-task figure and its recorded
+# "3 tasks x 3s = 9s" worst case both assume one call, and silently became 18s.
+#
+# Memoising restores the recorded figure rather than re-choosing it, and it makes
+# the bound structural instead of an emergent property of control flow nobody
+# re-checks. $CREW_FORGE_ANSWER is read directly by callers because the read must
+# not happen inside a command substitution - a subshell's cache dies with it.
+CREW_FORGE_ANSWER=""
+CREW_FORGE_ASKED=0
+crew_ask_forge() {
+  [ "$CREW_FORGE_ASKED" = 1 ] && return 0
+  CREW_FORGE_ASKED=1
+  CREW_FORGE_ANSWER=$(crew_forge_read)
+}
+
+# Whether the run record shows this crew still EXECUTING, as `live` or
+# `terminated`, for the green-checks routes that must not claim liveness they
+# have not established (fm_crew_checks_green_verdict).
+#
+# Only two things count as evidence, in the order the model already trusts them:
+# the daemon's own active_steps table, which is the authoritative liveness signal
+# for a live pipeline, then a non-terminal `status:` word. An ABSENT status is
+# not non-terminal - it is no evidence at all - and it answers `terminated`,
+# because the governing preference is unknown over a confident wrong answer.
+crew_liveness() {
+  if [ -n "$(fm_crew_active_step "$(nm_run_object)")" ]; then
+    printf 'live'
+    return
+  fi
+  case "$(strip_quotes "$(nm_field status)")" in
+    ''|completed|failed|cancelled) printf 'terminated' ;;
+    *) printf 'live' ;;
+  esac
+}
 
 if [ "$HAVE_RUN" = 1 ]; then
   RUN_STATE=working
@@ -439,7 +751,17 @@ if [ "$HAVE_RUN" = 1 ]; then
     # coarse-vs-full distinction, so a real gate is never silently missed.
     case "$COARSE_STATUS" in
       running)   RUN_STATE=working; RUN_DETAIL="validating (background run)" ;;
-      completed) RUN_STATE="done";  RUN_DETAIL="run completed" ;;
+      completed)
+        # A coarse row carries no steps table, so this path cannot answer the ci
+        # question either way - and it says exactly that, by passing the
+        # no-step-detail sentinel into the SAME ranking the full path uses. Two
+        # rankings for one question is how the two paths came to read `done` and
+        # `unknown` for one world state; fm-crew-run-verdict-lib.sh owns the rule.
+        crew_ask_forge
+        coarse_verdict=$(fm_crew_terminal_verdict "$FM_CREW_CI_NO_STEP_DETAIL" "$CREW_FORGE_ANSWER")
+        RUN_STATE=${coarse_verdict%%|*}
+        RUN_DETAIL=${coarse_verdict#*|}
+        ;;
       failed)    RUN_STATE=failed;  RUN_DETAIL="run failed" ;;
       cancelled) RUN_STATE=failed;  RUN_DETAIL="run cancelled" ;;
       *)         RUN_STATE=unknown; RUN_DETAIL="runs list status: $COARSE_STATUS" ;;
@@ -448,15 +770,52 @@ if [ "$HAVE_RUN" = 1 ]; then
     status=$(strip_quotes "$(nm_field status)")
     RUN_STATUS=$status
     outcome=$(strip_quotes "$(nm_field outcome)")
-    awaiting=$(printf '%s\n' "$RUN_OUT" | grep -E '^[[:space:]]*awaiting_agent:' | head -1 || true)
+    awaiting=$(nm_run_object | grep -E '^[[:space:]]*awaiting_agent:' | head -1 || true)
     gate_status=$(nm_gate_status)
     has_gate=0
     nm_has_gate && has_gate=1
 
+    ci_step_recorded=$(fm_crew_step_status "$(nm_run_object)" ci)
     if [ -n "$outcome" ]; then
       case "$outcome" in
-        passed)        RUN_STATE="done"; RUN_DETAIL="run passed: PR merged/closed" ;;
-        checks-passed) RUN_STATE="done"; RUN_DETAIL="checks green: PR ready for review" ;;
+        checks-passed)
+          # TWO DIFFERENT QUESTIONS, kept apart here because conflating them is
+          # how this regresses. What proves CI RAN: `checks-passed` is a statement
+          # about the CHECKS, so it is CI evidence IN ITS OWN RIGHT and still
+          # needs no corroborating ci-step row - where merge is left to the
+          # captain the ci step stays `running` for the whole monitor phase (see
+          # nm_ci_checks_state), so demanding one would withhold exactly the
+          # ready-for-review signal the captain is waiting on. That ruling stands
+          # untouched. What proves WHERE THE PR ENDED UP: nothing in the run
+          # record, which is why this arm is no longer EXEMPT from the forge read.
+          # fm_crew_checks_green_verdict owns that second question, and keeps the
+          # ready-for-review detail on every answer but a confirmed close.
+          #
+          # A THIRD question, which this arm alone has to answer for itself: is
+          # the crew still alive? The other two green-checks routes sit inside
+          # `[ "$RUN_STATE" = working ]`, so their liveness is already
+          # established; this one fires on the outcome word, and an outcome word
+          # is what makes a run TERMINAL. Reporting `working` for a finished run
+          # because the forge happened not to answer would be a liveness claim
+          # with nothing behind it, so the record is asked outright.
+          crew_ask_forge
+          green_verdict=$(fm_crew_checks_green_verdict "$CREW_FORGE_ANSWER" \
+            "checks green: PR ready for review" "$(crew_liveness)")
+          RUN_STATE=${green_verdict%%|*}
+          RUN_DETAIL=${green_verdict#*|}
+          ;;
+        passed)
+          # `outcome: passed` means the PIPELINE completed, not that CI passed, so
+          # it never settles this on its own. fm_crew_terminal_verdict owns the ONE
+          # ranking every terminated run goes through - a forge-confirmed merge
+          # (done) or close (failed), then this run's own `ci,completed`, then
+          # unknown - and the coarse path below calls the same function so the two
+          # cannot disagree.
+          crew_ask_forge
+          pass_verdict=$(fm_crew_terminal_verdict "$ci_step_recorded" "$CREW_FORGE_ANSWER")
+          RUN_STATE=${pass_verdict%%|*}
+          RUN_DETAIL=${pass_verdict#*|}
+          ;;
         failed)        RUN_STATE=failed; RUN_DETAIL="run failed" ;;
         cancelled)     RUN_STATE=failed; RUN_DETAIL="run cancelled" ;;
         *)             RUN_STATE=unknown; RUN_DETAIL="outcome: $outcome" ;;
@@ -473,27 +832,54 @@ if [ "$HAVE_RUN" = 1 ]; then
       RUN_DETAIL="parked at $gate"
       fcount=$(nm_gate_findings_count)
       [ -n "$fcount" ] && RUN_DETAIL="$RUN_DETAIL: $fcount finding(s)"
-      if printf '%s\n' "$RUN_OUT" | grep -q 'ask-user'; then
+      if nm_run_object | grep -q 'ask-user'; then
         RUN_DETAIL="$RUN_DETAIL (ask-user: authority decision)"
       fi
     else
       case "$status" in
         ci)             RUN_STATE=working; RUN_DETAIL="ci running" ;;
         running|fixing) RUN_STATE=working; RUN_DETAIL="validating ($status)" ;;
-        completed)      RUN_STATE="done"; RUN_DETAIL="run completed" ;;
+        completed)
+          crew_ask_forge
+          pass_verdict=$(fm_crew_terminal_verdict "$ci_step_recorded" "$CREW_FORGE_ANSWER")
+          RUN_STATE=${pass_verdict%%|*}
+          RUN_DETAIL=${pass_verdict#*|}
+          ;;
         failed)         RUN_STATE=failed;  RUN_DETAIL="run failed" ;;
         cancelled)      RUN_STATE=failed;  RUN_DETAIL="run cancelled" ;;
-        "")             RUN_STATE=working; RUN_DETAIL="run active" ;;
+        "")
+          # An ABSENT status word is not a non-terminal one, so this arm cannot
+          # assert liveness on its own: crew_liveness owns that question for the
+          # whole reader, and it rules such a record terminated unless the
+          # daemon's own active_steps table says otherwise. Restating the answer
+          # here is what made one record read `working` by this route and
+          # `unknown` by the ci-ready one, and the governing preference between
+          # those two is unknown over a confident wrong answer.
+          if [ "$(crew_liveness)" = live ]; then
+            RUN_STATE=working; RUN_DETAIL="run active"
+          else
+            RUN_STATE=unknown; RUN_DETAIL="run record carries no status word"
+          fi
+          ;;
         *)              RUN_STATE=working; RUN_DETAIL="run active ($status)" ;;
       esac
       if [ "$RUN_STATE" = working ]; then
+        # The daemon's own statement of what is executing right now, and when it
+        # last did anything. Preferred over the coarse status word because it is
+        # the signal that keeps a demonstrably live pipeline from reading as no
+        # information at all.
+        active_note=$(fm_crew_active_step_note "$(fm_crew_active_step "$(nm_run_object)")")
+        [ -n "$active_note" ] && RUN_DETAIL=$active_note
         CI_STEP_STATUS=$(nm_effective_ci_step_status)
         case "$CI_STEP_STATUS" in
           running)
             CI_LOG_STATE=$(nm_ci_checks_state)
             if [ "$CI_LOG_STATE" = green ]; then
-              RUN_STATE="done"
-              RUN_DETAIL="checks green: PR ready for review (still monitoring for merge/close)"
+              crew_ask_forge
+              green_verdict=$(fm_crew_checks_green_verdict "$CREW_FORGE_ANSWER" \
+                "checks green: PR ready for review (still monitoring for merge/close)" live)
+              RUN_STATE=${green_verdict%%|*}
+              RUN_DETAIL=${green_verdict#*|}
             fi
             ;;
           fixing)
@@ -504,9 +890,44 @@ if [ "$HAVE_RUN" = 1 ]; then
     fi
   fi
 
+  # The crew's own log says its checks went green while the run monitors. Same
+  # two questions as the checks-passed arm above, so the same owner answers the
+  # second one: the log proves the checks, and only the forge can say where the
+  # PR ended up. Routing this through it is what makes the invariant complete -
+  # this reader never emits `done` without having asked - and it costs no extra
+  # call, because the answer is MEMOISED (crew_ask_forge). It is NOT because
+  # these paths and the two above are mutually exclusive: they are not, and that
+  # disproved belief is what quietly doubled every budgeted caller's bound. The
+  # reachable overlap is a checks-passed run whose read came back unconfirmed,
+  # which stays `working` and then falls into this very block.
+  #
+  # <liveness> is the CALLER'S to establish, because the two callers can prove it
+  # in ways the other cannot see. The full path derives it from the run record
+  # (crew_liveness); the coarse path asserts `live` because its own admission
+  # test was COARSE_STATUS=running, which is genuine liveness that crew_liveness
+  # cannot read - a coarse row carries no steps table and no `status:` key.
+  #
+  # Asserting `live` for both was wrong for one full-path record shape, and
+  # wrong in the permissive direction: the absent-`status:` arm above mapped a
+  # record with no status word to working/"run active", while crew_liveness rules
+  # that same record `terminated` on the ground that an absent status is no
+  # evidence at all. Two functions in one reader disagreeing about one record is
+  # the self-contradiction this whole change exists to remove, so BOTH sides now
+  # ask the one owner - that arm and this call site - instead of restating an
+  # answer of their own. With the arm deferring too, no full-path record reaches
+  # here `terminated` any more; the derived argument stays because it is the
+  # honest expression of who owns liveness, and the property it carried is now
+  # guarded at the arm.
+  emit_checks_green() {  # <source> <detail> <liveness: live|terminated>
+    local verdict
+    crew_ask_forge
+    verdict=$(fm_crew_checks_green_verdict "$CREW_FORGE_ANSWER" "$2" "$3")
+    emit "${verdict%%|*}" "$1" "${verdict#*|}"
+  }
+
   if [ "$RUN_STATE" = working ] && log_reports_ci_ready; then
     if [ "$RUN_SOURCE" = coarse ]; then
-      emit "done" status-log "$(status_line_note "$LOG_LINE")${SEP}run still monitoring PR"
+      emit_checks_green status-log "$(status_line_note "$LOG_LINE")${SEP}run still monitoring PR" live
     fi
     [ -n "$CI_STEP_STATUS" ] || CI_STEP_STATUS=$(nm_effective_ci_step_status)
     if [ "$RUN_STATUS" = fixing ]; then
@@ -517,7 +938,8 @@ if [ "$HAVE_RUN" = 1 ]; then
       CI_LOG_STATE=not-ready
     fi
     if [ "$CI_LOG_STATE" != not-ready ]; then
-      emit "done" status-log "$(status_line_note "$LOG_LINE")${SEP}run still monitoring PR"
+      emit_checks_green status-log \
+        "$(status_line_note "$LOG_LINE")${SEP}run still monitoring PR" "$(crew_liveness)"
     fi
   fi
 
@@ -571,8 +993,22 @@ fi
 # `unknown` with the resolution note as `doing`. map_log_state is the single owner of
 # the verb->state mapping (including the configurable paused verb), so reusing its
 # `unknown` verdict as the "not a state" test needs no second verb list here.
+#
+# A `done:` verb is the one state word here that carries a landing claim, so it
+# alone consults the forge before it is emitted. The source is not a reason to
+# exempt it - it is the reason not to: this is the worker's SELF-REPORT, weaker
+# evidence than a run record, and bin/fm-inactive-reconcile.sh matches the WORD
+# regardless of source, so an abandoned PR would reach the captain as a success
+# by exactly the route a run-backed one no longer can. The call costs one bounded
+# read on a path that only fires when a `done:` line already exists.
 if [ -n "$LOG_VERB" ]; then
   LOG_STATE=$(map_log_state "$LOG_LINE")
+  if [ "$LOG_STATE" = "done" ]; then
+    crew_ask_forge
+    log_verdict=$(fm_crew_reported_done_verdict "$CREW_FORGE_ANSWER" \
+      "$(status_line_note "$LOG_LINE")")
+    emit "${log_verdict%%|*}" status-log "${log_verdict#*|}"
+  fi
   if [ "$LOG_STATE" != unknown ]; then
     emit "$LOG_STATE" status-log "$(status_line_note "$LOG_LINE")"
   fi

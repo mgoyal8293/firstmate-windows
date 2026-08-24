@@ -350,8 +350,10 @@ Send the same worker one exact decision naming the decision key, step, action, a
 Require the matching `resolved` event, forbid `--yes`, and require the worker to process every synchronous return until completion or a genuinely new escalation.
 Resume fleet supervision immediately after the decision lands.
 
-Judge validation by the current-code-matched run step through `bin/fm-crew-state.sh`, not by shell liveness or the last status event.
-Running, fixing, or CI states remain working; parked approval or fix-review states require the worker to follow the active gate help; passed or checks-passed is done; failed or cancelled is failed.
+Judge validation by `bin/fm-crew-state.sh`'s verdict for that task, not by shell liveness or the last status event.
+Working means the run is progressing; parked means the worker must follow the active gate help; done means the evidence settled it; failed or cancelled is failed.
+Unknown means the evidence does not settle it, which includes a run that terminated with neither a forge-confirmed merge nor the CI evidence to call it done; that is a run needing a ruling, not a gate anyone can respond to, and the detail line names the ci word and the forge's answer that led there.
+A forge-confirmed merge does settle done on its own, because it proves the work landed; a forge-confirmed close settles failed on its own, because a closed-unmerged PR is the opposite of a landing and the work will never land.
 A worker hand-editing, committing, aborting, or restarting during an active validation run duplicates pipeline ownership outside the supersession sequence above; steer it back to the gate response flow.
 The worker reports the PR when CI first becomes green rather than waiting for merge monitoring to finish.
 
