@@ -484,6 +484,8 @@ count_parent_side_creations() {
   log="$dir/forks.log"
   : > "$log"
   out=$(env -u CLAUDECODE -u PI_CODING_AGENT -u FM_PI_HARNESS -u GROK_AGENT \
+    -u FM_SESSION_START_STAGE_FILE -u FM_SESSION_START_HOOK_DEADLINE \
+    -u FM_SESSION_START_RESOLVED_BOUND \
     FM_HOME="$dir/home" FM_ROOT_OVERRIDE="$dir/root" \
     PATH="$dir/fakebin:$FM_TEST_FORKCOUNT_BASE_PATH" \
     FM_SESSION_START_REGISTRATION_ROOT="$dir/regs" \

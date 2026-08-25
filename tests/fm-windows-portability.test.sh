@@ -100,7 +100,13 @@ test_proc_lib_source_guard_skips_repeats_without_blinding_the_platform_seam() {
     unset FM_PLATFORM_UNAME_OVERRIDE
     . bin/fm-proc-lib.sh
     printf 'seam_cleared=%s\n' "$FM_PROC_UNAME_S"
+    # The subshell's LAST command is what `out=$(...)` reports, so without this
+    # an earlier `. bin/fm-proc-lib.sh` that died left the `|| fail` below silent
+    # and the extraction working on a truncated blob.
+    printf 'probe_complete\n'
   ) || fail "sourcing bin/fm-proc-lib.sh repeatedly must not fail"
+  assert_contains "$out" 'probe_complete' \
+    'the probe subshell must reach its end: without this a source that died midway is invisible, because only the last command status reaches the assignment'
 
   assert_contains "$out" 'unchanged=SENTINEL' \
     'a repeat source with an unchanged seam must be skipped, not re-run'
@@ -108,6 +114,13 @@ test_proc_lib_source_guard_skips_repeats_without_blinding_the_platform_seam() {
     'setting FM_PLATFORM_UNAME_OVERRIDE must re-resolve the platform, or every Windows arm here is vacuous'
   assert_contains "$out" 'seam_changed=Linux windows=no' \
     'changing the seam again must re-resolve, not just the first transition'
+  # PRESENCE BEFORE EXTRACTION. `${out##*seam_cleared=}` returns $out UNCHANGED
+  # when the marker never appears, so both checks below would pass on the whole
+  # captured blob - non-empty, and not equal to the override literal. That is the
+  # strongest half of this case going vacuous exactly when the thing it measures
+  # never ran.
+  assert_contains "$out" 'seam_cleared=' \
+    'the probe must have printed the cleared-seam marker at all, or the two checks below are extracting from a blob that never contained it'
   cleared=${out##*seam_cleared=}
   cleared=${cleared%%$'\n'*}
   [ -n "$cleared" ] \

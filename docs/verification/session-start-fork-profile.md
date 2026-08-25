@@ -765,6 +765,49 @@ It also costs the path no subprocess, which matters because this runs in the par
 The rejected value is echoed back through parameter expansion only, with whitespace flattened and the string clipped, so a value carrying newlines cannot forge digest lines around the notice that is reporting it.
 That is asserted both ways - the flattened spelling must appear and the raw one must not - rather than only in the direction that passes.
 
+### Eleventh round: two guards were VACUOUS, and a declaration was unbacked
+
+This round repaired guards rather than product code, and the class is worth naming: a guard that passes when its subject is ABSENT is worse than no guard, because it reads as coverage. Two shipped that way.
+
+| # | Guard | Mutation | Suite |
+|---|---|---|---|
+| M41 | the Cursor session-open registration EXISTS and clears the floor | `.cursor/hooks.json`'s `sessionStart` array emptied | cursor-primary |
+| M42 | the cleared-seam marker was printed before anything is extracted from it | the marker's `printf` removed from the probe | windows-portability |
+| M43 | the probe subshell reached its end | `exit 0` inserted after the marker, before the end | windows-portability |
+| M44 | the Pi `none` declaration is TRUE, not merely made | `timeout: 30_000` armed beside the declaration | pi-sessionstart-deadline |
+| M45 | same, however the deadline is spelled | `signal: AbortSignal.timeout(30_000)` armed instead | pi-sessionstart-deadline |
+| M46 | the measured run does not inherit a session start's own env | the three `FM_SESSION_START_*` `-u` flags removed, suite run with a leaked stage file | hook-nesting, and again in bound |
+
+```console
+$ # M41
+not ok - the session-open registration must exist AND its timeout must reach bin/fm-session-start.sh's highest default budget plus its nesting margin (332s), or Cursor either registers nothing at session open or kills the hook before the truncation banner is printed
+$ # M42
+not ok - the probe must have printed the cleared-seam marker at all, or the two checks below are extracting from a blob that never contained it (missing: 'seam_cleared=')
+$ # M43
+not ok - the probe subshell must reach its end: without this a source that died midway is invisible, because only the last command status reaches the assignment (missing: 'probe_complete')
+$ # M44 and M45 both
+not ok - the Pi extension declares FM_SESSION_START_HOOK_DEADLINE=none while its spawn ARMS a clock-based kill, so the library will honour an explicit FM_SESSION_START_TIMEOUT in full on a run that is really killed - losing the truncation banner entirely.
+$ # M46, hook-nesting
+not ok - the measured run was bounded at 0s rather than the 1s the synthetic 2s registration should clamp it to, so it is not the clamped path this count is about
+$ # M46, bound
+not ok - the banner must report the bound that was actually in force (missing: 'HIT ITS 1s RUNTIME BOUND')
+```
+
+**M41 and M42 were shown vacuous in BOTH directions**, which is the part that matters for a vacuity claim. Applying each mutation against the OLD assertion left the suite GREEN - `ok - cursor registration: covers every primary event with a bounded stop loop` on an empty `sessionStart` array, and `ok - fm-proc-lib.sh: the source guard skips repeat sources...` with the marker never printed. So the mutation proves the new term is load-bearing rather than merely present.
+The jq facts behind M41: `all` over an empty array is `true`, and an empty array is TRUTHY, so the existing `.hooks.sessionStart` existence check did not rescue it. `length > 0` is the assertion, not decoration.
+
+**M44 is the one that changes what the suite proves.** Before it, the case asserted the `none` declaration was MADE; nothing anywhere proved it was TRUE. The settled clamp ruling honours a full configured bound "only where in-repo evidence positively proves no deadline binds", and the evidence was the declaration quoting itself. `tests/fm-pi-sessionstart-deadline.test.sh`'s driver now wraps `child_process.spawn` and reports the options object the extension really passed, so an armed `timeout` or `signal` fails however it is spelled and a refactor that moves the spawn still passes.
+
+Two details of that interception are load-bearing and cost a round to find:
+
+- It must patch through `createRequire("node:child_process")`, **not** `import child_process from "node:child_process"`. A builtin's ESM default export is a separate object from the CJS exports its named exports read from, so patching the default export leaves the extension's `import { spawn }` bound to the real function and the wrapper observes nothing. The first attempt did exactly that and reported `SPAWN_COUNT=[0]` on every input, mutated or not - a guard that fails closed, but for the wrong reason.
+- The patch must run BEFORE the dynamic `import()` of the extension.
+
+`killSignal: "SIGKILL"` was also applied and correctly does **not** fail: it names the signal an already-armed timeout or abort would send and arms nothing by itself. That true-negative is recorded so the predicate is not later "tightened" into a false positive.
+
+**M46's real failure is not the one predicted.** The reasoning was that a leaked `FM_SESSION_START_STAGE_FILE` would make `tests/fixtures/forkcount.c` classify every record as `child`, collapsing `creations` to 0. What actually happens first is that `bin/fm-session-start.sh` itself reads the leaked variable as "I am the bounded child", skips the whole parent branch, and never resolves a bound or forks - so the case fails on the bound assertion instead. Same conclusion, different line: a false failure that blames the instrument or the clamp for an environment leak. Recorded as observed rather than as reasoned.
+The leak only reaches the forked run, so the `-u` flags fix that; a `FM_SESSION_START_HOOK_DEADLINE=none` leak into the suite's OWN shell additionally breaks its in-process resolver assertions, which no `env -u` on a child can address and which is out of scope here.
+
 ### What is NOT independently falsifiable, said plainly
 
 **The cap dedup has no guard and cannot have one.**
@@ -778,7 +821,11 @@ The library honouring a `none` declaration is proven by M24.
 The extension continuing to MAKE that declaration was unguarded for one round: deleting one property from the spawn options returned every Pi session start to being clamped by registrations that are not running, with the whole suite green, because the Pi suites only type-check or copy the file.
 `tests/fm-pi-sessionstart-deadline.test.sh` closes it behaviourally rather than by grepping the source: it loads the real extension module, calls its real default export with a Pi-shaped stub, fires the real session_start handler, and replaces only the spawned wrapper with a recorder that reports the environment it was actually handed.
 A refactor that moves the declaration still passes; a deleted declaration fails.
-What it does NOT cover is Pi itself changing how it invokes the extension, which no test in this repo can observe.
+
+**And the declaration's TRUTH is guarded too, as of M44/M45 - it was not before.**
+For one round the suite proved the claim was made and nothing proved it was correct, which is the weaker half of a statement of fact: arming a `timeout` or an `AbortSignal` beside the declaration left it green while production honoured a full explicit bound on a path Node really kills. The driver now witnesses the spawn options themselves, so the two halves are both covered - the declaration is present, and it is not a lie.
+
+What it does NOT cover is Pi itself changing how it invokes the extension, which no test in this repo can observe. Nor does it cover a kill arranged outside the spawn options - a `setTimeout` in the extension that calls `child.kill()` on a handle the wrapper returned would satisfy this guard, because the options object is clean. That is a narrower hole than the one M44 closed and it is stated rather than left to be discovered: what is observable here is the spawn contract, not every path by which a signal could later be sent.
 
 **The margin's SUFFICIENCY at unbounded load has no guard, and cannot have one.**
 32 s is derived from the worst NON-THRASHING directly measured point, 31.20 s, and the 24-competitor thrashing regime it excludes is one no fixed margin could cover.

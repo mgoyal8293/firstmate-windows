@@ -102,6 +102,8 @@ run_session_start() {
   local home=$1 root=$2 fakebin=$3
   shift 3
   env -u CLAUDECODE -u PI_CODING_AGENT -u FM_PI_HARNESS -u GROK_AGENT \
+    -u FM_SESSION_START_STAGE_FILE -u FM_SESSION_START_HOOK_DEADLINE \
+    -u FM_SESSION_START_RESOLVED_BOUND \
     FM_HOME="$home" FM_ROOT_OVERRIDE="$root" PATH="$fakebin:$BASE_PATH" \
     "$@" bash "$ROOT/bin/fm-session-start.sh" 2>&1
 }

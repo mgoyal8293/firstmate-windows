@@ -62,7 +62,39 @@ chmod +x "$world/root/bin/fm-sessionstart-run.sh"
 # The driver is the Pi side of the contract: it calls the extension's real
 # default export with a stub that captures the registered session_start handler
 # and whatever the extension injects, then fires the event Pi fires on /clear.
+#
+# IT ALSO WITNESSES THE SPAWN ITSELF, which is what makes the `none` declaration
+# more than a claim. The declaration is a statement of FACT about this spawn -
+# that nothing ends the digest on a clock - and asserting only that the string
+# was injected proves the claim is MADE, not that it is TRUE. Adding
+# `timeout: 30_000`, an `AbortSignal`, or a `setTimeout(() => child.kill())`
+# beside the declaration would leave the injected value untouched and the suite
+# green, while in production the library would honour an explicit
+# FM_SESSION_START_TIMEOUT in full on a run Node really does kill - the silent
+# non-supervision this whole branch exists to close, reached through the one
+# direction the asymmetry argument calls unsafe.
+#
+# So child_process.spawn is wrapped and the options object it was really called
+# with is reported. This is a behavioural observation of the call, not a read of
+# the .ts source: a refactor that moves the spawn still passes, and an armed
+# deadline fails however it is spelled.
 cat > "$world/drive.mjs" <<'JS'
+import { createRequire } from "node:module";
+
+// createRequire, NOT `import child_process from "node:child_process"`. A builtin's
+// ESM default export is a separate object from the CJS exports that its named
+// exports are read from, so patching the default export leaves
+// `import { spawn }` in the extension bound to the real function and the wrapper
+// never sees a call. This must also run BEFORE the dynamic import below.
+const require = createRequire(import.meta.url);
+const cp = require("node:child_process");
+const realSpawn = cp.spawn;
+const spawns = [];
+cp.spawn = function (cmd, args, options) {
+  spawns.push(options || {});
+  return realSpawn.call(this, cmd, args, options);
+};
+
 const mod = await import(process.argv[2]);
 let handler;
 const pi = {
@@ -79,6 +111,20 @@ if (typeof handler !== "function") {
   process.exit(3);
 }
 await handler({ reason: "new" }, {});
+
+// Every clock-based kill Node's own spawn API can arm. `killSignal` alone is not
+// one: it only names the signal an already-armed timeout or abort would send.
+for (const options of spawns) {
+  const armed = [];
+  if (options.timeout !== undefined && options.timeout !== 0) {
+    armed.push(`timeout=${options.timeout}`);
+  }
+  if (options.signal !== undefined) armed.push("signal=<AbortSignal>");
+  process.stdout.write(
+    `SPAWN_DEADLINE=[${armed.length ? armed.join(",") : "none"}]\n`,
+  );
+}
+process.stdout.write(`SPAWN_COUNT=[${spawns.length}]\n`);
 JS
 
 test_the_pi_transport_declares_that_no_deadline_binds() {
@@ -112,7 +158,25 @@ test_the_pi_transport_declares_that_no_deadline_binds() {
     *) fail "the Pi extension spawned the session start WITHOUT declaring that no kill deadline binds it, so that digest is clamped by the Claude, Codex and Cursor registrations and told a kill second that does not exist under Pi; the wrapper was handed: $out" ;;
   esac
 
-  pass "pi session-start deadline: the extension declares 'none' to the digest it spawns, so a Pi session start is not clamped by another harness's registration"
+  # AND THE DECLARATION MUST BE TRUE. The check above proves the claim is made;
+  # this proves it is not a lie. A spawn that declares `none` while arming a
+  # timeout or an AbortSignal is strictly worse than one that declares nothing:
+  # the library then honours an explicit bound in full on a path that really is
+  # killed, and the kill takes the parent with the bounded child, so there is no
+  # truncation banner, no named stage and no reconcile list.
+  case "$out" in
+    *'SPAWN_COUNT=[0]'*) fail "no spawn was observed at all, so the declaration below is unbacked; got: $out" ;;
+  esac
+  case "$out" in
+    *'SPAWN_DEADLINE=[none]'*) : ;;
+    *) fail "the Pi extension declares FM_SESSION_START_HOOK_DEADLINE=none while its spawn ARMS a clock-based kill, so the library will honour an explicit FM_SESSION_START_TIMEOUT in full on a run that is really killed - losing the truncation banner entirely. Either drop the armed deadline or stop declaring 'none'; observed: $out" ;;
+  esac
+  case "$out" in
+    *'SPAWN_DEADLINE=[timeout='*|*'SPAWN_DEADLINE=[signal='*|*',signal='*)
+      fail "at least one spawn on the Pi session-start path arms a clock-based kill: $out" ;;
+  esac
+
+  pass "pi session-start deadline: the extension declares 'none' to the digest it spawns AND that declaration is true - the observed spawn arms no timeout and no AbortSignal"
 }
 
 test_the_pi_transport_declares_that_no_deadline_binds

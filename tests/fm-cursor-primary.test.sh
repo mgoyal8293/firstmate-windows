@@ -630,8 +630,15 @@ test_tracked_registration_covers_the_primary_events() {
   # by once, one term further along.
   bound=$(fm_test_min_registration_floor) \
     || fail "could not derive bin/fm-session-start.sh's highest default budget plus its nesting margin"
-  jq -e --argjson bound "$bound" '[.hooks.sessionStart[]] | all(.timeout >= $bound)' "$reg" >/dev/null 2>&1 \
-    || fail "the session-open timeout must reach bin/fm-session-start.sh's highest default budget plus its nesting margin (${bound}s), or Cursor kills the hook before the truncation banner is printed"
+  # `length > 0` is not belt-and-braces, it is the assertion. `all` over an EMPTY
+  # array is TRUE in jq, and an empty array is TRUTHY, so the existence check
+  # above passes on `sessionStart: []` too - emptying the array would have left
+  # this whole case green while Cursor registered nothing at session open, and
+  # the pass line would still have claimed the floor was reached. A guard that
+  # passes when its subject is absent reads as coverage and is worse than none.
+  jq -e --argjson bound "$bound" \
+    '[.hooks.sessionStart[]] | length > 0 and all(.timeout >= $bound)' "$reg" >/dev/null 2>&1 \
+    || fail "the session-open registration must exist AND its timeout must reach bin/fm-session-start.sh's highest default budget plus its nesting margin (${bound}s), or Cursor either registers nothing at session open or kills the hook before the truncation banner is printed"
   pass "cursor registration: covers every primary event with a bounded stop loop"
 }
 
