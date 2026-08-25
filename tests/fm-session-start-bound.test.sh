@@ -1179,12 +1179,19 @@ test_every_stage_prints_its_header_before_the_stage_runs() {
   # instead. Where a stage has more than one shape in this hermetic world, the
   # body pattern covers each of them, so the case pins ordering and not the
   # fixture's incidental content.
+  # The lock stage has a THIRD shape, and it is the one this platform arm reaches.
+  # On MSYS the lock is owned by a per-session token rather than by process
+  # ancestry (docs/windows.md, 'How the session lock is owned'), and this fixture
+  # strips every harness marker on purpose - so the stage cannot acquire and
+  # prints its read-only banner instead of an acquired/held line. That is correct
+  # product behaviour rather than a fixture defect, and the stage still has to
+  # print its header first, which is the only thing this case claims.
   assert_header_precedes_body "$out" '^LOCK$' \
-    '^lock (acquired|held)' lock
+    '^(lock (acquired|held)|●  READ-ONLY SESSION - FLEET LOCK OWNERSHIP WAS NOT VERIFIED$)' lock
   assert_header_precedes_body "$out" '^BOOTSTRAP$' \
     '^(MISSING: |\(silent - all good\)$)' bootstrap
   assert_header_precedes_body "$out" '^WAKE QUEUE$' \
-    '^(\(no queued wakes\)$|WAKE_|inactive outcome reconciliation:|skipped \(read-only session\))' wake-queue
+    '^(\(no queued wakes\)$|WAKE_|inactive outcome reconciliation:|skipped \(read-only session\) - [0-9]+ record\(s\) remain queued)' wake-queue
   # This stage announces itself from its own body rather than through a
   # subsection header: bin/fm-supervision-instructions.sh prints the line below
   # as its first output, so a header above it would be the same name twice with
@@ -1197,7 +1204,7 @@ test_every_stage_prints_its_header_before_the_stage_runs() {
   assert_header_precedes_body "$out" '^FLEET STATE$' \
     '^Work under way \(state/\*\.meta\)$' fleet-state
   assert_header_precedes_body "$out" '^NETWORK CHECKS$' \
-    '^(completed off the startup path|IN PROGRESS -|not started -|skipped \(read-only session\))' network-checks
+    '^(completed off the startup path|IN PROGRESS -|not started -|skipped \(read-only session\) - GitHub authentication)' network-checks
   assert_header_precedes_body "$out" '^CONTEXT$' \
     '^data/projects\.md$' context
   assert_header_precedes_body "$out" '^NEXT STEP$' \

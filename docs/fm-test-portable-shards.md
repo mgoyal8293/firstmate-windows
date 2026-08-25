@@ -93,15 +93,17 @@ Nothing currently detects a stale value on a script that already has a hint; `fm
 
 | Lane | Script count | Estimated duration |
 |---|---:|---:|
-| `portable-serial-1of4` | 28 | 644915 ms (~10.75 min) |
-| `portable-serial-2of4` | 29 | 644917 ms (~10.75 min) |
-| `portable-serial-3of4` | 30 | 644930 ms (~10.75 min) |
-| `portable-serial-4of4` | 31 | 644932 ms (~10.75 min) |
-| imbalance | | 17 ms |
+| `portable-serial-1of4` | 30 | 647596 ms (~10.79 min) |
+| `portable-serial-2of4` | 31 | 647598 ms (~10.79 min) |
+| `portable-serial-3of4` | 31 | 647596 ms (~10.79 min) |
+| `portable-serial-4of4` | 29 | 647582 ms (~10.79 min) |
+| imbalance | | 16 ms |
 
 Those four numbers are the packer's own arithmetic over the table above, not a measurement.
-The lane is now 118 scripts, because two tests landed in the derived remainder after those hints were refreshed: `tests/fm-python-lib.test.sh` and `tests/fm-conpty-liveness-live-e2e.test.sh`, the opt-in real-Windows ConPTY liveness guard.
-Neither has a measured Linux duration yet, so both are packed at the flat default and `--check-coverage` reports `unmeasured_serial=2` and names them.
+The lane is now 121 scripts.
+Two of the additions landed in the derived remainder after those hints were refreshed - `tests/fm-python-lib.test.sh` and `tests/fm-conpty-liveness-live-e2e.test.sh`, the opt-in real-Windows ConPTY liveness guard - and neither has a measured Linux duration yet, so both are packed at the flat default and `--check-coverage` reports `unmeasured_serial=2` and names them.
+The other three arrived with the Windows session-start bound work and were measured on admission rather than left at the default: `tests/fm-session-start-bound.test.sh` at 5537 ms, `tests/fm-session-start-hook-nesting.test.sh` at 4812 ms and `tests/fm-pi-sessionstart-deadline.test.sh` at 329 ms, each the lower of two green local runs.
+Those are developer-box floors on the same terms as every other hint here, not runner figures.
 Admitting a member re-packs all four shards, which is why every count above moved and not only the shard it landed in.
 
 Measured on green run [32259417831](https://github.com/mgoyal8293/firstmate-windows/actions/runs/32259417831), the `DIAG shards` diagnostic workflow that runs the four real shard commands on `ubuntu-latest` and the first measurement of the refreshed hints: all four shards passed, the worst shard fell to 11.67 min from the 13.43 min it took on run [32159215212](https://github.com/mgoyal8293/firstmate-windows/actions/runs/32159215212) - the run whose artifacts supplied these weights - and the spread roughly halved.
