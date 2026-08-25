@@ -123,40 +123,46 @@ FM_SESSION_START_DIGEST_WRAPPERS='fm-session-start.sh fm-sessionstart-run.sh fm-
 # whole banner. tests/fm-session-start-hook-nesting.test.sh asserts that same
 # strictness.
 #
-# 4 s ON MSYS/MINGW/CYGWIN IS NOT ESTABLISHED AS SUFFICIENT. Read that before
-# treating it as a headroom figure. It was derived as 26 measured subprocesses x
-# 124.0 ms per creation = 3224 ms, ceiling to whole seconds; the count has since
-# been re-measured and the per-creation cost re-measured on the target, and the
-# two together now CONTRADICT sufficiency:
+# 4 s ON MSYS/MINGW/CYGWIN IS NOT ESTABLISHED AS SUFFICIENT, AND ITS COST INPUT
+# IS NOT ESTABLISHED EITHER. Read that before treating it as a headroom figure.
 #
-#   - The parent-side count is no longer 26. It is derived at test time by
-#     tests/fm-session-start-hook-nesting.test.sh, which builds
-#     tests/fixtures/forkcount.c, validates it against a known-count program, and
-#     counts a real clamped-and-truncated run - so the live number is whatever
-#     that guard reports, not a literal restated here. It measures 39 on the box
-#     that runs this suite and was measured at 40 by a second reviewer, split
-#     about evenly between exec-backed creations and pure subshell forks.
-#   - The per-creation cost on MINGW64_NT-10.0-26200, bash 5.2.37, 22 cores, at
-#     ZERO contention: 46.5 ms for a pure subshell fork and 80.8 ms for a
-#     fork+exec. Applied to that measured mix that is about 2546 ms of parent-side
-#     cost with nothing else running, against a 4000 ms margin.
-#   - The same box's contention curve rises from 30.6 ms per creation idle to
-#     124.0 ms at 12 competitors, a factor of 4.05. Applying that measured factor
-#     to the idle floor puts the contended parent side near 10.3 s, which 4 s does
-#     not cover - and contention is the case the margin exists for.
+# It was derived as 26 measured subprocesses x 124.0 ms per creation = 3224 ms,
+# ceiling to whole seconds. Both halves of that product have since moved:
+#
+#   - The parent-side count is no longer 26 and is no longer written down. It is
+#     derived at test time by tests/fm-session-start-hook-nesting.test.sh, which
+#     builds tests/fixtures/forkcount.c, validates it against a known-count
+#     program, and counts a real clamped-and-truncated run - so the live number is
+#     whatever that guard reports. It measures 39 on the box that runs this suite
+#     and was measured at 40 by a second reviewer, split about evenly between
+#     exec-backed creations and pure subshell forks. That count is Linux, from a
+#     validated instrument, and stands.
+#   - The PER-CREATION COST ON MSYS IS RETRACTED. Figures of 46.5 ms per pure
+#     subshell fork and 80.8 ms per fork+exec were recorded here as an IDLE floor,
+#     and the ~2546 ms and ~10.3 s conclusions were drawn from them. They were not
+#     taken at idle: 21 orphaned competitor processes from two earlier timed-out
+#     measurement runs were still on the box, reparented to PID 1, and were not
+#     noticed until afterwards. Those numbers therefore have NO KNOWN CONTENTION
+#     LEVEL and are not a floor, an upper bound, or a curve point. They are kept
+#     named rather than deleted, the way the retracted 22 and 26 counts are, so
+#     nobody re-derives from them.
+#   - What that leaves: the per-creation cost of this path on MSYS is currently
+#     UNMEASURED, so 4 s is neither shown to be sufficient nor shown to be
+#     insufficient. It is the last derived value and nothing more.
 #   - Pure CPU load was the WRONG model and was discarded: 4 busy-loop burners
 #     made creations FASTER, 25 ms against 30 ms idle, through frequency boost.
 #     The real competitor is a test lane, which contends for PROCESS CREATION,
-#     and MSYS serialises that.
+#     and MSYS serialises that. That methodological finding survives the
+#     retraction because it is about which competitor to use, not about a value.
 #
-# WHERE THAT LEAVES THIS NUMBER. A higher-contention re-measurement is running on
-# the target box, and the margin is to be set from its worst measured point. Until
-# it lands, 4 s is the last derived value and NOT a claim of sufficiency, nothing
-# in this tree asserts that it covers the contended path, and
-# docs/verification/session-start-fork-profile.md records the open contradiction.
-# What the suite does guard is the count not RISING while that is unresolved,
-# because every creation added to the parent side is time this margin already
-# does not have.
+# WHERE THAT LEAVES THIS NUMBER. A clean contention curve is being re-measured on
+# a quiesced box, and the margin is to be set from its worst measured point with
+# the contention level recorded beside it. Until it lands, nothing in this tree
+# asserts that 4 s covers the parent side, and
+# docs/verification/session-start-fork-profile.md records both the retraction and
+# the open question. What the suite does guard is the count not RISING while that
+# is unresolved, because every creation added to the parent side is time this
+# margin may well not have.
 #
 # WHICH PATH THE COUNT IS TAKEN ON, because a first attempt got exactly that
 # wrong. It counted the DEFAULT path, 22 subprocesses, and landed on 3 s. The
@@ -331,8 +337,28 @@ fm_session_start_hook_ceiling() {
     END { if (min > 0) printf "%d\n", min }
   ' "${regs[@]}" 2>/dev/null) || return 1
   case "$min" in ''|*[!0-9]*|0) return 1 ;; esac
-  [ "$min" -gt "$FM_SESSION_START_NESTING_MARGIN" ] || return 1
-  printf '%s\n' "$((min - FM_SESSION_START_NESTING_MARGIN))"
+  if [ "$min" -gt "$FM_SESSION_START_NESTING_MARGIN" ]; then
+    printf '%s\n' "$((min - FM_SESSION_START_NESTING_MARGIN))"
+    return 0
+  fi
+  # A REGISTRATION SMALLER THAN THE MARGIN IS STILL A DEADLINE THAT WAS READ, and
+  # conflating it with "nothing could be read" fails OPEN on the one path this
+  # function exists to close. The unreadable answer sends the caller to the
+  # platform default, which on MSYS is 300 s - so a registration declaring 3 s
+  # would produce a cap of 300 s, three hundred seconds above a kill this shell
+  # successfully read, and both operator messages would say no registration could
+  # be read when one was. So the smallest thing genuinely known is returned
+  # instead: one second under the deadline that was read, which keeps the strict
+  # inequality the margin's portable arm is built on, or 1 s when even that is not
+  # available.
+  #
+  # What this does NOT pretend: at a registration this small the parent's own
+  # prologue and banner cannot fit in the gap on any platform, so the banner may
+  # still be lost. It is returned anyway because it is strictly better than a cap
+  # above the kill, and because a registration this small is a misconfiguration
+  # the nesting suite's floor already refuses for every tracked harness.
+  [ "$min" -gt 1 ] && { printf '%s\n' "$((min - 1))"; return 0; }
+  printf '1\n'
 }
 
 # Does a KILL DEADLINE bind this process?
@@ -696,14 +722,30 @@ fm_session_start_budget_advisory() {  # <requested> <effective> [context] [cap-s
 #                       advice points at restoring them rather than quoting a
 #                       harness deadline this shell never saw.
 #
+# AND THE KILL SECOND IS ONLY STATED AS FACT WHEN A DEADLINE WAS ESTABLISHED.
+# Under `undetermined` the clamp still applies - that is the accepted safe side
+# and does not change - but the library has NOT established that anything kills
+# this run, so the wording must not say the harness "kills this hook after Ns".
+# That path is reachable on shipped tiers: the nudge-tier transports ask the
+# agent to run bin/fm-session-start.sh through its own tool, which has no hook
+# marker and no terminal on fd 2, so it answers `undetermined` - and telling that
+# operator to go raise a Claude, Codex or Cursor registration that is not running
+# is the same misdirection the Pi transport was fixed for. So the context is
+# threaded in the way the advisory already threads it, and on `undetermined` the
+# ceiling is described as the largest bound this run can establish is safe.
+#
 # The cap and the reason both come from fm_session_start_cap, the same owner
 # fm_session_start_resolve_budget clamped with, so the number named here is by
 # construction the number in force.
-fm_session_start_bound_remedy() {  # <effective-budget>
-  local effective=${1:-} cap capvalue capsource
+fm_session_start_bound_remedy() {  # <effective-budget> [context]
+  local effective=${1:-} context=${2:-} cap capvalue capsource
   fm_session_start_bind_margin
   case "$effective" in ''|*[!0-9]*) effective=0 ;; esac
-  if ! cap=$(fm_session_start_cap); then
+  if [ -z "$context" ]; then
+    fm_session_start_bind_context
+    context=$FM_SESSION_START_CONTEXT
+  fi
+  if ! cap=$(fm_session_start_cap "$context"); then
     printf '●  If it truncates again, raise FM_SESSION_START_TIMEOUT and report the slow\n'
     printf '●  stage - a stage that cannot finish inside the bound is a fleet problem, not a\n'
     printf '●  reporting detail.\n'
@@ -713,8 +755,13 @@ fm_session_start_bound_remedy() {  # <effective-budget>
   capsource=${cap##* }
   if [ "$effective" -lt "$capvalue" ]; then
     printf '●  If it truncates again, raise FM_SESSION_START_TIMEOUT - to at most %ss, above\n' "$capvalue"
-    if [ "$capsource" = harness ]; then
+    if [ "$capsource" = harness ] && [ "$context" = binds ]; then
       printf '●  which the harness kills this hook after %ss and prints no banner at all - and\n' \
+        "$((capvalue + FM_SESSION_START_NESTING_MARGIN))"
+    elif [ "$capsource" = harness ]; then
+      printf '●  which this run cannot establish it will survive: nothing here proved a kill\n'
+      printf '●  deadline binds, and the shortest registered session-start timeout in this\n'
+      printf '●  checkout is %ss, so that is the largest bound it is safe to assume - and\n' \
         "$((capvalue + FM_SESSION_START_NESTING_MARGIN))"
     else
       printf '●  which nothing here can bound it, since no harness registration could be read\n'
@@ -724,13 +771,24 @@ fm_session_start_bound_remedy() {  # <effective-budget>
     printf '●  problem, not a reporting detail.\n'
     return 0
   fi
-  if [ "$capsource" = harness ]; then
+  if [ "$capsource" = harness ] && [ "$context" = binds ]; then
     printf '●  FM_SESSION_START_TIMEOUT is ALREADY at the %ss harness ceiling, so raising it\n' "$capvalue"
     printf '●  cannot help: the harness kills this hook after %ss and prints no banner at all.\n' \
       "$((capvalue + FM_SESSION_START_NESTING_MARGIN))"
     printf '●  Raise the SessionStart timeouts in the harness registrations, or fix the stage\n'
     printf '●  named above - a stage that cannot finish inside the bound is a fleet problem,\n'
     printf '●  not a reporting detail.\n'
+    return 0
+  fi
+  if [ "$capsource" = harness ]; then
+    printf '●  FM_SESSION_START_TIMEOUT is ALREADY at the %ss largest bound this run can\n' "$capvalue"
+    printf '●  establish is safe, so raising it cannot help. Nothing here proved a kill\n'
+    printf '●  deadline binds this run, so the shortest registered session-start timeout in\n'
+    printf '●  this checkout, %ss, is what it is held under.\n' \
+      "$((capvalue + FM_SESSION_START_NESTING_MARGIN))"
+    printf '●  If this run really is under a harness that kills it, raise that harness'"'"'s\n'
+    printf '●  SessionStart timeout; otherwise fix the stage named above - a stage that\n'
+    printf '●  cannot finish inside the bound is a fleet problem, not a reporting detail.\n'
     return 0
   fi
   printf '●  FM_SESSION_START_TIMEOUT is ALREADY at the %ss cap this deployment can justify,\n' "$capvalue"

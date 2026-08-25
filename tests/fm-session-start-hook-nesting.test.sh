@@ -422,8 +422,23 @@ PARENT_SIDE_CREATION_FLOOR=25
 #     2 s SessionStart timeout, so the ceiling is 1 s and the whole clamped path
 #     plus the banner really runs in about a second.
 #
-# Prints "<creations> <spawns> <truncated:0|1> <bound>", or returns non-zero when
-# the instrument cannot be built or preloaded on this box.
+# Prints "<creations> <execs> <spawns> <truncated:0|1> <bound>".
+#
+# TWO FAILURE MODES, TWO EXIT STATUSES, and they must never share one. Returning
+# 1 means the instrument CANNOT BE BUILT OR PRELOADED here - no compiler, no
+# working LD_PRELOAD - which is a legitimate skip. Returning 2 means it built and
+# ran and MISCOUNTED the known-count program, which must fail the suite: a wrong
+# instrument is worse than no instrument, because every number downstream of it
+# is silently wrong.
+#
+# The distinction is load-bearing because `fail` cannot be used from inside this
+# function. It is only ever reached through a command substitution, where `fail`'s
+# `exit 1` leaves the subshell rather than the script - so a validation failure
+# raised here would land on the caller's skip branch and be reported as an
+# "ok - SKIPPED" pass, with the script still exiting 0 and the lane green. That
+# is exactly the unfalsifiable-guard shape this repo has shipped before, so the
+# status is distinguished here and the CALLER, which runs outside the
+# substitution, is what fails.
 count_parent_side_creations() {
   local dir so log out creations execs spawns truncated bound
   dir=$(fm_test_tmproot fm-session-start-forkcount) || return 1
@@ -439,8 +454,7 @@ count_parent_side_creations() {
     >/dev/null 2>&1
   [ -s "$log" ] || return 1
   creations=$(grep -c '^FORK' "$log")
-  [ "$creations" -eq 7 ] \
-    || fail "the fork interposer counted ${creations} creations where 7 were asked for, so every number it reports below is untrustworthy"
+  [ "$creations" -eq "${FM_TEST_FORKCOUNT_EXPECT_VALIDATION:-7}" ] || return 2
 
   mkdir -p "$dir/home/state" "$dir/home/data" "$dir/home/config" "$dir/home/projects" \
     "$dir/fakebin" "$dir/root" "$dir/regs/.synthetic"
@@ -482,11 +496,18 @@ FM_TEST_FORKCOUNT_BASE_PATH=${FM_TEST_BASE_PATH:-/usr/bin:/bin:/usr/sbin:/sbin}
 test_the_parent_side_creation_count_has_not_risen() {
   local measured creations execs spawns truncated bound idle_ms
 
-  measured=$(count_parent_side_creations) || {
-    printf 'note: no working LD_PRELOAD fork interposer on this box (no cc, or preloading is unavailable), so the parent-side creation count is UNMEASURED here and this assertion did not run\n' >&2
-    pass "parent-side creation count: SKIPPED - the interposer could not be built or preloaded on this box"
-    return
-  }
+  measured=$(count_parent_side_creations)
+  case $? in
+    0) : ;;
+    # BUILT BUT WRONG. Not a skip: the instrument disagreed with a program whose
+    # creation count is known, so nothing it reports can be trusted.
+    2) fail "the fork interposer disagreed with the known-count program (7 creations asked for), so every number it would report is untrustworthy: fix or rebuild tests/fixtures/forkcount.c rather than skipping the count guard" ;;
+    *)
+      printf 'note: no working LD_PRELOAD fork interposer on this box (no cc, or preloading is unavailable), so the parent-side creation count is UNMEASURED here and this assertion did not run\n' >&2
+      pass "parent-side creation count: SKIPPED - the interposer could not be built or preloaded on this box"
+      return
+      ;;
+  esac
   read -r creations execs spawns truncated bound <<EOF
 $measured
 EOF

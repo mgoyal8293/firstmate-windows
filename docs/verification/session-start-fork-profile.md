@@ -200,7 +200,7 @@ After the cap and hook-context dedups, `fm_session_start_bind_budget` derives th
 Method, and each part of it is load-bearing:
 
 - `LD_PRELOAD` interposer on `fork`, `execve` and `posix_spawn`, one record per call. Process creations are the FORK records plus the SPAWN records; EXEC is exec-after-fork and would double-count every ordinary command. The interposer is committed as [`../../tests/fixtures/forkcount.c`](../../tests/fixtures/forkcount.c) and built at test time.
-- Validated against a known-count program before use: 7 creations asked for, 7 counted. A built-but-miscounting instrument fails the suite rather than skipping.
+- Validated against a known-count program before use: 7 creations asked for, 7 counted. A built-but-miscounting instrument fails the suite rather than skipping - and that is now true rather than merely stated, because the two conditions carry different exit statuses and the caller raises the failure from outside the command substitution that would otherwise swallow it (M26 below).
 - The two sides are separated by ENV INHERITANCE, not by a process tree. The bounded child is launched through `env FM_SESSION_START_STAGE_FILE=...`, so `getenv("FM_SESSION_START_STAGE_FILE")` is the exact discriminator: absent is the parent side the margin owes, present is the bounded child. A ppid walk does NOT work here - the digest detaches its network stage, the subtree reparents, and the walk fragments; tried, and it silently reported 0 child forks against 5743 real ones.
 - The clamp is forced cheaply by pointing `FM_SESSION_START_REGISTRATION_ROOT` at a synthetic root whose SessionStart timeout is 2 s, so the ceiling is 1 s and the whole clamped path plus the truncation banner really runs in about a second.
 
@@ -221,34 +221,45 @@ Both numbers are kept rather than reconciled.
 [`../../tests/fm-session-start-hook-nesting.test.sh`](../../tests/fm-session-start-hook-nesting.test.sh) rebuilds the interposer, revalidates it, reruns the clamped path and recounts, then fails when the count RISES above the highest figure on record.
 That closes the one input on this page that previously had no automated guard: the margin, the ceiling, the floor and the bound handover each had a mutation-proven case, and the count was re-counted by hand and pasted into a literal, so the suite could only catch the margin shrinking and never the count rising into it.
 
-### The per-creation cost on the target, and the contradiction
+### The per-creation cost on the target is RETRACTED
 
-Measured on `MINGW64_NT-10.0-26200`, bash 5.2.37, 22 cores.
+An earlier revision of this section reported per-creation costs on
+`MINGW64_NT-10.0-26200`, bash 5.2.37, 22 cores, presented as an IDLE floor:
 
-At ZERO contention, for the two shapes the parent side actually creates:
-
-| Shape | Per creation |
+| Shape | Per creation, **retracted** |
 |---|---|
 | pure subshell fork | 46.5 ms |
 | fork + exec | 80.8 ms |
 
-Applied to the measured 20/20 mix: 20 x 80.8 + 20 x 46.5 = **2546 ms of parent-side cost with nothing else running**, against a 4000 ms margin.
+and drew from them that the measured 20/20 mix cost about **2546 ms with nothing else running**, and about **10.3 s** once the box's own 4.05x contention factor was applied.
 
-The earlier contention curve on this same box rises from 30.6 ms per creation idle to 124.0 ms at 12 competitors, a factor of 4.05.
-Applying that measured factor to the idle floor puts the contended parent side near **10.3 s**.
+**Those figures were not taken at idle.**
+Twenty-one orphaned competitor processes from two earlier timed-out measurement runs were still on the box, reparented to PID 1, and were not noticed until afterwards.
+The box was therefore under uncontrolled load of unknown size, so the numbers have NO KNOWN CONTENTION LEVEL: they are not a floor, not an upper bound, and not a point on any curve.
 
-So: 4 s does not cover it, and contention is precisely the case the margin exists for.
-Pure CPU load was the WRONG model and was discarded - 4 busy-loop burners made creations FASTER, 25 ms against 30 ms idle, through frequency boost; the real competitor is a test lane, which contends for PROCESS CREATION, and MSYS serialises that.
+They are kept here named rather than deleted, exactly as the retracted 22-subprocess and 26-subprocess counts above are, so that nobody re-derives from them and so the record shows what was believed and why it was wrong.
+
+**What this leaves open.**
+The per-creation cost of this path on MSYS is currently UNMEASURED.
+So 4 s is neither shown to be sufficient nor shown to be insufficient - it is the last derived value and nothing more, and the earlier "4 s does not cover it" conclusion is withdrawn along with the numbers it rested on.
+
+**What survives the retraction, because it was not affected:**
+
+- The parent-side process-creation count: 39 on the box this suite runs on, 40 as measured by a second reviewer, both on Linux with a validated interposer, deterministic across three runs, and identical clamped and unclamped.
+- The finding that the 11 + 6 + 15 = 32 decomposition no longer describes the code.
+- The methodological finding that pure CPU load is the WRONG competitor model: 4 busy-loop burners made creations FASTER, 25 ms against 30 ms idle, through frequency boost, because the real competitor is a test lane contending for PROCESS CREATION, which MSYS serialises. That is a statement about which competitor to use, not a value, so the orphan contamination does not touch it.
 
 ### What happens next, and what must not be claimed meanwhile
 
-A higher-contention re-measurement is running on the target box: 0, 6, 12, 18 and 24 competitors, N=40 per point.
+A clean contention curve is being re-measured on a QUIESCED box: 0, 6, 12, 18 and 24 competitors, N=40 per point, with the process table checked for orphans before each point.
 The margin is to be set from its WORST measured point, recorded with its contention level and method, rather than from a round number or a judgement second.
+It is not ready, and nothing in this round claims it.
 
 Until that lands:
 
 - Nothing in this tree asserts 4 s is sufficient. The suite's margin case guards only that the margin is per platform and real on both arms, and says in its own pass message that sufficiency is not asserted.
-- What IS guarded is the count not rising, because every creation added to the parent side is time this margin already does not have.
+- Nothing in this tree may cite a per-creation cost on MSYS either. That input is now as open as the conclusion drawn from it.
+- What IS guarded is the count not rising, because every creation added to the parent side is time this margin may well not have.
 - The two dedups - `fm_session_start_bind_budget` and `fm_session_start_bind_context`, each holding a derivation that used to run twice in the parent to one - are correctness dependencies of this number rather than performance niceties.
 
 ### One value, read by both the clamp and the banner
@@ -278,7 +289,7 @@ As it stands, **criterion 6 is not satisfied by this document alone.**
 Windows-measured, on `MINGW64_NT-10.0-26200`, bash 5.2.37, 22 cores:
 
 - The per-fork contention curve the margin was derived from: 30.6 ms idle, 44.5 ms at 3 fork-heavy competitors, 61.7 ms at 6, 124.0 ms at 12.
-- The per-creation cost for the two shapes the parent side actually creates, at zero contention: 46.5 ms for a pure subshell fork, 80.8 ms for a fork+exec. This is a NEW measurement taken during the fix rounds, and it is what turned the margin from "derived" into "contradicted under contention".
+- ~~The per-creation cost for the two shapes the parent side actually creates~~ - RETRACTED. Those figures were taken with 21 orphaned competitors still running, so they are not an idle floor and no contention level is known for them. The per-creation cost on MSYS is currently unmeasured; see the retraction section above.
 - The elapsed figures for an empty home, 74 s before the subprocess reductions and 64-70 s after, and the 72 s / 76 s / 123 s runs the raised bound is argued from.
 - The per-stage attribution a truncated startup prints, including the 9.9 s `startup` stage.
 - `fm_session_start_default_budget` and `fm_session_start_resolve_budget` answering `300` / `300` / `45` / `300`.
@@ -457,6 +468,33 @@ With a single total ceiling set at 40 - the higher of the two measurements on re
 The fix was to hold the component the two measurements AGREE on exactly: both counted 20 exec-backed creations, so that is a hard ceiling, and the total keeps the looser one so the guard cannot false-fail on whichever box is right.
 An added external command now fails immediately; an added bash subshell on the 39-count box is still absorbed until it exceeds 40, and that residual is stated rather than papered over.
 
+### Fifth round: the instrument's own validation, the Pi declaration and two wording defects
+
+| # | Guard | Mutation | Suite |
+|---|---|---|---|
+| M26 | a miscounting instrument FAILS rather than skips | the interposer drops two of every three FORK records | hook-nesting |
+| M27 | the Pi extension declares that no deadline binds it | the declaration deleted from the spawn options | pi-sessionstart-deadline |
+| M28 | the remedy names a kill second only where a deadline was established | the `binds` condition dropped from the wording branch | bound |
+| M29 | a registration smaller than the margin still bounds the clamp | that case reports as unreadable again | bound |
+
+```console
+$ # M26
+not ok - the fork interposer disagreed with the known-count program (7 creations asked for), so every number it would report is untrustworthy: fix or rebuild tests/fixtures/forkcount.c rather than skipping the count guard
+$ # M27
+not ok - the Pi extension spawned the session start WITHOUT declaring that no kill deadline binds it, so that digest is clamped by the Claude, Codex and Cursor registrations and told a kill second that does not exist under Pi; the wrapper was handed: FIRSTMATE_OP: v1 session-start: FM_SESSION_START_HOOK_DEADLINE=[<unset>]
+$ # M28
+not ok - the remedy told a run that could not establish any kill deadline that the harness kills it at a specific second, which is the misdirection the Pi transport was fixed for: ●  If it truncates again, raise FM_SESSION_START_TIMEOUT - to at most 359s, above
+$ # M29
+not ok - a registration of 2s was reported as UNREADABLE, so the clamp falls back to the 300s platform default - a bound above a kill this shell actually read
+```
+
+M26 is the one that matters most, because it repairs a guard that could not fail.
+The interposer's self-validation called `fail`, but the function is only ever reached through a command substitution, where `fail`'s `exit 1` leaves the subshell rather than the script - so the non-zero landed on the caller's skip branch and a MISCOUNTING instrument was reported as `ok - SKIPPED`, with the script exiting 0 and the lane green.
+The sentence on this page claiming otherwise was false as written.
+The two conditions now carry different exit statuses: 1 means the instrument cannot be built or preloaded here, which is a real skip, and 2 means it built and miscounted, which the caller turns into a hard failure from outside the substitution.
+
+M28 and M29 were both added with their guards in the same pass, and neither existed before: the first run of M28 against the pre-existing suite stayed GREEN, which is what showed the wording had no coverage at all.
+
 ### What is NOT independently falsifiable, said plainly
 
 **The cap dedup has no guard and cannot have one.**
@@ -465,10 +503,17 @@ There is no observable behaviour to assert, so no mutation of it can be made to 
 Its evidence is the measurement above instead: 13 forks to 9 on the clamped path, taken with the validated interposer.
 That matters here rather than being a performance footnote, because the margin's slack depends on the count and those four process creations are inside the window the margin pays for.
 
-**The margin's SUFFICIENCY has no guard, because it is not currently true.**
-There is no assertion anywhere that 4 s covers the contended parent side, and there must not be one: the measurement above puts that side near 10.3 s at the box's own contention factor.
+**The Pi declaration IS guarded now, and the guard's shape is worth naming.**
+The library honouring a `none` declaration is proven by M24.
+The extension continuing to MAKE that declaration was unguarded for one round: deleting one property from the spawn options returned every Pi session start to being clamped by registrations that are not running, with the whole suite green, because the Pi suites only type-check or copy the file.
+`tests/fm-pi-sessionstart-deadline.test.sh` closes it behaviourally rather than by grepping the source: it loads the real extension module, calls its real default export with a Pi-shaped stub, fires the real session_start handler, and replaces only the spawned wrapper with a recorder that reports the environment it was actually handed.
+A refactor that moves the declaration still passes; a deleted declaration fails.
+What it does NOT cover is Pi itself changing how it invokes the extension, which no test in this repo can observe.
+
+**The margin's SUFFICIENCY has no guard, because it is not currently established either way.**
+There is no assertion anywhere that 4 s covers the contended parent side, and there must not be one: the per-creation cost that would decide it is currently unmeasured on MSYS, the figures that once appeared to settle it are retracted, and a clean re-measurement is outstanding.
 What is guarded instead is the count not rising, which is the input that moves.
-When the higher-contention re-measurement lands and the margin is set from its worst point, a sufficiency assertion becomes possible; until then its absence is the honest state, not an oversight.
+When the re-measurement lands on a quiesced box and the margin is set from its worst point, a sufficiency assertion becomes possible; until then its absence is the honest state, not an oversight.
 
 **The per-arm equality inside the override loop is redundant, not load-bearing.**
 `[ "$got" -eq "$armcap" ]` compares the resolver's answer against a ceiling derived through the same code on the same arm, so it is an identity in the same way the clamped-path invariant below is.

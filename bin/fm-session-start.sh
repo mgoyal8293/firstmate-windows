@@ -353,7 +353,7 @@ if [ -z "${FM_SESSION_START_STAGE_FILE:-}" ]; then
     # The remedy depends on the derived harness ceiling: below it, how far the
     # bound may be raised; already at it, that raising cannot help and the
     # registrations are the knob. bin/fm-session-start-bound-lib.sh owns both.
-    fm_session_start_bound_remedy "$SESSION_START_BUDGET"
+    fm_session_start_bound_remedy "$SESSION_START_BUDGET" "$FM_SESSION_START_CONTEXT"
     fm_session_stage_render "$SESSION_START_STAGE_FILE" "$SESSION_START_BUDGET"
     printf '%s\n' "$BAR"
   fi

@@ -499,6 +499,97 @@ test_the_binder_defines_every_value_it_returns_on_every_path() {
   pass "fm_session_start_bind_budget: every path defines all three return values, so a 'set -u' caller never aborts on one it did not set"
 }
 
+# --- 2f. the banner never states a kill second that was never established -----
+#
+# The clamp under `undetermined` is an accepted decision and is NOT what this
+# covers - it stays. What this covers is the WORDING. On `undetermined` the
+# library has not established that anything kills this run, so the remedy must
+# not print "the harness kills this hook after Ns" as fact.
+#
+# Reachable on shipped tiers: the nudge-tier transports ask the agent to run
+# bin/fm-session-start.sh through its own tool, which has no hook marker and no
+# terminal on fd 2, so it answers `undetermined`. Telling that operator to go
+# raise a Claude, Codex or Cursor registration that is not running is the same
+# misdirection the Pi transport was fixed for.
+test_the_remedy_states_a_kill_second_only_where_a_deadline_was_established() {
+  local cap below at
+  cap=$(fm_session_start_hook_ceiling) \
+    || fail "no harness ceiling could be derived, so there is no wording to check"
+
+  # (a) A deadline IS established: naming the second is correct and must stay.
+  below=$(fm_session_start_bound_remedy $((cap - 1)) binds)
+  case "$below" in
+    *"kills this hook after $((cap + FM_SESSION_START_NESTING_MARGIN))s"*) : ;;
+    *) fail "with a deadline established the remedy must still name the second the harness kills at, got: $below" ;;
+  esac
+
+  # (b) THE GUARD. Nothing established a deadline, so nothing may be stated as
+  # one. The bound is still clamped - that is checked elsewhere - but the text
+  # must not assert a kill.
+  below=$(fm_session_start_bound_remedy $((cap - 1)) undetermined)
+  printf '%s\n' "$below" | grep -q 'kills this hook after' \
+    && fail "the remedy told a run that could not establish any kill deadline that the harness kills it at a specific second, which is the misdirection the Pi transport was fixed for: $below"
+  case "$below" in
+    *'cannot establish'*) : ;;
+    *) fail "the remedy on an unestablished deadline must say so rather than stating one, got: $below" ;;
+  esac
+
+  # And the same at the pinned end, which is the branch an operator reaches after
+  # following the advice once.
+  at=$(fm_session_start_bound_remedy "$cap" undetermined)
+  printf '%s\n' "$at" | grep -q 'kills this hook after' \
+    && fail "the pinned remedy asserted a harness kill second on a run that established no deadline: $at"
+  printf '%s\n' "$at" | grep -q 'Raise the SessionStart timeouts in the harness registrations, or fix' \
+    && fail "the pinned remedy sent a run with no established deadline to edit registrations that may not be running: $at"
+  case "$at" in
+    *'largest bound this run can'*) : ;;
+    *) fail "the pinned remedy on an unestablished deadline must describe the cap as the largest safe assumption, got: $at" ;;
+  esac
+
+  pass "fm_session_start_bound_remedy: names the harness kill second only where a deadline was established, and describes the cap as the largest safe assumption otherwise"
+}
+
+# --- 2g. a registration too small for the margin is not "unreadable" ----------
+#
+# The ceiling used to return the same non-zero for "read a deadline smaller than
+# the margin" as for "could not read anything", and the unreadable path falls
+# back to the PLATFORM DEFAULT - which on MSYS is 300s. So a registration
+# declaring 2s produced a cap of 300s: 298 seconds above a kill this shell had
+# successfully read, which is the silent-no-banner class the clamp exists to
+# remove. Both operator messages also claimed no registration could be read when
+# one had been.
+test_a_registration_smaller_than_the_margin_still_bounds_the_clamp() {
+  local root ceiling windows got
+  root=$(fm_test_tmproot fm-session-start-tiny-registration) \
+    || fail "could not create a temp root"
+  mkdir -p "$root/.synthetic"
+  printf '%s\n' '{"hooks":{"SessionStart":[{"hooks":[{"type":"command","command":"bin/fm-sessionstart-run.sh","timeout":2}]}]}}' \
+    > "$root/.synthetic/hooks.json"
+  windows=$(FM_PLATFORM_UNAME_OVERRIDE=MINGW64_NT-10.0-26200 fm_session_start_default_budget)
+
+  # On the Windows arm the margin is larger than this registration, which is the
+  # case that used to report as unreadable.
+  ceiling=$(FM_PLATFORM_UNAME_OVERRIDE=MINGW64_NT-10.0-26200 \
+    FM_SESSION_START_REGISTRATION_ROOT="$root" fm_session_start_hook_ceiling) \
+    || fail "a registration of 2s was reported as UNREADABLE, so the clamp falls back to the ${windows}s platform default - a bound above a kill this shell actually read"
+
+  # THE GUARD. Whatever is returned must never exceed the deadline that was read.
+  [ "$ceiling" -lt 2 ] \
+    || fail "the ceiling ${ceiling}s is not below the 2s deadline the registration declared: a bound at or above the kill loses the banner outright"
+  [ "$ceiling" -ge 1 ] \
+    || fail "the ceiling ${ceiling}s is not a usable bound"
+
+  # And the clamp really lands there rather than on the platform default.
+  got=$(FM_SESSION_START_UNDER_HOOK=1 FM_PLATFORM_UNAME_OVERRIDE=MINGW64_NT-10.0-26200 \
+    FM_SESSION_START_REGISTRATION_ROOT="$root" fm_session_start_resolve_budget 600)
+  [ "$got" -eq "$ceiling" ] \
+    || fail "an explicit 600s bound resolved to ${got}s against a 2s registration; it must clamp to the ${ceiling}s the library derived, never to the ${windows}s platform default"
+  [ "$got" -lt "$windows" ] \
+    || fail "the clamp landed on the ${windows}s platform default despite a readable 2s registration, which is the fail-open this case exists to catch"
+
+  pass "fm_session_start_hook_ceiling: a registration smaller than the margin still bounds the clamp at ${ceiling}s rather than reporting as unreadable and releasing to the ${windows}s default"
+}
+
 # --- 3. the stage marks must not distort what they measure -------------------
 
 test_stage_mark_spawns_no_subprocess() {
@@ -847,6 +938,8 @@ test_unusable_explicit_bound_falls_back_to_the_platform_default
 test_a_zero_padded_bound_still_produces_a_deadline_that_bites
 test_the_clamp_follows_hook_context_and_undetermined_clamps
 test_a_transport_that_arms_no_deadline_is_honoured_in_full
+test_the_remedy_states_a_kill_second_only_where_a_deadline_was_established
+test_a_registration_smaller_than_the_margin_still_bounds_the_clamp
 test_an_unreadable_registration_set_caps_rather_than_releasing
 test_the_delivery_bound_follows_the_digest_and_not_the_workers_own_context
 test_the_binder_defines_every_value_it_returns_on_every_path
