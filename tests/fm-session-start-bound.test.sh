@@ -641,6 +641,75 @@ test_a_registration_smaller_than_the_margin_still_bounds_the_clamp() {
   pass "fm_session_start_hook_ceiling: a registration smaller than the margin still bounds the clamp at ${ceiling}s rather than reporting as unreadable and releasing to the ${windows}s default"
 }
 
+# --- 2g-ii. the ceiling is monotonic and never reaches the deadline it read ----
+#
+# The deadline a registration declares is a HARD upper bound on anything the
+# library may clamp to, at every value and not only above the margin. An earlier
+# sub-margin arm returned `deadline - 1`, which was larger but broke both
+# properties this case now holds: with a 32 s margin a 32 s registration yielded
+# 31 while a 33 s one yielded 1, so RAISING a registration by one second
+# collapsed the permitted bound, and the band just under the margin was the least
+# conservative part of the whole function.
+#
+# The single documented exception is a 1 s deadline, where the only integer
+# strictly under it is 0 and a bound of 0 means no deadline at all - the
+# silent-no-deadline class this branch exists to close. That input is asserted
+# separately below rather than excluded silently.
+test_the_ceiling_is_monotonic_and_stays_under_the_deadline_it_read() {
+  local plat margin d ceiling prev
+  for plat in MINGW64_NT-10.0-26200 Linux; do
+    margin=$(FM_PLATFORM_UNAME_OVERRIDE="$plat" bash -c \
+      '. "$1"; fm_session_start_bind_margin; printf "%s\n" "$FM_SESSION_START_NESTING_MARGIN"' \
+      _ "$ROOT/bin/fm-session-start-bound-lib.sh") \
+      || fail "the ${plat} nesting margin could not be read"
+
+    # Swept across the margin boundary in both directions, which is where the
+    # discontinuity lived: the arm changes at margin+1.
+    # Sorted and de-duplicated, so the sweep is ascending on BOTH arms: the
+    # portable margin is 1, which would otherwise put margin-1 at 0 and revisit
+    # smaller deadlines after larger ones, failing the monotonicity check on the
+    # ordering rather than on the code.
+    prev=0
+    for d in $(printf '%s\n' 1 2 3 $((margin - 1)) "$margin" $((margin + 1)) \
+                 $((margin + 2)) $((margin * 2)) 360 | awk '$1 >= 1' | sort -n -u); do
+      ceiling=$(FM_PLATFORM_UNAME_OVERRIDE="$plat" bash -c \
+        '. "$1"; fm_session_start_bind_ceiling "$2"; printf "%s\n" "$FM_SESSION_START_CEILING"' \
+        _ "$ROOT/bin/fm-session-start-bound-lib.sh" "$d") \
+        || fail "the ceiling for a ${d}s deadline could not be derived on ${plat}"
+
+      # MONOTONIC: a larger registration must never permit a smaller bound.
+      [ "$ceiling" -ge "$prev" ] \
+        || fail "on ${plat} a ${d}s deadline yields a ${ceiling}s ceiling where a smaller deadline yielded ${prev}s: raising a registration must never collapse the permitted bound"
+
+      # USABLE: 0 would mean no deadline at all, which is the defect this clamp
+      # exists to remove rather than a tighter bound.
+      [ "$ceiling" -ge 1 ] \
+        || fail "on ${plat} a ${d}s deadline yields a ${ceiling}s ceiling, which is not a usable bound"
+
+      # UNDER THE DEADLINE, everywhere it is arithmetically possible.
+      if [ "$d" -gt 1 ]; then
+        [ "$ceiling" -lt "$d" ] \
+          || fail "on ${plat} a ${d}s deadline yields a ${ceiling}s ceiling, at or above a kill the library actually read"
+      else
+        [ "$ceiling" -eq 1 ] \
+          || fail "on ${plat} a 1s deadline must yield the 1s floor, got ${ceiling}s"
+      fi
+      prev=$ceiling
+    done
+  done
+
+  # Anti-vacuity: the sweep must actually cross the margin arm, or every
+  # iteration above is checking the same branch. On the Windows arm the
+  # 360s registration is far above the margin and 2s is far below it.
+  margin=$(FM_PLATFORM_UNAME_OVERRIDE=MINGW64_NT-10.0-26200 bash -c \
+    '. "$1"; fm_session_start_bind_margin; printf "%s\n" "$FM_SESSION_START_NESTING_MARGIN"' \
+    _ "$ROOT/bin/fm-session-start-bound-lib.sh")
+  [ "$margin" -gt 2 ] && [ "$margin" -lt 360 ] \
+    || fail "the ${margin}s Windows margin no longer sits inside the swept range, so this case is not crossing the arm boundary it exists to check"
+
+  pass "fm_session_start_bind_ceiling: monotonic in the deadline and strictly under it on both arms, with 1s the one documented floor"
+}
+
 # --- 2h. no banner may name a kill second past the registration it read -------
 #
 # The ceiling used to be the ONLY thing carried, and both banners rebuilt the
@@ -1060,6 +1129,7 @@ test_a_transport_that_arms_no_deadline_is_honoured_in_full
 test_the_remedy_states_a_kill_second_only_where_a_deadline_was_established
 test_the_advisory_states_a_kill_second_only_where_a_deadline_was_established
 test_a_registration_smaller_than_the_margin_still_bounds_the_clamp
+test_the_ceiling_is_monotonic_and_stays_under_the_deadline_it_read
 test_no_banner_names_a_deadline_past_the_registration_it_read
 test_an_unreadable_registration_set_caps_rather_than_releasing
 test_the_delivery_bound_follows_the_digest_and_not_the_workers_own_context

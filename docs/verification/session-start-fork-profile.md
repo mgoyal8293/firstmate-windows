@@ -351,9 +351,9 @@ Windows-measured, on `MINGW64_NT-10.0-26200`, bash 5.2.37, 22 cores:
 - The elapsed figures for an empty home, 74 s before the subprocess reductions and 64-70 s after, and the 72 s / 76 s / 123 s runs the raised bound is argued from.
 - The per-stage attribution a truncated startup prints, including the 9.9 s `startup` stage.
 - `fm_session_start_default_budget` and `fm_session_start_resolve_budget` answering `300` / `300` / `45` / `300`.
-- **A full, untruncated session start against an empty home at the Windows default bound.** 0 competitors: 57.5 s and 48.0 s. 8 competitors: 240.7 s and 264.0 s. The default budget this branch ships is 300 s, so at 8 fork-heavy competitors on a 22-core box an ordinary empty-home session start consumes 80-88% of its entire budget. It does not truncate; the headroom left is thin, and the original defect was a truncating startup.
-- **The clamped path timed directly across three contention levels**, 9 samples with the truncation banner verified present on every one, giving the 31.20 s worst non-thrashing parent side the 32 s margin rests on.
-- **That the runtime bound is enforced**, 12 of 12, plus `fm_run_timed` returning rc=124 on 5 of 5 against a 2 s bound including a `trap "" TERM` child.
+- **The clamped path timed directly across three contention levels**, 9 samples at 0, 8 and 16 competitors with the truncation banner verified present on every one, giving the 31.20 s worst non-thrashing parent side the 32 s margin rests on.
+- **That the runtime bound is enforced**, 12 of 12, plus `fm_run_timed` returning rc=124 on 5 of 5 against a 2 s bound including against a child that installs `trap "" TERM`, so the `-k` kill path works too.
+- ~~A full, untruncated session start at the Windows default bound: 57.5 s / 48.0 s at 0 competitors, 240.7 s / 264.0 s at 8, 80-88% of the budget consumed~~ - **WITHDRAWN.** Those runs came from the same harness whose bound-enforcement anomaly was retracted as an artifact, so they are not trustworthy and must not be cited. They are named here rather than deleted so nobody resurrects them.
 
 NOT yet exercised on MINGW64, and this is the outstanding step:
 
@@ -363,8 +363,9 @@ NOT yet exercised on MINGW64, and this is the outstanding step:
 - `fm_session_start_bind_budget` and `fm_session_start_bind_context`, which assign rather than print, and the two-argument `fm_session_start_resolve_budget`.
 - The `FM_SESSION_START_RESOLVED_BOUND` handover that `bin/fm-startup-network.sh`'s `delivery_budget` now depends on.
 - The parent-side creation count. It is derived at test time on Linux and the count is portable, but it has not been re-confirmed on the target, and the interposer's `LD_PRELOAD` mechanism is not available under MSYS - the guard skips there with an explicit message rather than passing silently.
+- **A clean full-startup-to-completion timing under contention.** The figures that once stood here are withdrawn above, and no replacement was taken. This is why the headroom of the 300 s default against a contended, populated home is an open question rather than a measured result - see the provenance in [`../../bin/fm-session-start-bound-lib.sh`](../../bin/fm-session-start-bound-lib.sh).
 
-Criterion 6 is therefore PARTLY discharged by real execution rather than still wholly owed: the full-startup elapsed figures, the direct clamped parent-side timing and the enforcement anomaly were all run on the box against the current shape.
+Criterion 6 is therefore PARTLY discharged by real execution rather than still wholly owed: the direct 9-sample clamped parent-side sweep, the 12-of-12 bound-enforcement result, the direct `fm_run_timed` check and the clean per-creation contention sweeps were all run on the box against the current shape.
 What is listed above as not yet exercised there is still not exercised there, and the claim is not upgraded past what was actually run.
 
 Why the rest is not in this document: this pipeline runs on Linux, and the worker that would run the probe cannot read the pipeline-owned commits, so the remaining Windows behaviour runs have to happen against the pushed branch instead.
@@ -628,6 +629,35 @@ A first attempt at this mutation forced `return 1` directly and stayed green, co
 Removing the two dead `fm_session_start_bind_margin` calls deletes a no-op side effect; dropping `0` from the missing-deadline case removes a re-derivation whose result was never printed; and the verification-page rewrite is prose.
 None of them changes any output, so none can be falsified by a test, and inventing a guard for them would be exactly the coverage-shaped-nothing this criterion exists to catch.
 What protects them is that the behaviour they touch is already guarded: the sentinel path is covered by the `default`-arm cases, and the margin's single-consumer property by M8.
+
+### Ninth round: the ceiling must be monotonic and stay under what it read
+
+| # | Guard | Mutation | Suite |
+|---|---|---|---|
+| M34 | the ceiling is monotonic in the deadline | the non-monotonic `deadline - 1` sub-margin arm restored | bound |
+| M35 | the ceiling is always a usable bound | the floor at 1 removed | bound |
+
+```console
+$ # M34
+not ok - on MINGW64_NT-10.0-26200 a 33s deadline yields a 1s ceiling where a smaller deadline yielded 31s: raising a registration must never collapse the permitted bound
+$ # M35
+not ok - the ceiling -30s is not a usable bound
+```
+
+The deadline a registration declares is a hard upper bound on anything the library may clamp to, at every value rather than only above the margin.
+`fm_session_start_bind_ceiling` is now one expression - the deadline minus the margin, floored at 1 - which is monotonic by construction and strictly under the deadline everywhere it is arithmetically possible.
+
+**The one input where it is not possible, stated rather than glossed.**
+At a 1 s deadline the ceiling is also 1 s, because the only integer strictly under 1 is 0 and a bound of 0 means no deadline at all - the silent-no-deadline class this branch exists to close, and the same class the zero-padded-bound rejection refuses.
+So the equal-deadline race is unavoidable there and the banner may be lost.
+The guard asserts that case explicitly rather than excluding it from the sweep.
+
+The new shape is also more conservative than the one it replaces: across the whole sub-margin band it returns 1 rather than `deadline - 1`.
+That is the safe direction, and it removes what was the least conservative part of the function.
+
+**The remedy's cap handover has no independent mutation, and that is stated rather than dressed up.**
+Passing `FM_SESSION_START_CAP` into `fm_session_start_bound_remedy` instead of letting it re-derive removes a command substitution, a glob and an awk from the post-kill banner window; both derivations read the same registrations in the same shell, so no output changes and nothing can be falsified by a test.
+What covers it is that the derived-here path is unchanged and still exercised: the existing remedy cases pass no cap spec at all.
 
 ### What is NOT independently falsifiable, said plainly
 

@@ -58,7 +58,14 @@ On a Windows 11 box under Git Bash, on a home with no tasks, no projects and an 
 One run of that same empty home with a test lane competing for CPU took 123 s and truncated; because it truncated, 123 s is a lower bound on what that run needed rather than what it would have taken.
 
 So the default bound is now per platform: 120 s as before, and 300 s under MSYS, MINGW and Cygwin.
-[`../bin/fm-session-start-bound-lib.sh`](../bin/fm-session-start-bound-lib.sh) is the one owner of that resolution and records the reasoning behind the number, which is a margin over a censored observation and not a measured maximum.
+[`../bin/fm-session-start-bound-lib.sh`](../bin/fm-session-start-bound-lib.sh) is the one owner of that resolution and records the reasoning behind the number.
+
+**What 300 s is not justified by, since an earlier version of this page implied otherwise.**
+It is a conservative raise from 120 s, and the observations above are the whole case for raising it.
+They do not establish that 300 s is ENOUGH: this branch has since measured a load factor of about 5x on the parent side alone - 2.06 s idle, 10.3 s mean at 8 fork-heavy competitors, 24.1 s mean at 16 - and a 5x factor does not fit inside the 3.9x headroom 300 s has over the 76 s idle floor.
+There is no clean full-startup-to-completion timing under contention on the current tree, and a populated home does strictly more work than the empty one every number above came from.
+So the headroom of 300 s against a contended, populated home is an open question, not a measured result.
+What protects that case is the truncation path rather than the bound: the bound bites, the banner prints, and the stage that did not finish is named - and the nesting margin below is what keeps that banner from being lost.
 An explicit `FM_SESSION_START_TIMEOUT` still wins on every platform, including a value below the raised default; an unusable one falls back to the platform default rather than to a portable constant, because a zero bound disables the deadline outright.
 Unusable means NUMERICALLY zero, not the character `0`: `timeout 00 sleep 2` exits 0 after the full two seconds rather than 124, so a zero-padded bound leaves the digest with no deadline at all and a wedged startup never truncates and never prints a banner - the same silent non-supervision the bound exists to remove.
 The one thing it does not win against is the harness: a value above the shortest registered session-start hook timeout is CLAMPED just under it, and the digest says so by name, because above that line the harness kills the hook outright and prints none of the banner - which is what the truncation banner's own "raise `FM_SESSION_START_TIMEOUT`" advice used to invite.

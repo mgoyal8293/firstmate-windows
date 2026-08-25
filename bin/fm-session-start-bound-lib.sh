@@ -68,22 +68,41 @@ fi
 # the same reason: it is the only way the Windows arm gets regression coverage
 # from a POSIX runner, and this arm would otherwise be verified on no CI at all.
 #
-# 300 s on MSYS/MINGW/Cygwin is a margin over measurement, and the measurement is
-# censored, so the reasoning is recorded here rather than left as a round number.
-# Observed on a Windows 11 box under Git Bash, on a home with no tasks, no
-# projects and an absent backlog - the floor, with nothing to reconcile and
-# nothing to sync: 72 s and 76 s to complete, already 60% of the old 120 s bound
-# before any real work exists in the home. One run of that same empty home with a
-# test lane competing for CPU took 123 s and TRUNCATED - and because it truncated,
-# 123 s is a lower bound on what that run needed, not what it would have taken.
-# So the load factor is at least 1.7x, its true value is unknown, and a populated
-# home does strictly more work than the empty one that produced every number
-# above. 300 s is 3.9x the worst observed idle floor and at least 2.4x the one
-# observed over-budget run, which leaves the observed load factor room to compound
-# with a populated home while still bounding a genuinely wedged startup to five
-# minutes rather than forever. It is a margin over a censored observation, not a
-# measured maximum, and raising the bound does not make the subprocess count that
-# forced it acceptable.
+# 300 s ON MSYS/MINGW/CYGWIN IS A CONSERVATIVE RAISE FROM 120 s, and what it is
+# and is not justified by is recorded here rather than left as a round number.
+#
+# WHY 120 s WAS TOO SMALL - the original observations, which stand unretracted.
+# On a Windows 11 box under Git Bash, on a home with no tasks, no projects and an
+# absent backlog - the floor, with nothing to reconcile and nothing to sync:
+# 72 s and 76 s to complete, already 60% of the old 120 s bound before any real
+# work exists in the home. One run of that same empty home with a test lane
+# competing for CPU took 123 s and TRUNCATED, and because it truncated 123 s is a
+# lower bound on what that run needed rather than what it would have taken.
+# That is the whole case for raising the bound, and it is sound.
+#
+# WHAT THE RAISE IS NOT JUSTIFIED BY, stated because an earlier version of this
+# comment claimed it. It used to reason that 300 s is 3.9x the worst observed
+# idle floor and at least 2.4x the truncated run, "which leaves the observed load
+# factor room to compound with a populated home". THAT REASONING IS WITHDRAWN.
+# This branch has since measured a load factor of about 5x on the parent side
+# alone - 2.06 s idle, 10.3 s mean at 8 fork-heavy competitors, 24.1 s mean at 16,
+# from the 9-sample sweep in docs/verification/session-start-fork-profile.md.
+# A 5x load factor does not comfortably compound inside a 3.9x headroom, so the
+# sentence asserted headroom the measurements do not support.
+#
+# SO THE HONEST POSITION: the headroom of 300 s against a CONTENDED, POPULATED
+# home is NOT established by measurement. There is no clean full-startup-to-
+# completion timing under contention on the current tree; figures that once
+# appeared to supply one came from the same harness whose bound-enforcement
+# anomaly was retracted as an artifact, so they are withdrawn and must not be
+# cited. A populated home also does strictly more work than the empty one that
+# produced every number above.
+#
+# What protects the case where 300 s is NOT enough is not this number at all - it
+# is the truncation path: the bound bites, the banner prints, and the stage that
+# did not finish is named. The nesting margin below is what keeps that banner
+# from being lost, and that is the property this port actually establishes.
+# Raising the bound does not make the subprocess count that forced it acceptable.
 fm_session_start_default_budget() {
   case "${FM_PLATFORM_UNAME_OVERRIDE:-$FM_SESSION_START_PLATFORM}" in
     MINGW*|MSYS*|CYGWIN*) printf '300\n' ;;
@@ -349,26 +368,35 @@ fm_session_start_hook_deadline() {
 # ceiling exists to close. The unreadable answer sends the caller to the platform
 # default, which on MSYS is 300 s - so a registration declaring 2 s would produce
 # a cap of 300 s, observed on the Windows box: two hundred and ninety-eight
-# seconds above a kill this shell successfully read. So the smallest thing
-# genuinely known is used instead: one second under the deadline that was read,
-# which keeps the strict inequality the margin's portable arm is built on, or 1 s
-# when even that is not available.
+# seconds above a kill this shell successfully read.
+#
+# SO THE DEADLINE THAT WAS READ IS A HARD UPPER BOUND, and the whole function is
+# one expression: the ceiling is the deadline minus the margin, floored at 1.
+# That floor is what keeps it MONOTONIC. An earlier shape returned `deadline - 1`
+# in the sub-margin band, which was larger but not monotonic: with a 32 s margin a
+# 32 s registration yielded 31 while a 33 s one yielded 1, so RAISING a
+# registration by a second collapsed the permitted bound. The band just under the
+# margin was also the least conservative part of the function, which is exactly
+# backwards. Flooring instead gives 1 across that whole band, which is smaller
+# but never inverts and never exceeds what was read.
+#
+# THE ONE INPUT WHERE THIS CANNOT HOLD, stated rather than glossed: at a deadline
+# of 1 s the ceiling is also 1 s, because the only integer strictly under 1 is 0
+# and a bound of 0 means NO DEADLINE AT ALL - the silent-no-deadline class this
+# whole branch exists to close, and the same class the zero-padded-bound rejection
+# refuses. So at 1 s the equal-deadline race is unavoidable and the banner may be
+# lost. Every other deadline gets a ceiling strictly under it.
 #
 # What this does NOT pretend: at a registration this small the parent's own
 # prologue and banner cannot fit in the gap on any platform, so the banner may
-# still be lost. It is used anyway because it is strictly better than a cap above
-# the kill, and because a registration this small is a misconfiguration the
-# nesting suite's floor already refuses for every tracked harness.
+# still be lost there too. It is used anyway because it is strictly better than a
+# cap above the kill, and because a registration this small is a misconfiguration
+# the nesting suite's floor already refuses for every tracked harness.
 fm_session_start_bind_ceiling() {  # <deadline-seconds>
   local deadline=${1:-0}
   fm_session_start_bind_margin
-  if [ "$deadline" -gt "$FM_SESSION_START_NESTING_MARGIN" ]; then
-    FM_SESSION_START_CEILING=$((deadline - FM_SESSION_START_NESTING_MARGIN))
-  elif [ "$deadline" -gt 1 ]; then
-    FM_SESSION_START_CEILING=$((deadline - 1))
-  else
-    FM_SESSION_START_CEILING=1
-  fi
+  FM_SESSION_START_CEILING=$((deadline - FM_SESSION_START_NESTING_MARGIN))
+  [ "$FM_SESSION_START_CEILING" -ge 1 ] || FM_SESSION_START_CEILING=1
 }
 
 # The printing form, for callers that want only the ceiling.
@@ -795,14 +823,30 @@ fm_session_start_budget_advisory() {  # <requested> <effective> [context] [cap-s
 # The cap and the reason both come from fm_session_start_cap, the same owner
 # fm_session_start_resolve_budget clamped with, so the number named here is by
 # construction the number in force.
-fm_session_start_bound_remedy() {  # <effective-budget> [context]
-  local effective=${1:-} context=${2:-} cap capvalue capsource capdeadline caprest
+#
+# THE CAP MAY BE HANDED IN, exactly as the advisory takes it, and on the
+# truncation path it always is. Deriving it again here would cost a command
+# substitution, the registration glob and an awk over every registration JSON -
+# inside the POST-KILL BANNER, which is half of what the nesting margin is
+# derived to cover. bin/fm-session-start.sh already holds the spec in
+# FM_SESSION_START_CAP, assigned unconditionally by fm_session_start_bind_budget,
+# so it passes that rather than paying for it twice. An empty third argument
+# still means "derive it here", which is what the default path leaves behind.
+fm_session_start_bound_remedy() {  # <effective-budget> [context] [cap-spec]
+  local effective=${1:-} context=${2:-} cap=${3:-} capvalue capsource capdeadline caprest
   case "$effective" in ''|*[!0-9]*) effective=0 ;; esac
   if [ -z "$context" ]; then
     fm_session_start_bind_context
     context=$FM_SESSION_START_CONTEXT
   fi
-  if ! cap=$(fm_session_start_cap "$context"); then
+  if [ "$cap" = none ]; then
+    cap=""
+  elif [ -n "$cap" ]; then
+    :
+  elif ! cap=$(fm_session_start_cap "$context"); then
+    cap=""
+  fi
+  if [ -z "$cap" ]; then
     printf '●  If it truncates again, raise FM_SESSION_START_TIMEOUT and report the slow\n'
     printf '●  stage - a stage that cannot finish inside the bound is a fleet problem, not a\n'
     printf '●  reporting detail.\n'
