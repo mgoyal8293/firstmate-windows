@@ -101,8 +101,18 @@ const sessionstartTruncatedMarker =
 
 function runSessionstartHook(source: string): Promise<string> {
   return new Promise((resolveResult) => {
+    // This spawn arms NO deadline: no timeout option, no AbortSignal, no
+    // setTimeout, no child.kill. The only truncation below is byte-based at
+    // sessionstartDeliveryBytes and resolution is on `close`, so nothing here
+    // ends the digest on a clock. bin/fm-session-start-bound-lib.sh clamps the
+    // startup bound under the shortest REGISTERED hook timeout, which for a Pi
+    // session would come entirely from Claude, Codex and Cursor registrations
+    // that are not running - taking bound away for a kill that cannot happen and
+    // printing a remedy pointing at registrations that would not buy a second.
+    // This declaration is the fact, stated by the file that owns the spawn.
     const child = spawn(`${root}/bin/fm-sessionstart-run.sh`, ["--source", source], {
       stdio: ["ignore", "pipe", "ignore"],
+      env: { ...process.env, FM_SESSION_START_HOOK_DEADLINE: "none" },
     });
     const chunks: Buffer[] = [];
     let retainedBytes = 0;

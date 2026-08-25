@@ -135,10 +135,10 @@ test_non_windows_platforms_keep_the_portable_bound() {
 
 # --- a real terminal, for the one branch that is defined by having one --------
 #
-# fm_session_start_hook_context answers `direct` on `[ -t 2 ]`, so the only
-# honest way to cover that branch is to give it a terminal. An env flag standing
-# in for the predicate would test the flag and leave the predicate unproven,
-# which is how a branch ships unexercised.
+# fm_session_start_hook_context answers `none` on `[ -t 2 ]`, so the only honest
+# way to cover that branch is to give it a terminal. An env flag standing in for
+# the predicate would test the flag and leave the predicate unproven, which is
+# how a branch ships unexercised.
 #
 # `script -qec` is the portable pty allocator here; the case that uses it skips
 # with a printed note when it is absent rather than passing quietly.
@@ -250,8 +250,8 @@ test_the_clamp_follows_hook_context_and_undetermined_clamps() {
 
   # (a) POSITIVELY under a hook: the marker bin/fm-sessionstart-run.sh exports.
   ctx=$(FM_SESSION_START_UNDER_HOOK=1 fm_session_start_hook_context)
-  [ "$ctx" = hook ] \
-    || fail "the wrapper's marker must positively establish hook context, got '$ctx'"
+  [ "$ctx" = binds ] \
+    || fail "the wrapper's marker must positively establish that a deadline binds, got '$ctx'"
   got=$(FM_SESSION_START_UNDER_HOOK=1 FM_PLATFORM_UNAME_OVERRIDE=MINGW64_NT-10.0 \
     fm_session_start_resolve_budget "$((cap * 10))")
   [ "$got" -eq "$cap" ] \
@@ -277,8 +277,8 @@ test_the_clamp_follows_hook_context_and_undetermined_clamps() {
   # than with an env flag, so the real `[ -t 2 ]` predicate is what answers.
   if fm_test_have_pty; then
     ctx=$(fm_test_on_pty 'fm_session_start_hook_context')
-    [ "$ctx" = direct ] \
-      || fail "with a terminal on stderr and no hook marker the context must be 'direct', got '$ctx'"
+    [ "$ctx" = none ] \
+      || fail "with a terminal on stderr and no hook marker nothing kills this run on a clock, so the context must be 'none', got '$ctx'"
     got=$(fm_test_on_pty "FM_PLATFORM_UNAME_OVERRIDE=MINGW64_NT-10.0 fm_session_start_resolve_budget $((cap * 10))")
     [ "$got" -eq "$((cap * 10))" ] \
       || fail "a positively established direct run must be honoured IN FULL ($((cap * 10))s), got ${got}s: the operator's own rerun is the remedy the truncation banner prescribes and nothing kills it at the hook timeout"
@@ -286,6 +286,65 @@ test_the_clamp_follows_hook_context_and_undetermined_clamps() {
     printf 'note: no pty allocator (script/python3) on this box, so the direct-run branch is unverified here\n' >&2
   fi
   pass "fm_session_start_resolve_budget: clamps under a hook AND when hook context is undetermined, and honours a positively established direct run in full"
+}
+
+# --- 2b-ii. a transport that arms no deadline is not clamped by someone else's -
+#
+# The clamp exists because something kills this process at a deadline. That
+# premise is per TRANSPORT, not per "is this a hook", and the Pi run tier is
+# where the two came apart: .pi/extensions/fm-primary-turnend-guard.ts spawns
+# bin/fm-sessionstart-run.sh with no timeout option, no AbortSignal, no
+# setTimeout and no child.kill - it truncates on BYTES at 512 KiB and resolves on
+# `close`. Nothing ends a Pi session start on a clock.
+#
+# Under the old predicate that run answered "hook", was clamped to a ceiling
+# derived entirely from the Claude, Codex and Cursor registrations, and was told
+# a kill second that does not exist there - with a remedy pointing at
+# registrations that would not have bought it one second.
+#
+# The declaration is what is exercised here, through the same env variable the
+# extension sets at its own spawn site.
+test_a_transport_that_arms_no_deadline_is_honoured_in_full() {
+  local cap raised got remedy advisory
+  cap=$(fm_session_start_hook_ceiling) \
+    || fail "no harness ceiling could be derived, so there is no clamp for this case to be exempt from"
+  raised=$((cap * 2))
+
+  # THE GUARD. A transport that positively declares no deadline gets the bound it
+  # asked for, even though the marker says it is a hook and other harnesses have
+  # registered timeouts.
+  got=$(FM_SESSION_START_UNDER_HOOK=1 FM_SESSION_START_HOOK_DEADLINE=none \
+    fm_session_start_resolve_budget "$raised" 2>/dev/null)
+  [ "$got" -eq "$raised" ] \
+    || fail "a transport that arms no deadline was clamped from ${raised}s to ${got}s by a ceiling derived from registrations belonging to harnesses that are not running"
+
+  # And the same run WITHOUT the declaration must clamp, or the case above proves
+  # nothing about the declaration.
+  got=$(FM_SESSION_START_UNDER_HOOK=1 fm_session_start_resolve_budget "$raised" 2>/dev/null)
+  [ "$got" -eq "$cap" ] \
+    || fail "without the no-deadline declaration the same bound was expected to clamp to ${cap}s, got ${got}s, so this case is not exercising the exemption"
+
+  # The remedy must not name a ceiling the running transport does not enforce.
+  # Telling a Pi operator to raise Claude's registration is worse than silence:
+  # it spends their next move on an edit that cannot help.
+  remedy=$(FM_SESSION_START_UNDER_HOOK=1 FM_SESSION_START_HOOK_DEADLINE=none \
+    fm_session_start_bound_remedy "$raised" 2>/dev/null)
+  case "$remedy" in
+    *"at most ${cap}s"*|*"harness ceiling"*|*'SessionStart timeouts in the harness registrations'*)
+      fail "the truncation remedy quoted a harness ceiling to a transport that arms no deadline, so it points the operator at registrations that cannot buy it a second: $remedy" ;;
+  esac
+  case "$remedy" in
+    *'raise FM_SESSION_START_TIMEOUT'*) : ;;
+    *) fail "a run nothing kills on a clock must still be told it can raise its own bound, got: $remedy" ;;
+  esac
+
+  # And no clamp advisory, because nothing was clamped.
+  advisory=$(FM_SESSION_START_UNDER_HOOK=1 FM_SESSION_START_HOOK_DEADLINE=none \
+    fm_session_start_budget_advisory "$raised" "$raised" 2>/dev/null)
+  [ -z "$advisory" ] \
+    || fail "an unclamped run produced a clamp advisory: $advisory"
+
+  pass "fm_session_start_resolve_budget: a transport declaring no kill deadline keeps its full ${raised}s bound and is never pointed at another harness's registrations"
 }
 
 # --- 2c. an unreadable registration set caps too, it does not release --------
@@ -348,7 +407,7 @@ test_an_unreadable_registration_set_caps_rather_than_releasing() {
   # The clamp is real, so it is announced; the second it would be killed at is
   # not known here, so no number is invented for it.
   out=$(FM_SESSION_START_REGISTRATION_ROOT="$empty" FM_PLATFORM_UNAME_OVERRIDE=MINGW64_NT-10.0 \
-    fm_session_start_budget_advisory "$((windows * 10))" "$windows" hook)
+    fm_session_start_budget_advisory "$((windows * 10))" "$windows" binds)
   assert_contains "$out" 'CLAMPED' \
     'a bound clamped by the platform default is still a clamp and must say so'
   printf '%s\n' "$out" | grep -q 'killed by the harness after' \
@@ -761,8 +820,13 @@ test_every_stage_prints_its_header_before_the_stage_runs() {
     '^(MISSING: |\(silent - all good\)$)' bootstrap
   assert_header_precedes_body "$out" '^WAKE QUEUE$' \
     '^(\(no queued wakes\)$|WAKE_|inactive outcome reconciliation:|skipped \(read-only session\))' wake-queue
-  assert_header_precedes_body "$out" '^SUPERVISION INSTRUCTIONS$' \
-    '^SUPERVISION OPERATING INSTRUCTIONS' supervision-instructions
+  # This stage announces itself from its own body rather than through a
+  # subsection header: bin/fm-supervision-instructions.sh prints the line below
+  # as its first output, so a header above it would be the same name twice with
+  # only a rule between them. The stage MARK is independent of the printed line,
+  # so a truncation inside this stage still names it.
+  assert_header_precedes_body "$out" '^SUPERVISION OPERATING INSTRUCTIONS' \
+    '^Current state:$' supervision-instructions
   assert_header_precedes_body "$out" '^READ-ONCE CONTRACT$' \
     '^Do NOT re-read any of them' read-once
   assert_header_precedes_body "$out" '^FLEET STATE$' \
@@ -782,6 +846,7 @@ test_explicit_timeout_wins_on_every_platform
 test_unusable_explicit_bound_falls_back_to_the_platform_default
 test_a_zero_padded_bound_still_produces_a_deadline_that_bites
 test_the_clamp_follows_hook_context_and_undetermined_clamps
+test_a_transport_that_arms_no_deadline_is_honoured_in_full
 test_an_unreadable_registration_set_caps_rather_than_releasing
 test_the_delivery_bound_follows_the_digest_and_not_the_workers_own_context
 test_the_binder_defines_every_value_it_returns_on_every_path

@@ -313,7 +313,7 @@ test_a_clamp_says_so_on_the_digest() {
   local harness cap out
   harness=$(min_registered_digest_timeout) || fail "no digest-tier timeout could be read"
   cap=$(fm_session_start_hook_ceiling) || fail "no cap could be derived"
-  out=$(fm_session_start_budget_advisory "$((harness * 10))" "$cap" hook)
+  out=$(fm_session_start_budget_advisory "$((harness * 10))" "$cap" binds)
   case "$out" in
     *"$((harness * 10))"*) : ;;
     *) fail "the clamp advisory must name the value that was requested, got: $out" ;;
@@ -328,9 +328,9 @@ test_a_clamp_says_so_on_the_digest() {
   esac
   # And it stays quiet when nothing was clamped, so the digest does not carry a
   # warning about a bound that is in force exactly as asked.
-  out=$(fm_session_start_budget_advisory 45 45 hook)
+  out=$(fm_session_start_budget_advisory 45 45 binds)
   [ -z "$out" ] || fail "an unclamped bound must produce no advisory, got: $out"
-  out=$(fm_session_start_budget_advisory '' 300 hook)
+  out=$(fm_session_start_budget_advisory '' 300 binds)
   [ -z "$out" ] || fail "an unset FM_SESSION_START_TIMEOUT must produce no advisory, got: $out"
   pass "hook nesting: a clamped bound names the requested value, the cap applied and why, and an unclamped one stays silent"
 }
@@ -348,39 +348,28 @@ test_a_clamp_says_so_on_the_digest() {
 # them, raise FM_SESSION_START_TIMEOUT to the printed ceiling, still loses the
 # banner on MSYS.
 #
-# The measured pattern is 26 subprocesses at a worst measured 124.0 ms per fork
-# under contention on the target box; bin/fm-session-start-bound-lib.sh and
-# docs/verification/session-start-fork-profile.md record how both numbers were
-# taken. This suite holds the library's Windows arm to covering that product.
+# THE COUNT IS DERIVED AT TEST TIME, NOT WRITTEN DOWN. It used to be a literal,
+# which made this guard one-directional: it could fail when the MARGIN shrank and
+# never when the COUNT rose into it, and the count is the input that actually
+# moves. Every other input here - the margin, the ceiling, the floor, the bound
+# handover - has a mutation-proven case; this one was re-counted by hand each
+# round and pasted in.
 #
-# The count is the CLAMPED path, not the default one, and that distinction is the
-# whole point of the number. The default Windows bound is 300 s against a ceiling
-# in the 350s, so the default path can never reach the ceiling; the only bound
-# that ever equals it is a clamped one, which additionally runs the pre-fork cap
-# derivation. An earlier version of this constant was 22 - the default path - and
-# it was too small for the path the margin actually owes.
-#
-# THE CONSTANT IS THE WORST COUNT ON RECORD, NOT THE ONE THE MARGIN WAS DERIVED
-# FROM. The margin was derived from 26; an independent re-measurement of the same
-# path with the same interposer came out at 31, and 32 was argued for. All of them
-# ceiling to the same 4 s, so the margin does not turn on which is right - but a
-# guard that assumed the smallest would pass a margin that the largest does not
-# cover, so it is held to the largest. That leaves this assertion with only 32 ms
-# of headroom, which is the honest state of it: it is a guard against the margin
-# shrinking, not evidence that 4 s is roomy.
-#
-# THE WINDOWS ARM IS DRIVEN BY SOURCING THE LIBRARY UNDER THE PLATFORM OVERRIDE,
-# not by reading its text: the margin is resolved when the file is sourced, so a
-# fresh shell with FM_PLATFORM_UNAME_OVERRIDE set is what a Git Bash session
-# actually does, and every number below comes from running the real functions
-# there.
-MEASURED_CLAMPED_PATH_SUBPROCESSES=32
-MEASURED_WORST_FORK_MS=124
-
+# WHAT IS NOT ASSERTED, and this is the important part. This suite does NOT claim
+# the margin is sufficient. The measured parent-side cost on the target box is
+# 20 exec-backed creations at 80.8 ms and 20 pure subshell forks at 46.5 ms =
+# 2546 ms AT IDLE against a 4000 ms margin, and the same box's contention curve
+# rises 30.6 ms -> 124.0 ms per creation between 0 and 12 competitors, a 4.05x
+# factor that puts the contended parent side near 10.3 s. The margin does not
+# cover that, a higher-contention re-measurement is still running, and
+# docs/verification/session-start-fork-profile.md records the open contradiction.
+# So what is guarded here is the count NOT RISING while that is unresolved -
+# every creation added to the parent side is time the margin already does not
+# have.
 # Run <snippet> with bin/fm-session-start-bound-lib.sh sourced in a fresh shell
-# that resolves its platform arms as <uname>, under a positively established hook
-# context. A fresh shell rather than a subshell, because the margin is resolved
-# when the file is sourced and the override has to be in place before that.
+# that resolves its platform arms as <uname>, under a positively established kill
+# deadline. A fresh shell rather than a subshell so the override is in place
+# before the library is sourced, which is what a Git Bash session does.
 on_platform() {  # <uname-s> <shell-snippet>
   FM_PLATFORM_UNAME_OVERRIDE="$1" FM_SESSION_START_UNDER_HOOK=1 \
     bash -c '. "$1"; eval "$2"' _ "$ROOT/bin/fm-session-start-bound-lib.sh" "$2"
@@ -391,27 +380,167 @@ on_platform() {  # <uname-s> <shell-snippet>
 # shellcheck disable=SC2016
 READ_MARGIN='printf "%s\n" "$FM_SESSION_START_NESTING_MARGIN"'
 
-test_the_nesting_margin_covers_the_windows_clamped_path() {
-  local margin portable owed
+MEASURED_EXEC_BACKED_PER_CREATION_MS=80
+MEASURED_SUBSHELL_PER_CREATION_MS=46
+
+# The parent-side ceilings, and why there are two of them.
+#
+# Two measurements of the same path with the same method disagree by one: this box
+# counts 39 (20 exec-backed, 19 pure subshell forks, deterministic across three
+# runs), and the reviewer counted 40 (20 exec-backed, 20 pure) on theirs. The
+# EXEC-BACKED halves match exactly, so both measured the same path and the spread
+# is one bash subshell.
+#
+# A single total ceiling at the higher figure would therefore absorb one added
+# creation on the box that measures 39 - which is the whole direction this guard
+# exists to catch. So the component the two measurements AGREE on is held exactly,
+# and the total is held at the higher figure so the guard cannot false-fail on
+# whichever box is right. An added external command fails the first; an added
+# subshell beyond the known spread fails the second.
+PARENT_SIDE_EXEC_BACKED_CEILING=20
+PARENT_SIDE_CREATION_CEILING=40
+
+# And a floor, because a guard that only has a ceiling passes when the harness
+# stops measuring anything. A clamped session start that really reached its
+# truncation banner cannot plausibly cost fewer than this.
+PARENT_SIDE_CREATION_FLOOR=25
+
+# Count the process creations bin/fm-session-start.sh makes OUTSIDE its bounded
+# child, on a real clamped-and-truncated run.
+#
+# METHOD, and each part of it is load-bearing:
+#   - tests/fixtures/forkcount.c interposes fork/execve/posix_spawn. Creations are
+#     FORK plus SPAWN records; EXEC is exec-after-fork and would double-count.
+#   - The instrument is VALIDATED against a known-count program before use, and a
+#     built-but-miscounting instrument fails rather than skips.
+#   - The two sides are separated by ENV INHERITANCE, not by a process tree: the
+#     bounded child is launched through `env FM_SESSION_START_STAGE_FILE=...`, so
+#     that variable is the exact discriminator. A ppid walk does not work - the
+#     digest detaches its network stage into its own process group, the subtree
+#     reparents, and the walk silently undercounts.
+#   - The clamp is forced cheaply with a synthetic registration root declaring a
+#     2 s SessionStart timeout, so the ceiling is 1 s and the whole clamped path
+#     plus the banner really runs in about a second.
+#
+# Prints "<creations> <spawns> <truncated:0|1> <bound>", or returns non-zero when
+# the instrument cannot be built or preloaded on this box.
+count_parent_side_creations() {
+  local dir so log out creations execs spawns truncated bound
+  dir=$(fm_test_tmproot fm-session-start-forkcount) || return 1
+  so="$dir/forkcount.so"
+  command -v cc >/dev/null 2>&1 || return 1
+  cc -shared -fPIC -O2 -o "$so" "$ROOT/tests/fixtures/forkcount.c" -ldl 2>/dev/null || return 1
+
+  # Validate before use: seven creations asked for, seven counted.
+  log="$dir/validate.log"
+  : > "$log"
+  FORKCOUNT_LOG="$log" LD_PRELOAD="$so" bash -c \
+    'for i in 1 2 3 4 5; do /bin/true; done; x=$(/bin/echo hi); : $(/bin/date +%s)' \
+    >/dev/null 2>&1
+  [ -s "$log" ] || return 1
+  creations=$(grep -c '^FORK' "$log")
+  [ "$creations" -eq 7 ] \
+    || fail "the fork interposer counted ${creations} creations where 7 were asked for, so every number it reports below is untrustworthy"
+
+  mkdir -p "$dir/home/state" "$dir/home/data" "$dir/home/config" "$dir/home/projects" \
+    "$dir/fakebin" "$dir/root" "$dir/regs/.synthetic"
+  git init -q -b main "$dir/root" >/dev/null 2>&1 || return 1
+  git -C "$dir/root" commit -q --allow-empty -m init >/dev/null 2>&1 || return 1
+  local tool
+  for tool in tmux node chrome-devtools-axi gh treehouse lavish-axi gh-axi no-mistakes; do
+    printf '#!/bin/sh\nexit 0\n' > "$dir/fakebin/$tool"
+    chmod +x "$dir/fakebin/$tool"
+  done
+  printf '%s\n' '{"hooks":{"SessionStart":[{"hooks":[{"type":"command","command":"bin/fm-sessionstart-run.sh","timeout":2}]}]}}' \
+    > "$dir/regs/.synthetic/hooks.json"
+
+  log="$dir/forks.log"
+  : > "$log"
+  out=$(env -u CLAUDECODE -u PI_CODING_AGENT -u FM_PI_HARNESS -u GROK_AGENT \
+    FM_HOME="$dir/home" FM_ROOT_OVERRIDE="$dir/root" \
+    PATH="$dir/fakebin:$FM_TEST_FORKCOUNT_BASE_PATH" \
+    FM_SESSION_START_REGISTRATION_ROOT="$dir/regs" \
+    FM_SESSION_START_UNDER_HOOK=1 FM_SESSION_START_TIMEOUT=600 \
+    FORKCOUNT_LOG="$log" LD_PRELOAD="$so" \
+    bash "$ROOT/bin/fm-session-start.sh" 2>&1)
+  # The detached network stage keeps writing after the digest returns, so the log
+  # is read only once it has settled. Its records are child-side and excluded
+  # either way; waiting keeps the file from being read mid-append.
+  sleep 3
+
+  creations=$(awk -F'\t' '$1 == "FORK" && $2 == "parent"' "$log" | wc -l)
+  execs=$(awk -F'\t' '$1 == "EXEC" && $2 == "parent"' "$log" | wc -l)
+  spawns=$(awk -F'\t' '$1 == "SPAWN" && $2 == "parent"' "$log" | wc -l)
+  truncated=0
+  case "$out" in *'STARTUP TRUNCATED'*) truncated=1 ;; esac
+  bound=$(printf '%s\n' "$out" | sed -n 's/.*HIT ITS \([0-9][0-9]*\)s RUNTIME BOUND.*/\1/p' | sed -n '1p')
+  printf '%s %s %s %s %s\n' "$creations" "$execs" "$spawns" "$truncated" "${bound:-0}"
+}
+
+FM_TEST_FORKCOUNT_BASE_PATH=${FM_TEST_BASE_PATH:-/usr/bin:/bin:/usr/sbin:/sbin}
+
+test_the_parent_side_creation_count_has_not_risen() {
+  local measured creations execs spawns truncated bound idle_ms
+
+  measured=$(count_parent_side_creations) || {
+    printf 'note: no working LD_PRELOAD fork interposer on this box (no cc, or preloading is unavailable), so the parent-side creation count is UNMEASURED here and this assertion did not run\n' >&2
+    pass "parent-side creation count: SKIPPED - the interposer could not be built or preloaded on this box"
+    return
+  }
+  read -r creations execs spawns truncated bound <<EOF
+$measured
+EOF
+
+  # The measurement is only about the clamped path if the run really clamped and
+  # really truncated. Both are asserted, so a fixture that stopped reaching the
+  # banner fails here rather than reporting a small count.
+  [ "$truncated" -eq 1 ] \
+    || fail "the measured run never printed its truncation banner, so the post-kill half of the parent-side path was not counted at all"
+  [ "$bound" -eq 1 ] \
+    || fail "the measured run was bounded at ${bound}s rather than the 1s the synthetic 2s registration should clamp it to, so it is not the clamped path this count is about"
+  [ "$spawns" -eq 0 ] \
+    || fail "the parent made ${spawns} posix_spawn call(s), which the creation count does not include: re-derive the count before trusting it"
+
+  [ "$creations" -ge "$PARENT_SIDE_CREATION_FLOOR" ] \
+    || fail "only ${creations} parent-side process creations were counted, below the ${PARENT_SIDE_CREATION_FLOOR} floor: the instrument or the fixture has stopped observing the path rather than the path having got that cheap"
+  # THE GUARD, and it fires in the direction the literal could not. The
+  # exec-backed component is held exactly, because both measurements on record
+  # agree on it and an added external command is the common way this rises.
+  [ "$execs" -le "$PARENT_SIDE_EXEC_BACKED_CEILING" ] \
+    || fail "the parent side now execs ${execs} external commands, above the ${PARENT_SIDE_EXEC_BACKED_CEILING} on record: every one is paid inside the window the nesting margin covers, and that margin is already NOT established as sufficient under contention - so re-derive the margin from a fresh measurement rather than raising this ceiling"
+  [ "$creations" -le "$PARENT_SIDE_CREATION_CEILING" ] \
+    || fail "the parent side now makes ${creations} process creations, above the ${PARENT_SIDE_CREATION_CEILING} on record: see the exec-backed message above for why raising this ceiling is not the fix"
+
+  idle_ms=$(( execs * MEASURED_EXEC_BACKED_PER_CREATION_MS \
+    + (creations - execs) * MEASURED_SUBSHELL_PER_CREATION_MS ))
+  pass "parent-side creation count: ${creations} creations (${execs} exec-backed), within [${PARENT_SIDE_CREATION_FLOOR}, ${PARENT_SIDE_CREATION_CEILING}] (about ${idle_ms}ms of MINGW64 cost at IDLE, which the 4s margin does not cover under the measured contention factor)"
+}
+
+# The margin is PER PLATFORM and both arms are real, which is what this case
+# guards. It deliberately does NOT assert that the Windows arm is large enough:
+# the measured parent-side cost on the target box is about 2546 ms at IDLE and
+# near 10.3 s at the measured contention factor, against a 4000 ms margin, so
+# sufficiency is currently CONTRADICTED by measurement rather than established by
+# it. Asserting coverage here would encode a claim the numbers do not support.
+# The count guard above is what holds the line while the re-measurement runs.
+test_the_nesting_margin_is_per_platform_and_real_on_both_arms() {
+  local margin portable
 
   margin=$(on_platform MINGW64_NT-10.0-26200 "$READ_MARGIN")
   case "$margin" in ''|*[!0-9]*|0) fail "the Windows nesting margin must be a positive integer, got '$margin'" ;; esac
   portable=$(on_platform Linux "$READ_MARGIN")
   case "$portable" in ''|*[!0-9]*|0) fail "the portable nesting margin must be a positive integer, got '$portable'" ;; esac
 
-  # THE GUARD. The Windows margin has to cover the measured cost of the work the
-  # parent does outside the bounded child. A margin sized for the race alone does
-  # not, and this is the assertion that says so in milliseconds rather than in
-  # prose.
-  owed=$((MEASURED_CLAMPED_PATH_SUBPROCESSES * MEASURED_WORST_FORK_MS))
-  [ "$((margin * 1000))" -ge "$owed" ] \
-    || fail "the Windows nesting margin is ${margin}s, below the ${owed}ms the measured ${MEASURED_CLAMPED_PATH_SUBPROCESSES}-subprocess clamped path costs at ${MEASURED_WORST_FORK_MS}ms per fork: the harness kills the parent mid-banner, so a truncation prints no stage and no reconcile list"
-  # The portable arm is the strict-inequality margin and stays that: forks are
-  # about 1 ms here, so the same product is well under a second.
+  # The Windows arm must be STRICTLY larger, or the per-platform arm has
+  # collapsed back to one number and a Windows parent is being given a margin
+  # sized for a box where a creation costs about 1 ms.
+  [ "$margin" -gt "$portable" ] \
+    || fail "the Windows nesting margin ${margin}s is not above the portable ${portable}s: the per-platform arm has collapsed, so MSYS is being given a margin sized for a platform where a process creation costs about 1ms"
+  # The portable arm is the strict-inequality margin and stays that.
   [ "$portable" -ge 1 ] \
     || fail "the portable nesting margin must stay at least 1s: at equal deadlines which process dies first is a race"
 
-  pass "hook nesting: the Windows margin ${margin}s covers the measured ${owed}ms of clamped-path prologue, cap derivation and banner the bound itself does not, and the portable arm keeps its ${portable}s strict-inequality margin"
+  pass "hook nesting: the nesting margin is per platform and real on both arms (${margin}s on MSYS against ${portable}s portable); its SUFFICIENCY is not asserted here and is contradicted by the current measurement"
 }
 
 # The clamp and the operator-facing advice must be reading the SAME margin. If
@@ -449,7 +578,7 @@ test_the_clamp_and_the_banner_agree_on_the_margin() {
     *"after ${harness}s"*) : ;;
     *) fail "the pinned advice on the Windows arm must name the ${harness}s registration as the second the harness kills at, got: $at" ;;
   esac
-  advisory=$(on_platform MINGW64_NT-10.0-26200 "fm_session_start_budget_advisory $((harness * 10)) $cap hook")
+  advisory=$(on_platform MINGW64_NT-10.0-26200 "fm_session_start_budget_advisory $((harness * 10)) $cap binds")
   case "$advisory" in
     *"after ${harness}s"*) : ;;
     *) fail "the clamp advisory on the Windows arm must name the ${harness}s registration as the second the harness kills at, got: $advisory" ;;
@@ -521,5 +650,6 @@ test_every_registered_digest_hook_outlives_the_startup_bound
 test_a_clamped_bound_plus_its_margin_never_exceeds_the_registration
 test_an_explicit_override_is_clamped_below_the_shortest_registration
 test_a_clamp_says_so_on_the_digest
-test_the_nesting_margin_covers_the_windows_clamped_path
+test_the_parent_side_creation_count_has_not_risen
+test_the_nesting_margin_is_per_platform_and_real_on_both_arms
 test_the_clamp_and_the_banner_agree_on_the_margin
