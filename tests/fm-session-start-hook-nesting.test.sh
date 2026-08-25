@@ -355,17 +355,18 @@ test_a_clamp_says_so_on_the_digest() {
 # handover - has a mutation-proven case; this one was re-counted by hand each
 # round and pasted in.
 #
-# WHAT IS NOT ASSERTED, and this is the important part. This suite does NOT claim
-# the margin is sufficient. The measured parent-side cost on the target box is
-# 20 exec-backed creations at 80.8 ms and 20 pure subshell forks at 46.5 ms =
-# 2546 ms AT IDLE against a 4000 ms margin, and the same box's contention curve
-# rises 30.6 ms -> 124.0 ms per creation between 0 and 12 competitors, a 4.05x
-# factor that puts the contended parent side near 10.3 s. The margin does not
-# cover that, a higher-contention re-measurement is still running, and
-# docs/verification/session-start-fork-profile.md records the open contradiction.
-# So what is guarded here is the count NOT RISING while that is unresolved -
-# every creation added to the parent side is time the margin already does not
-# have.
+# WHY THE COUNT IS WHAT THIS GUARDS, rather than the margin's sufficiency. The
+# margin is now derived from a clean contention sweep on the target box and is
+# 22 s on MSYS, taken from the worst non-thrashing measured point; the derivation,
+# its method and what it does not claim live in
+# bin/fm-session-start-bound-lib.sh and
+# docs/verification/session-start-fork-profile.md, and no per-creation cost is
+# restated here so the two cannot drift.
+#
+# What THIS file guards is the other input: the count not rising. That is the
+# half the margin's derivation takes as given, and every creation added to the
+# parent side is time the margin has to absorb at whatever the per-creation cost
+# turns out to be under load.
 # Run <snippet> with bin/fm-session-start-bound-lib.sh sourced in a fresh shell
 # that resolves its platform arms as <uname>, under a positively established kill
 # deadline. A fresh shell rather than a subshell so the override is in place
@@ -379,9 +380,6 @@ on_platform() {  # <uname-s> <shell-snippet>
 # after the library has been sourced there under that shell's platform override.
 # shellcheck disable=SC2016
 READ_MARGIN='printf "%s\n" "$FM_SESSION_START_NESTING_MARGIN"'
-
-MEASURED_EXEC_BACKED_PER_CREATION_MS=80
-MEASURED_SUBSHELL_PER_CREATION_MS=46
 
 # The parent-side ceilings, and why there are two of them.
 #
@@ -454,7 +452,10 @@ count_parent_side_creations() {
     >/dev/null 2>&1
   [ -s "$log" ] || return 1
   creations=$(grep -c '^FORK' "$log")
-  [ "$creations" -eq "${FM_TEST_FORKCOUNT_EXPECT_VALIDATION:-7}" ] || return 2
+  # 7 is a property of the known-count program two lines above, not of this host,
+  # so there is deliberately no seam to override it: an override could only ever
+  # make a miscounting instrument pass the check that exists to catch it.
+  [ "$creations" -eq 7 ] || return 2
 
   mkdir -p "$dir/home/state" "$dir/home/data" "$dir/home/config" "$dir/home/projects" \
     "$dir/fakebin" "$dir/root" "$dir/regs/.synthetic"
@@ -494,7 +495,7 @@ count_parent_side_creations() {
 FM_TEST_FORKCOUNT_BASE_PATH=${FM_TEST_BASE_PATH:-/usr/bin:/bin:/usr/sbin:/sbin}
 
 test_the_parent_side_creation_count_has_not_risen() {
-  local measured creations execs spawns truncated bound idle_ms
+  local measured creations execs spawns truncated bound
 
   measured=$(count_parent_side_creations)
   case $? in
@@ -532,18 +533,20 @@ EOF
   [ "$creations" -le "$PARENT_SIDE_CREATION_CEILING" ] \
     || fail "the parent side now makes ${creations} process creations, above the ${PARENT_SIDE_CREATION_CEILING} on record: see the exec-backed message above for why raising this ceiling is not the fix"
 
-  idle_ms=$(( execs * MEASURED_EXEC_BACKED_PER_CREATION_MS \
-    + (creations - execs) * MEASURED_SUBSHELL_PER_CREATION_MS ))
-  pass "parent-side creation count: ${creations} creations (${execs} exec-backed), within [${PARENT_SIDE_CREATION_FLOOR}, ${PARENT_SIDE_CREATION_CEILING}] (about ${idle_ms}ms of MINGW64 cost at IDLE, which the 4s margin does not cover under the measured contention factor)"
+  pass "parent-side creation count: ${creations} creations (${execs} exec-backed), within [${PARENT_SIDE_CREATION_FLOOR}, ${PARENT_SIDE_CREATION_CEILING}]; every one is paid inside the window the nesting margin covers"
 }
 
 # The margin is PER PLATFORM and both arms are real, which is what this case
-# guards. It deliberately does NOT assert that the Windows arm is large enough:
-# the measured parent-side cost on the target box is about 2546 ms at IDLE and
-# near 10.3 s at the measured contention factor, against a 4000 ms margin, so
-# sufficiency is currently CONTRADICTED by measurement rather than established by
-# it. Asserting coverage here would encode a claim the numbers do not support.
-# The count guard above is what holds the line while the re-measurement runs.
+# guards. It does NOT restate the margin's derivation or its per-creation inputs:
+# bin/fm-session-start-bound-lib.sh owns those, and a second copy here is how the
+# two drift - which has already happened twice on this branch, with a retracted
+# count and then a retracted cost surviving in a second file after the first was
+# corrected.
+#
+# Nor does it assert sufficiency at unbounded load, which the derivation itself
+# declines to claim: the measured spread at the same competitor count shows total
+# box load dominates, so 22 s covers the worst non-thrashing condition measured
+# on that box rather than every condition that could occur.
 test_the_nesting_margin_is_per_platform_and_real_on_both_arms() {
   local margin portable
 
@@ -561,7 +564,7 @@ test_the_nesting_margin_is_per_platform_and_real_on_both_arms() {
   [ "$portable" -ge 1 ] \
     || fail "the portable nesting margin must stay at least 1s: at equal deadlines which process dies first is a race"
 
-  pass "hook nesting: the nesting margin is per platform and real on both arms (${margin}s on MSYS against ${portable}s portable); its SUFFICIENCY is not asserted here and is contradicted by the current measurement"
+  pass "hook nesting: the nesting margin is per platform and real on both arms (${margin}s on MSYS against ${portable}s portable); it is derived from the worst non-thrashing measured point, and its sufficiency at unbounded load is deliberately not asserted here"
 }
 
 # The clamp and the operator-facing advice must be reading the SAME margin. If

@@ -549,6 +549,50 @@ test_the_remedy_states_a_kill_second_only_where_a_deadline_was_established() {
   pass "fm_session_start_bound_remedy: names the harness kill second only where a deadline was established, and describes the cap as the largest safe assumption otherwise"
 }
 
+# --- 2f-ii. the ADVISORY is held to the same certainty as the remedy ----------
+#
+# The wording rule was applied to the truncation remedy first and the advisory
+# was missed, which mattered more rather than less: the remedy prints only after
+# a truncation, while the advisory prints on EVERY clamped run. Under
+# `undetermined` it was still stating a harness kill second as fact and still
+# sending the operator to raise registrations that may not be the ones running -
+# contradicting, in the same block, the hedge printed between those two lines.
+test_the_advisory_states_a_kill_second_only_where_a_deadline_was_established() {
+  local cap out
+  cap=$(fm_session_start_hook_ceiling) \
+    || fail "no harness ceiling could be derived, so there is no wording to check"
+
+  # (a) A deadline IS established: naming the second is correct and must stay.
+  out=$(fm_session_start_budget_advisory $((cap * 10)) "$cap" binds "$cap harness")
+  case "$out" in
+    *"killed by the harness after $((cap + FM_SESSION_START_NESTING_MARGIN))s"*) : ;;
+    *) fail "with a deadline established the advisory must still name the second the harness kills at, got: $out" ;;
+  esac
+  case "$out" in
+    *'Raise the SessionStart timeouts in the harness registrations'*) : ;;
+    *) fail "with a deadline established the advisory must still point at the registrations, got: $out" ;;
+  esac
+
+  # (b) THE GUARD. Nothing established a deadline, so nothing may be stated as
+  # one, and the operator must not be sent to registrations that may not be
+  # running. The CLAMP is unchanged and is checked elsewhere.
+  out=$(fm_session_start_budget_advisory $((cap * 10)) "$cap" undetermined "$cap harness")
+  printf '%s\n' "$out" | grep -q 'killed by the harness after' \
+    && fail "the advisory told a run that could not establish any kill deadline that the harness kills it at a specific second: $out"
+  printf '%s\n' "$out" | grep -q '^●  Raise the SessionStart timeouts in the harness registrations' \
+    && fail "the advisory sent a run with no established deadline to raise registrations that may not be the ones running: $out"
+  case "$out" in
+    *'largest bound'*) : ;;
+    *) fail "the advisory on an unestablished deadline must describe the cap as the largest bound it can establish is safe, got: $out" ;;
+  esac
+  # It must still say plainly that a clamp happened, or the operator cannot tell
+  # why their value did not take effect.
+  assert_contains "$out" 'CLAMPED' \
+    'a clamped bound is still a clamp and must say so whatever the context'
+
+  pass "fm_session_start_budget_advisory: names the harness kill second only where a deadline was established, and never points an unestablished run at another harness's registrations"
+}
+
 # --- 2g. a registration too small for the margin is not "unreadable" ----------
 #
 # The ceiling used to return the same non-zero for "read a deadline smaller than
@@ -939,6 +983,7 @@ test_a_zero_padded_bound_still_produces_a_deadline_that_bites
 test_the_clamp_follows_hook_context_and_undetermined_clamps
 test_a_transport_that_arms_no_deadline_is_honoured_in_full
 test_the_remedy_states_a_kill_second_only_where_a_deadline_was_established
+test_the_advisory_states_a_kill_second_only_where_a_deadline_was_established
 test_a_registration_smaller_than_the_margin_still_bounds_the_clamp
 test_an_unreadable_registration_set_caps_rather_than_releasing
 test_the_delivery_bound_follows_the_digest_and_not_the_workers_own_context
