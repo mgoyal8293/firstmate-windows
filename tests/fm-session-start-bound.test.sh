@@ -519,7 +519,7 @@ test_the_remedy_states_a_kill_second_only_where_a_deadline_was_established() {
   # (a) A deadline IS established: naming the second is correct and must stay.
   below=$(fm_session_start_bound_remedy $((cap - 1)) binds)
   case "$below" in
-    *"kills this hook after $((cap + FM_SESSION_START_NESTING_MARGIN))s"*) : ;;
+    *"kills this hook after $(fm_session_start_hook_deadline)s"*) : ;;
     *) fail "with a deadline established the remedy must still name the second the harness kills at, got: $below" ;;
   esac
 
@@ -558,14 +558,21 @@ test_the_remedy_states_a_kill_second_only_where_a_deadline_was_established() {
 # sending the operator to raise registrations that may not be the ones running -
 # contradicting, in the same block, the hedge printed between those two lines.
 test_the_advisory_states_a_kill_second_only_where_a_deadline_was_established() {
-  local cap out
+  local cap spec deadline out
   cap=$(fm_session_start_hook_ceiling) \
     || fail "no harness ceiling could be derived, so there is no wording to check"
+  # The REAL cap spec, not one assembled here: the deadline it carries is the
+  # thing the advisory prints, so building the spec by hand would test the
+  # assembly rather than the library's own.
+  spec=$(fm_session_start_cap binds) \
+    || fail "no cap spec could be derived, so there is no wording to check"
+  deadline=$(fm_session_start_hook_deadline) \
+    || fail "no registered deadline could be read, so there is no second to check against"
 
   # (a) A deadline IS established: naming the second is correct and must stay.
-  out=$(fm_session_start_budget_advisory $((cap * 10)) "$cap" binds "$cap harness")
+  out=$(fm_session_start_budget_advisory $((cap * 10)) "$cap" binds "$spec")
   case "$out" in
-    *"killed by the harness after $((cap + FM_SESSION_START_NESTING_MARGIN))s"*) : ;;
+    *"killed by the harness after ${deadline}s"*) : ;;
     *) fail "with a deadline established the advisory must still name the second the harness kills at, got: $out" ;;
   esac
   case "$out" in
@@ -576,7 +583,7 @@ test_the_advisory_states_a_kill_second_only_where_a_deadline_was_established() {
   # (b) THE GUARD. Nothing established a deadline, so nothing may be stated as
   # one, and the operator must not be sent to registrations that may not be
   # running. The CLAMP is unchanged and is checked elsewhere.
-  out=$(fm_session_start_budget_advisory $((cap * 10)) "$cap" undetermined "$cap harness")
+  out=$(fm_session_start_budget_advisory $((cap * 10)) "$cap" undetermined "$spec")
   printf '%s\n' "$out" | grep -q 'killed by the harness after' \
     && fail "the advisory told a run that could not establish any kill deadline that the harness kills it at a specific second: $out"
   printf '%s\n' "$out" | grep -q '^●  Raise the SessionStart timeouts in the harness registrations' \
@@ -632,6 +639,74 @@ test_a_registration_smaller_than_the_margin_still_bounds_the_clamp() {
     || fail "the clamp landed on the ${windows}s platform default despite a readable 2s registration, which is the fail-open this case exists to catch"
 
   pass "fm_session_start_hook_ceiling: a registration smaller than the margin still bounds the clamp at ${ceiling}s rather than reporting as unreadable and releasing to the ${windows}s default"
+}
+
+# --- 2h. no banner may name a kill second past the registration it read -------
+#
+# The ceiling used to be the ONLY thing carried, and both banners rebuilt the
+# kill second as cap + margin. That identity holds only while
+# ceiling = deadline - margin, which the sub-margin branch cannot satisfy - no
+# non-negative ceiling can. So the branch added to stop the clamp overstating the
+# bound left the banners overstating the deadline instead: with the margin at 22s
+# a 20s registration produced a ceiling of 19 and a banner announcing a kill at
+# 41s, twenty-one seconds past what the registration declared.
+#
+# The band is every registration at or below the margin, which on MSYS is now 22s
+# - a plausible misconfiguration rather than an absurd one, and it brackets the
+# 10s the nudge tier already uses.
+test_no_banner_names_a_deadline_past_the_registration_it_read() {
+  local root declared margin ceiling cap adv rem second
+  declared=20
+  root=$(fm_test_tmproot fm-session-start-submargin-banner) \
+    || fail "could not create a temp root"
+  mkdir -p "$root/.synthetic"
+  printf '{"hooks":{"SessionStart":[{"hooks":[{"type":"command","command":"bin/fm-sessionstart-run.sh","timeout":%s}]}]}}\n' \
+    "$declared" > "$root/.synthetic/hooks.json"
+
+  # The premise: on the Windows arm this registration really is inside the margin,
+  # so the sub-margin branch is the one under test. Without this the case would
+  # silently drift onto the ordinary path the day the margin changes.
+  # Read in a FRESH shell, so the override is in place before the library binds
+  # its margin and this suite's own global is left alone.
+  margin=$(FM_PLATFORM_UNAME_OVERRIDE=MINGW64_NT-10.0-26200 bash -c \
+    '. "$1"; fm_session_start_bind_margin; printf "%s\n" "$FM_SESSION_START_NESTING_MARGIN"' \
+    _ "$ROOT/bin/fm-session-start-bound-lib.sh") \
+    || fail "the MINGW nesting margin could not be read"
+  [ "$declared" -le "$margin" ] \
+    || fail "a ${declared}s registration is no longer inside the ${margin}s MINGW margin, so this case is not exercising the sub-margin branch it names"
+
+  ceiling=$(FM_PLATFORM_UNAME_OVERRIDE=MINGW64_NT-10.0-26200 \
+    FM_SESSION_START_REGISTRATION_ROOT="$root" fm_session_start_hook_ceiling) \
+    || fail "the ${declared}s registration was reported as unreadable"
+  cap=$(FM_PLATFORM_UNAME_OVERRIDE=MINGW64_NT-10.0-26200 \
+    FM_SESSION_START_REGISTRATION_ROOT="$root" fm_session_start_cap binds) \
+    || fail "no cap was derived from the ${declared}s registration"
+
+  adv=$(FM_PLATFORM_UNAME_OVERRIDE=MINGW64_NT-10.0-26200 \
+    FM_SESSION_START_REGISTRATION_ROOT="$root" \
+    fm_session_start_budget_advisory 9999 "$ceiling" binds "$cap")
+  rem=$(FM_PLATFORM_UNAME_OVERRIDE=MINGW64_NT-10.0-26200 \
+    FM_SESSION_START_REGISTRATION_ROOT="$root" \
+    fm_session_start_bound_remedy "$ceiling" binds)
+
+  # THE GUARD. Every second either banner attributes to the harness must be the
+  # one the registration actually declared - never a reconstruction past it.
+  for second in \
+    $(printf '%s\n' "$adv" | sed -n 's/.*killed by the harness after \([0-9]*\)s.*/\1/p') \
+    $(printf '%s\n' "$rem" | sed -n 's/.*kills this hook after \([0-9]*\)s.*/\1/p')
+  do
+    [ "$second" -le "$declared" ] \
+      || fail "a banner told the operator the harness kills at ${second}s against a registration declaring ${declared}s, so they are $((second - declared))s past a deadline this shell had already read; advisory: $adv remedy: $rem"
+    [ "$second" -eq "$declared" ] \
+      || fail "a banner named ${second}s where the registration declared ${declared}s: the deadline must be the one that was read, not a number derived from the ceiling; advisory: $adv remedy: $rem"
+  done
+
+  # Anti-vacuity: the loop above is only meaningful if a kill second was printed
+  # at all, so at least one of the two banners must have named one.
+  printf '%s\n%s\n' "$adv" "$rem" | grep -qE 'after [0-9]+s' \
+    || fail "neither banner named a harness kill second, so the assertion above checked nothing; advisory: $adv remedy: $rem"
+
+  pass "the truncation banners name the ${declared}s deadline the registration declared, not the ceiling plus the margin, on the sub-margin branch where those two differ"
 }
 
 # --- 3. the stage marks must not distort what they measure -------------------
@@ -985,6 +1060,7 @@ test_a_transport_that_arms_no_deadline_is_honoured_in_full
 test_the_remedy_states_a_kill_second_only_where_a_deadline_was_established
 test_the_advisory_states_a_kill_second_only_where_a_deadline_was_established
 test_a_registration_smaller_than_the_margin_still_bounds_the_clamp
+test_no_banner_names_a_deadline_past_the_registration_it_read
 test_an_unreadable_registration_set_caps_rather_than_releasing
 test_the_delivery_bound_follows_the_digest_and_not_the_workers_own_context
 test_the_binder_defines_every_value_it_returns_on_every_path
