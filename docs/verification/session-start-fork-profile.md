@@ -341,9 +341,36 @@ The retracted samples are named here so nobody re-derives an enforcement doubt f
 
 Acceptance criterion 6 for this work says the change must be verified on the real Windows box, and that a clean Linux run is necessary but not sufficient.
 This section exists so nobody has to infer from the rest of the page which half is which.
-As it stands, **criterion 6 is not satisfied by this document alone.**
+**Criterion 6 is DISCHARGED by real execution against the branch under review.**
+One measurement is still not taken and it is named at the end; it is a headroom figure, not a behaviour check.
 
-Windows-measured, on `MINGW64_NT-10.0-26200`, bash 5.2.37, 22 cores:
+### How the box is reached from this checkout
+
+An earlier version of this section said the remaining runs had to happen against a pushed branch, because "this pipeline runs on Linux, and the worker that would run the probe cannot read the pipeline-owned commits".
+**That premise was FALSE and is deleted rather than left to be re-derived.**
+The Windows box is reachable directly from this checkout through WSL interop, at `/mnt/c/Program Files/Git/bin/bash.exe`, so everything below was run against the branch under review and not against anything pushed.
+
+Method, which matters because one part of it is load-bearing:
+
+```console
+$ '/mnt/c/Program Files/Git/bin/bash.exe' -lc "cd <stage> && <cmd>"
+```
+
+The worktree is staged to a Windows-visible path and **given a real git index**, because both suites discover harness registrations with `git ls-files` rather than trusting the library's own glob.
+A first attempt without an index is worth recording as its own result: it did not silently verify nothing, it printed
+
+```
+not ok - no session-start hook registration was found at all, so this suite verified nothing
+```
+
+which is the anti-vacuity guard on this page working on the target platform.
+Git Bash is driven directly, so no console window is spawned and the hygiene rule for Windows probing is satisfied without going through `powershell.exe` at all.
+
+Box for every run in this section: `MINGW64_NT-10.0-26200`, msys 3.6.3-7674c51e.x86_64, bash 5.2.37(1)-release, 22 cores.
+
+### Windows-measured
+
+On `MINGW64_NT-10.0-26200`, bash 5.2.37, 22 cores:
 
 - The direct 9-sample parent-side sweep the 32 s margin is derived from: 0, 8 and 16 competitors with three samples each, truncation banner verified present on every one. This is the measurement of record.
 - The earlier per-creation contention sweep (Sweep A and Sweep B), kept as the cost-input record. It is a reasonable idle proxy and understates by about 2.8x under contention, so no margin may be re-derived downward from it.
@@ -355,21 +382,64 @@ Windows-measured, on `MINGW64_NT-10.0-26200`, bash 5.2.37, 22 cores:
 - **That the runtime bound is enforced**, 12 of 12, plus `fm_run_timed` returning rc=124 on 5 of 5 against a 2 s bound including against a child that installs `trap "" TERM`, so the `-k` kill path works too.
 - ~~A full, untruncated session start at the Windows default bound: 57.5 s / 48.0 s at 0 competitors, 240.7 s / 264.0 s at 8, 80-88% of the budget consumed~~ - **WITHDRAWN.** Those runs came from the same harness whose bound-enforcement anomaly was retracted as an artifact, so they are not trustworthy and must not be cited. They are named here rather than deleted so nobody resurrects them.
 
-NOT yet exercised on MINGW64, and this is the outstanding step:
+Everything from the paragraph below down was previously listed here as outstanding, and is now measured on the box.
 
-- The 32 s nesting margin actually in force, and the 328 s ceiling it derives there rather than the portable one. Note this changes nothing for a default run: the Windows default budget is 300 s, already below 328 s.
-- The fail-closed fallback to the platform default when no registration can be read.
-- The deadline predicate: that a transport declaring no kill deadline keeps its full bound and is never pointed at another harness's registrations.
-- `fm_session_start_bind_budget` and `fm_session_start_bind_context`, which assign rather than print, and the two-argument `fm_session_start_resolve_budget`.
-- The `FM_SESSION_START_RESOLVED_BOUND` handover that `bin/fm-startup-network.sh`'s `delivery_budget` now depends on.
-- The parent-side creation count. It is derived at test time on Linux and the count is portable, but it has not been re-confirmed on the target, and the interposer's `LD_PRELOAD` mechanism is not available under MSYS - the guard skips there with an explicit message rather than passing silently.
-- **A clean full-startup-to-completion timing under contention.** The figures that once stood here are withdrawn above, and no replacement was taken. This is why the headroom of the 300 s default against a contended, populated home is an open question rather than a measured result - see the provenance in [`../../bin/fm-session-start-bound-lib.sh`](../../bin/fm-session-start-bound-lib.sh).
+### The behaviour probe: 24 assertions, pass=24 fail=0
 
-Criterion 6 is therefore PARTLY discharged by real execution rather than still wholly owed: the direct 9-sample clamped parent-side sweep, the 12-of-12 bound-enforcement result, the direct `fm_run_timed` check and the clean per-creation contention sweeps were all run on the box against the current shape.
-What is listed above as not yet exercised there is still not exercised there, and the claim is not upgraded past what was actually run.
+`PROBE_SUMMARY pass=24 fail=0`, run under Git Bash by the method above.
+The whole point of this probe is that the margin, the ceiling and the resolver answer with the platform's OWN numbers rather than with the portable ones the Linux runs check, so its output is quoted verbatim:
 
-Why the rest is not in this document: this pipeline runs on Linux, and the worker that would run the probe cannot read the pipeline-owned commits, so the remaining Windows behaviour runs have to happen against the pushed branch instead.
-Those are owed before this work is reported complete, and until they are recorded here the Linux evidence on this page is explicitly not a substitute for them.
+```
+margin on this platform = 32
+shortest digest-tier registration: 360s ; derived ceiling: 328s ; ceiling = deadline - margin = 328
+default budget here = 300 (300 < 328, so an ordinary run is unaffected by the clamp)
+cap with unreadable registrations = "300 default 0" ; hook_deadline refuses to guess (rc) = 1
+declared none -> context = none ; declared binds -> context = binds
+under-hook flag -> context = binds ; no tty, nothing declared -> context = undetermined
+declared none: explicit 9000 survives = 9000 ; declared none: no cap derived = none
+declared binds: 9000 clamped to ceiling = 328
+bind_budget prints nothing, assigns = <60> ; bind_context prints nothing, assigns = <none>
+resolve_budget(9000, cap-spec) = 328 ; resolve_budget(45, cap-spec) = 45
+resolve_budget('')=300 ; resolve_budget(0)=300 ; resolve_budget(00)=300 ; resolve_budget(abc)=300
+delivery_bound: handover 45 honoured = 45 ; handover 0 -> 300 ; handover abc -> 300 ; no handover -> 300
+```
+
+Line by line, that closes the list that used to stand here:
+
+- **The 32 s nesting margin actually in force, and the 328 s ceiling it derives there** rather than the portable one - lines 1 and 2, with the arithmetic shown against the 360 s registration it was read from. And it changes nothing for a default run: line 3 is the 300 s default sitting below 328 s with the clamp inert.
+- **The fail-closed fallback to the platform default when no registration can be read** - line 4: the cap spec degrades to `300 default 0`, and `fm_session_start_hook_deadline` returns non-zero rather than guessing a deadline.
+- **The deadline predicate** - lines 5 to 8: a transport declaring `none` keeps its full 9000 s and has no cap derived for it at all, while a `binds` declaration clamps the same request to 328 s. A run with no marker and no terminal answers `undetermined` and is clamped, which is the safe side.
+- **`fm_session_start_bind_budget` and `fm_session_start_bind_context`, which assign rather than print** - line 9, checked as printing nothing and assigning the value, and the two-argument `fm_session_start_resolve_budget` on line 10.
+- **The `FM_SESSION_START_RESOLVED_BOUND` handover** that `bin/fm-startup-network.sh`'s `delivery_budget` depends on - line 12: an inherited 45 is honoured, an inherited `0` or `abc` falls to the platform 300, and so does an absent handover.
+
+Line 11 is the unusable-value fallback on the target: `''`, `0`, the zero-padded `00` and `abc` all land on 300 rather than on a disabled deadline.
+
+### Both suites on MINGW64
+
+`tests/fm-session-start-hook-nesting.test.sh`: **every assertion ok.**
+Confirmed there specifically: the 332 s registration floor; all three digest-running hooks clearing it across all three registrations; the clamp fitting inside the 360 s shortest registration on all twelve platform arms; and the 32 s-versus-1 s per-platform margin.
+
+- **The parent-side creation count** is the one assertion that cannot run there, and it says so out loud rather than passing:
+
+  ```
+  ok - parent-side creation count: SKIPPED - the interposer could not be built or preloaded on this box
+  note: no working LD_PRELOAD fork interposer on this box (no cc, or preloading is
+  unavailable), so the parent-side creation count is UNMEASURED here and this assertion did
+  not run
+  ```
+
+  That is the claimed behaviour verified on the platform it was claimed about: the guard distinguishes "no interposer here" from "the count is fine", and the count itself remains a Linux measurement.
+
+`tests/fm-session-start-bound.test.sh`: run on the box, and it found a real defect in its own guard - the anti-vacuity check on the platform seam compared the MINGW ceiling against the AMBIENT HOST's ceiling, which is the same claim only while the host is not Windows.
+On MINGW64 the host margin IS 32, both ceilings are legitimately 328, and the guard fired a false failure on the one platform this port exists for.
+It now holds the MINGW arm against the `Linux` arm resolved through the SAME override seam, 328 s against 359 s, which is host-independent and still falsifiable: if the override stopped reaching the margin both arms would collapse onto one number.
+
+### Still NOT measured on the box
+
+- **A clean full-startup-to-completion timing under contention.** The figures that once stood here are withdrawn above, and no replacement was taken. This is why the headroom of the 300 s default against a contended, populated home is an open question rather than a measured result - see the provenance in [`../../bin/fm-session-start-bound-lib.sh`](../../bin/fm-session-start-bound-lib.sh), which states the same limit at the value's own definition.
+
+That is a headroom figure and not a behaviour check, which is why criterion 6 is discharged without it: what the criterion asks is that the change be exercised where the defect lives, and it now is.
+What the missing timing would settle is how much room 300 s has against a populated home under load, and no claim on this page or in that file asserts an answer to it.
 
 ## What the per-platform margin cost, measured
 
@@ -498,7 +568,7 @@ not ok - with no readable registration an over-default bound must fall back to t
 
 ```console
 $ # M19, bound suite
-not ok - the MINGW ceiling 359s is not below the host's 359s: the platform override is not reaching the nesting margin, so every MINGW assertion here is checking the host's number
+not ok - the MINGW ceiling 359s is not below the Linux arm's 359s: the platform override is not reaching the nesting margin, so every MINGW assertion here is checking one margin under two names
 $ # M19, hook-nesting suite
 not ok - the MINGW ceiling is not below the Linux one, so the platform arms are not distinguishable here and the loop above proves nothing about Windows
 $ # M20
@@ -517,6 +587,11 @@ M19 is the one worth reading twice.
 Before the seam was made symmetric, an in-process `FM_PLATFORM_UNAME_OVERRIDE=MINGW... fm_session_start_resolve_budget ...` returned the Windows BUDGET beside the HOST's MARGIN, so every case labelled MINGW was checking a ceiling that arm never uses - 359 s where the arm resolves 356 s.
 The mutation restores exactly that state, and the cross-arm assertions now added to both suites are what refuse it.
 M22's failure message naming `MINGW64_NT-10.0-26200` and 356 s is the same seam working: before this round that case could only ever see the host's number.
+
+**Both cross-arm assertions hold the MINGW arm against the `Linux` arm, not against the ambient host, and that distinction is a fix this branch had to make.**
+The bound suite's version originally compared against the host's own ceiling, which expresses "the override changed something" as "the answer differs from this box" - the same claim only while the box is not Windows.
+Run on `MINGW64_NT-10.0-26200` it failed falsely: the host margin there IS 32, both numbers were legitimately 328, and the guard fired on the one platform the whole port exists for.
+Resolving both arms through the same seam is host-independent and loses nothing, because a broken seam still collapses the two onto one number - which is exactly what the M19 output above is.
 
 ### Fourth round: the deadline predicate and the derived count
 
@@ -659,6 +734,37 @@ That is the safe direction, and it removes what was the least conservative part 
 Passing `FM_SESSION_START_CAP` into `fm_session_start_bound_remedy` instead of letting it re-derive removes a command substitution, a glob and an awk from the post-kill banner window; both derivations read the same registrations in the same shell, so no output changes and nothing can be falsified by a test.
 What covers it is that the derived-here path is unchanged and still exercised: the existing remedy cases pass no cap spec at all.
 
+### Tenth round: a discarded bound must be as loud as a clamped one
+
+An unusable `FM_SESSION_START_TIMEOUT` - non-numeric, or any spelling of zero - falls back to the platform default, and must: `timeout 0` and the perl fallback's `alarm 0` disable the deadline outright.
+But it used to fall back with nothing printed, which is a second defect wearing the first one's clothes.
+An operator who set the variable to `0` or to a typo believed they had raised the bound, so a later truncation read as "the bound I set was too small" and their next move raised a value that had never been in force.
+The clamp path on the same surface is emphatic that it must never be silent; the discard path now owes the same.
+
+| # | Guard | Mutation | Suite |
+|---|---|---|---|
+| M36 | a discarded bound is named on the digest | the discard branch returns before printing, restoring the silence | bound |
+| M37 | and an ABSENT value stays silent | an empty value treated as a discard, so every ordinary start carries a notice | bound |
+| M38 | the notice names THIS platform's default | the notice quotes the portable 120 s instead of the `effective` bound handed in | bound |
+
+```console
+$ # M36
+not ok - FM_SESSION_START_TIMEOUT='0' was discarded for the platform default with NOTHING printed, so a later truncation reads as the operator's bound having been too small rather than never having applied
+$ # M37
+not ok - an absent FM_SESSION_START_TIMEOUT must produce no advisory at all, got: ●  FM_SESSION_START_TIMEOUT='' is not a usable bound and was IGNORED: the
+$ # M38
+not ok - the discard advisory for '0' does not name the 300s default that replaced it, so the operator does not learn what bound is actually in force, got: ●  FM_SESSION_START_TIMEOUT='0' is not a usable bound and was IGNORED: the
+```
+
+M37 is the half that keeps M36 from being satisfied by a function that warns unconditionally.
+`${FM_SESSION_START_TIMEOUT:-}` reads the same empty string for "unset" as for "set to nothing", so the advisory cannot tell those apart and must stay quiet on both - otherwise the notice lands on every session start that never touched the variable, on the one surface this branch works to keep quiet by default.
+
+M38 is why the default is taken from the `effective` argument rather than re-derived: a notice quoting 120 s on a box running the 300 s bound is worse than silence, because it sends the operator to raise a number that is not the one in force.
+It also costs the path no subprocess, which matters because this runs in the parent before the bounded child is forked, inside the window the nesting margin pays for.
+
+The rejected value is echoed back through parameter expansion only, with whitespace flattened and the string clipped, so a value carrying newlines cannot forge digest lines around the notice that is reporting it.
+That is asserted both ways - the flattened spelling must appear and the raw one must not - rather than only in the direction that passes.
+
 ### What is NOT independently falsifiable, said plainly
 
 **The cap dedup has no guard and cannot have one.**
@@ -682,7 +788,7 @@ What IS guarded is the count not rising, which is the other input to the same pr
 **The per-arm equality inside the override loop is redundant, not load-bearing.**
 `[ "$got" -eq "$armcap" ]` compares the resolver's answer against a ceiling derived through the same code on the same arm, so it is an identity in the same way the clamped-path invariant below is.
 Deleting that one line leaves the suite green, which is stated here rather than left for someone to discover.
-What actually refuses the seam regression is the CROSS-arm assertion beside it - the MINGW ceiling must be strictly below the host's - and M19 is that line failing.
+What actually refuses the seam regression is the CROSS-arm assertion beside it - the MINGW ceiling must be strictly below the `Linux` arm's, both resolved through the override rather than one of them taken from the ambient host - and M19 is that line failing.
 The equality is kept because it extends to all twelve arms a check the later cases make on two, not because it is a second opinion.
 
 **The clamped-path invariant overlaps its neighbours by construction.**

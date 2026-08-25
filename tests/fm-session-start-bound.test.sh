@@ -199,6 +199,81 @@ test_unusable_explicit_bound_falls_back_to_the_platform_default() {
   pass "fm_session_start_resolve_budget: an unusable bound - including every zero-padded spelling of zero - falls back to the PLATFORM default, never to a portable constant"
 }
 
+# A DISCARDED BOUND MUST BE AS VISIBLE AS A CLAMPED ONE.
+#
+# The case above pins that an unusable FM_SESSION_START_TIMEOUT falls back to the
+# platform default, which is required - a zero or non-numeric value disables the
+# deadline outright. But the fallback used to happen with nothing printed, and
+# that is a distinct failure of its own: an operator who set the variable to 0 or
+# to a typo believed they had raised the bound, so when the digest later
+# truncated they read it as "the bound I set was too small" and raised a value
+# that was never in force. The clamp path is emphatic that it must never be
+# silent; the discard path owes the same.
+#
+# The observable contract asserted here: one advisory naming the REJECTED value
+# and the DEFAULT that replaced it, on every unusable spelling - and silence when
+# the variable is simply absent, because an empty string is what both "unset" and
+# "set to nothing" reach this function as, and warning on it would put a notice
+# on every ordinary session start.
+test_an_unusable_bound_is_discarded_out_loud_and_names_the_default() {
+  local bad out
+  for bad in 0 00 000 abc 12x -30 30.5; do
+    # The effective bound is passed as the platform default the resolver landed
+    # on, which is what bin/fm-session-start.sh hands it: the advisory must never
+    # re-derive a number that could disagree with the bound actually running.
+    out=$(fm_session_start_budget_advisory "$bad" 300 binds)
+    [ -n "$out" ] \
+      || fail "FM_SESSION_START_TIMEOUT='$bad' was discarded for the platform default with NOTHING printed, so a later truncation reads as the operator's bound having been too small rather than never having applied"
+    case "$out" in
+      *"$bad"*) : ;;
+      *) fail "the discard advisory for '$bad' does not name the value that was rejected, so the operator cannot tell which of their settings was thrown away, got: $out" ;;
+    esac
+    case "$out" in
+      *300s*) : ;;
+      *) fail "the discard advisory for '$bad' does not name the 300s default that replaced it, so the operator does not learn what bound is actually in force, got: $out" ;;
+    esac
+    case "$out" in
+      *IGNORED*) : ;;
+      *) fail "the discard advisory for '$bad' does not say plainly that the value was ignored, got: $out" ;;
+    esac
+  done
+
+  # The Windows arm is named too, because a notice quoting the portable 120s on a
+  # box running the 300s bound is worse than silence: it sends the operator to
+  # raise a number that is not the one in force.
+  out=$(FM_PLATFORM_UNAME_OVERRIDE=MINGW64_NT-10.0 \
+    fm_session_start_budget_advisory abc \
+    "$(FM_PLATFORM_UNAME_OVERRIDE=MINGW64_NT-10.0 fm_session_start_default_budget)" binds)
+  case "$out" in
+    *300s*) : ;;
+    *) fail "on the Windows arm the discard advisory must name that platform's own default, got: $out" ;;
+  esac
+
+  # AND IT STAYS QUIET WHEN NOTHING WAS SET. This is the anti-noise half: without
+  # it the assertions above are satisfied by a function that warns unconditionally
+  # and puts a notice on every session start that never touched the variable.
+  out=$(fm_session_start_budget_advisory '' 300 binds)
+  [ -z "$out" ] \
+    || fail "an absent FM_SESSION_START_TIMEOUT must produce no advisory at all, got: $out"
+  out=$(fm_session_start_budget_advisory 45 45 binds)
+  [ -z "$out" ] \
+    || fail "a bound honoured exactly as asked must produce no advisory, got: $out"
+
+  # A value carrying a newline must not forge extra digest lines around the
+  # notice that is reporting it: the whole advisory stays one block.
+  out=$(fm_session_start_budget_advisory "$(printf 'ab\ncd')" 300 binds)
+  case "$out" in
+    *"'ab cd'"*) : ;;
+    *) fail "a rejected value containing a newline was not flattened into the advisory line, so it can forge digest output: $out" ;;
+  esac
+  # Falsifiable rather than merely satisfied: the flattening is what makes that
+  # true, so the un-flattened spelling must NOT appear anywhere in the output.
+  case "$out" in
+    *"'ab"$'\n'*) fail "the rejected value's newline survived into the advisory, so a crafted value can print its own digest lines: $out" ;;
+  esac
+  pass "fm_session_start_budget_advisory: an unusable bound is discarded OUT LOUD, naming the rejected value and this platform's default, and stays silent when nothing was asked for"
+}
+
 # The whole point of rejecting a zero bound is that the resulting number is
 # handed to a real deadline, so this case asserts the deadline rather than the
 # string: `timeout <resolved> sleep ...` must actually kill, whereas the
@@ -238,7 +313,7 @@ test_a_zero_padded_bound_still_produces_a_deadline_that_bites() {
 # wrong "hook" costs recoverable bound, a wrong "not a hook" costs the banner
 # entirely. So `undetermined` clamps.
 test_the_clamp_follows_hook_context_and_undetermined_clamps() {
-  local cap got ctx
+  local cap posix_cap got ctx
   # THE CEILING IS DERIVED ON THE ARM THE ASSERTIONS NAME. The nesting margin is
   # per platform and resolved through the same call-time override as the budget,
   # so a ceiling taken in the suite's own shell is the HOST's, and comparing a
@@ -256,10 +331,21 @@ test_the_clamp_follows_hook_context_and_undetermined_clamps() {
     fm_session_start_resolve_budget "$((cap * 10))")
   [ "$got" -eq "$cap" ] \
     || fail "under a registered hook an over-ceiling bound must clamp to ${cap}s, got ${got}s"
-  # The Windows arm's ceiling must be STRICTLY below the host's, or the margin is
-  # not per platform at all and the override above proved nothing.
-  [ "$cap" -lt "$(fm_session_start_hook_ceiling)" ] \
-    || fail "the MINGW ceiling ${cap}s is not below the host's $(fm_session_start_hook_ceiling)s: the platform override is not reaching the nesting margin, so every MINGW assertion here is checking the host's number"
+  # The Windows arm's ceiling must be STRICTLY below the POSIX arm's, or the
+  # margin is not per platform at all and the override above proved nothing.
+  #
+  # BOTH ARMS ARE RESOLVED THROUGH THE SAME OVERRIDE SEAM, not against the
+  # ambient host. Comparing against the host's own ceiling encoded "the override
+  # changed something" as "the answer differs from this box", which is only the
+  # same claim while the box is not Windows: on MINGW64 the host margin IS 32,
+  # both numbers are legitimately equal, and the guard fired a false failure on
+  # the one platform this whole port exists for. Held against the Linux arm it is
+  # host-independent and still falsifiable - if the override stopped reaching the
+  # margin both arms would collapse onto one number and this would still fail.
+  posix_cap=$(FM_PLATFORM_UNAME_OVERRIDE=Linux fm_session_start_hook_ceiling) \
+    || fail "no harness ceiling could be derived for the POSIX arm, so the per-platform margin cannot be checked at all"
+  [ "$cap" -lt "$posix_cap" ] \
+    || fail "the MINGW ceiling ${cap}s is not below the Linux arm's ${posix_cap}s: the platform override is not reaching the nesting margin, so every MINGW assertion here is checking one margin under two names"
 
   # (b) THE SAFETY PROPERTY. Hook context cannot be established either way - no
   # marker, and stderr is not a terminal because this assertion redirects it -
@@ -1123,6 +1209,7 @@ test_windows_platforms_raise_the_default_bound
 test_non_windows_platforms_keep_the_portable_bound
 test_explicit_timeout_wins_on_every_platform
 test_unusable_explicit_bound_falls_back_to_the_platform_default
+test_an_unusable_bound_is_discarded_out_loud_and_names_the_default
 test_a_zero_padded_bound_still_produces_a_deadline_that_bites
 test_the_clamp_follows_hook_context_and_undetermined_clamps
 test_a_transport_that_arms_no_deadline_is_honoured_in_full

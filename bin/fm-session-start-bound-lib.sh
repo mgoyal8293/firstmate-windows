@@ -68,8 +68,33 @@ fi
 # the same reason: it is the only way the Windows arm gets regression coverage
 # from a POSIX runner, and this arm would otherwise be verified on no CI at all.
 #
-# 300 s ON MSYS/MINGW/CYGWIN IS A CONSERVATIVE RAISE FROM 120 s, and what it is
-# and is not justified by is recorded here rather than left as a round number.
+# WORST OBSERVED CASE: 123 s, AND IT TRUNCATED. That is the number this value has
+# to clear, it is stated here at the definition rather than only in the evidence
+# document, and every figure below is measured on MINGW64_NT-10.0-26200.
+#
+# 300 s ON MSYS/MINGW/CYGWIN IS PINNED BETWEEN TWO MEASURED BOUNDS rather than
+# picked for roundness, and both bounds were measured on the target box:
+#
+#   BOUNDED ABOVE at 328 s by fm_session_start_hook_ceiling on that box - the
+#   360 s shortest digest-tier registration minus the 32 s nesting margin the
+#   contention sweep derives there. Above 328 s the clamp starts biting an
+#   ordinary default run and the margin that keeps the truncation banner alive is
+#   what gets spent, so this is a hard ceiling on how far the bound can go
+#   without giving up the property the raise exists to protect. 300 s sits under
+#   it with the clamp inert on the default path, which is checked on all twelve
+#   platform arms by tests/fm-session-start-hook-nesting.test.sh.
+#
+#   BOUNDED BELOW at 123 s by the worst run actually observed - the empty home
+#   that truncated. 300 s is 2.4x that. Because it truncated, 123 s is a lower
+#   bound on what the run needed, so the true multiple is smaller than 2.4x by an
+#   unmeasured amount. The untruncated empty-home floor is 72 s and 76 s, and
+#   64-70 s after the subprocess reductions in this branch.
+#
+# So the value is derived from measurement in the only sense measurement supports
+# here: it is the largest bound that leaves the banner margin intact, and it is
+# well clear of every completion time and every truncation ever seen on the box.
+# It is NOT derived from a contended full-startup timing, because there is not
+# one - see the honest position below.
 #
 # WHY 120 s WAS TOO SMALL - the original observations, which stand unretracted.
 # On a Windows 11 box under Git Bash, on a home with no tasks, no projects and an
@@ -738,10 +763,50 @@ fm_session_start_delivery_bound() {  # [explicit-seconds]
 # second awk over every registration JSON, in the parent, before the bounded
 # child is forked; the previous version of this comment claimed the no-re-derive
 # property while it was true of the bound and false of the cap beside it.
+#
+# A DISCARD IS AS LOUD AS A CLAMP, and for the same reason. An UNUSABLE explicit
+# value - non-numeric, or any spelling of zero including the zero-padded ones -
+# is replaced by the platform default by fm_session_start_resolve_budget, and it
+# has to be, because `timeout 0` and `alarm 0` disable the deadline outright and
+# a session start with no deadline is the silent non-supervision this whole file
+# exists to prevent. But it used to be replaced with nothing said. An operator
+# who set FM_SESSION_START_TIMEOUT=0 or =abc believing they had changed the bound
+# then read a later truncation as "the bound I set was too small" rather than as
+# "the bound I set never applied", and their next move was to raise a value that
+# was never in force. So the discard is named, on exactly the same principle as
+# the clamp above: what was asked for, what is actually running, and why.
+#
+# AN EMPTY VALUE IS NOT A DISCARD and stays silent. `${FM_SESSION_START_TIMEOUT:-}`
+# reads the same empty string for "unset" as for "set to nothing", so this cannot
+# tell the two apart, and warning about the first would put a notice on every
+# ordinary session start - which is the surface this file keeps quiet by default.
+#
+# The default is NAMED FROM `effective` rather than re-derived, for the reason the
+# rest of this function takes both numbers: a second derivation can disagree with
+# the bound that is actually running, and on this path effective IS the platform
+# default fm_session_start_resolve_budget fell back to. It also keeps the discard
+# notice free of the subprocess a re-derivation would cost.
 fm_session_start_budget_advisory() {  # <requested> <effective> [context] [cap-spec]
   local requested=${1:-} effective=${2:-} context=${3:-} cap=${4:-} capsource=none capdeadline=0 caprest
-  case "$requested" in ''|*[!0-9]*) return 0 ;; esac
+  local unusable= shown
   case "$effective" in ''|*[!0-9]*|0) return 0 ;; esac
+  case "$requested" in
+    '') return 0 ;;
+    *[!0-9]*) unusable=1 ;;
+    *) [ "$((10#$requested))" -gt 0 ] || unusable=1 ;;
+  esac
+  if [ -n "$unusable" ]; then
+    # Echoed back through parameter expansion only - no fork - and flattened so a
+    # value carrying newlines or tabs cannot forge extra digest lines around the
+    # notice that is reporting it.
+    shown=${requested//[[:space:]]/ }
+    [ "${#shown}" -le 48 ] || shown="${shown:0:48}..."
+    printf '●  FM_SESSION_START_TIMEOUT='"'"'%s'"'"' is not a usable bound and was IGNORED: the\n' "$shown"
+    printf '●  session-start bound in force is this platform'"'"'s default of %ss.\n' "$effective"
+    printf '●  Set a positive whole number of seconds; zero and non-numeric values would\n'
+    printf '●  disable the deadline outright, which loses the truncation banner entirely.\n'
+    return 0
+  fi
   requested=$((10#$requested))
   [ "$requested" -gt "$effective" ] || return 0
   [ -n "$context" ] || context=$(fm_session_start_hook_context)

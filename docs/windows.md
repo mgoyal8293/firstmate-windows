@@ -60,14 +60,20 @@ One run of that same empty home with a test lane competing for CPU took 123 s an
 So the default bound is now per platform: 120 s as before, and 300 s under MSYS, MINGW and Cygwin.
 [`../bin/fm-session-start-bound-lib.sh`](../bin/fm-session-start-bound-lib.sh) is the one owner of that resolution and records the reasoning behind the number.
 
-**What 300 s is not justified by, since an earlier version of this page implied otherwise.**
-It is a conservative raise from 120 s, and the observations above are the whole case for raising it.
-They do not establish that 300 s is ENOUGH: this branch has since measured a load factor of about 5x on the parent side alone - 2.06 s idle, 10.3 s mean at 8 fork-heavy competitors, 24.1 s mean at 16 - and a 5x factor does not fit inside the 3.9x headroom 300 s has over the 76 s idle floor.
+**Where 300 s comes from: it is pinned between two bounds measured on the box, not picked for roundness.**
+Bounded ABOVE at 328 s by the harness ceiling derived on that box - the 360 s shortest registered session-start timeout minus the 32 s nesting margin below.
+Past 328 s the clamp starts biting an ordinary default run and the margin that keeps the truncation banner alive is what gets spent, so that is a hard limit on how far the bound can go without giving up the property the raise exists to protect.
+Bounded BELOW at 123 s by the worst run actually observed - the empty home that truncated - which 300 s clears by 2.4x; and because that run truncated, the true multiple is smaller than 2.4x by an unmeasured amount.
+
+**What 300 s is still not justified by, since an earlier version of this page implied otherwise.**
+The observations above are the whole case for raising the bound, and they do not establish that 300 s is ENOUGH: this branch has since measured a load factor of about 5x on the parent side alone - 2.06 s idle, 10.3 s mean at 8 fork-heavy competitors, 24.1 s mean at 16 - and a 5x factor does not fit inside the 3.9x headroom 300 s has over the 76 s idle floor.
 There is no clean full-startup-to-completion timing under contention on the current tree, and a populated home does strictly more work than the empty one every number above came from.
 So the headroom of 300 s against a contended, populated home is an open question, not a measured result.
 What protects that case is the truncation path rather than the bound: the bound bites, the banner prints, and the stage that did not finish is named - and the nesting margin below is what keeps that banner from being lost.
 An explicit `FM_SESSION_START_TIMEOUT` still wins on every platform, including a value below the raised default; an unusable one falls back to the platform default rather than to a portable constant, because a zero bound disables the deadline outright.
 Unusable means NUMERICALLY zero, not the character `0`: `timeout 00 sleep 2` exits 0 after the full two seconds rather than 124, so a zero-padded bound leaves the digest with no deadline at all and a wedged startup never truncates and never prints a banner - the same silent non-supervision the bound exists to remove.
+**That fallback is not silent.** The digest names the rejected value and the platform default that replaced it, because an operator who set `FM_SESSION_START_TIMEOUT=0` and was told nothing reads a later truncation as their bound having been too small rather than as never having applied, and spends their next move raising a value that was never in force.
+An absent variable prints nothing, since that is the ordinary case rather than a discard.
 The one thing it does not win against is the harness: a value above the shortest registered session-start hook timeout is CLAMPED just under it, and the digest says so by name, because above that line the harness kills the hook outright and prints none of the banner - which is what the truncation banner's own "raise `FM_SESSION_START_TIMEOUT`" advice used to invite.
 The ceiling is read from the registrations rather than written down, so raising the hook timeouts raises it too and the operator's larger value is then honoured.
 The clamp is SCOPED to the runs a kill deadline actually binds, which is not the same question as "is this a hook": it applies when a deadline is positively established, and also when it cannot be established either way, and is skipped only where in-repo evidence positively proves none binds - a direct terminal invocation, or a transport that declares it armed no deadline.
