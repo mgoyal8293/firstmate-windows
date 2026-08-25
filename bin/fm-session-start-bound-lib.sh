@@ -123,76 +123,55 @@ FM_SESSION_START_DIGEST_WRAPPERS='fm-session-start.sh fm-sessionstart-run.sh fm-
 # whole banner. tests/fm-session-start-hook-nesting.test.sh asserts that same
 # strictness.
 #
-# 22 s ON MSYS/MINGW/CYGWIN IS DERIVED FROM A DIRECT TIMING OF THE REAL PARENT
-# SIDE ON THE TARGET BOX, and it replaces a 4 s value that measurement showed was
-# too small.
+# 32 s ON MSYS/MINGW/CYGWIN IS DERIVED FROM THE WORST DIRECTLY MEASURED
+# NON-THRASHING PARENT SIDE ON THE TARGET BOX.
 #
-# THE DERIVATION, from the direct timing rather than from a model.
-#   Directly measured parent side, zero contention = 13.1 s.
-#     Method: the real bin/fm-session-start.sh on MINGW64_NT-10.0-26200, against
-#     a fresh empty throwaway FM_HOME, with a synthetic 10 s registration giving
-#     a 6 s ceiling and an explicit 9999 clamped to it. Total wall clock 19.1 s
-#     with the truncation banner present, minus the 6 s the bounded child was
-#     allowed, leaves 13.1 s the parent spent outside its own bound.
-#   22 s is about 1.7x that measured idle parent side.
-#   Consequence: the derived ceiling moves from 360 - 4 = 356 to 360 - 22 = 338.
+# THE CONSERVATISM IS FREE, AND THAT IS THE FIRST THING TO KNOW. The derived
+# ceiling is 360 - 32 = 328 s. The Windows DEFAULT budget is 300 s, which is
+# still below 328 s, so DEFAULT BEHAVIOUR IS COMPLETELY UNCHANGED by this
+# margin. The clamp only ever bites an operator who has explicitly raised
+# FM_SESSION_START_TIMEOUT above 328 s. A large margin therefore costs an
+# ordinary session start nothing at all, which is why the conservative value is
+# the right one rather than a finely tuned smaller one.
 #
-# THE MODEL IS CORROBORATION ONLY, AND IT UNDERSTATES THE REAL COST - roughly
-# tenfold. Applying measured per-creation costs to the measured 20-exec/20-pure
-# parent-side mix puts the idle parent side at 1258 ms, against the 13.1 s a
-# direct timing of the same path at the same zero contention actually took. So no
-# margin may be re-derived downward from the sweep below: it is kept as the
-# cost-input record and as the shape of how contention scales, not as the source
-# of this number.
+# THE DERIVATION.
+#   Worst directly measured non-thrashing parent side = 31.20 s, at 16
+#   fork-heavy competitors on a 22-core box. Rounded up = 32 s.
 #
-# THE SWEEP, on MINGW64_NT-10.0-26200, bash 5.2.37, 22 cores.
-# N=40 process creations per sample, timed with `date +%s%N`. Competitors are
-# fork-heavy bash loops. The harness kills every competitor on ANY exit path
-# through a trap, and each run prints its own pre-run and post-run stale-competitor
-# count; both read 0 on every run recorded here. That self-cleaning trap is the
-# fix for exactly what corrupted the previous attempt, where two earlier
-# timed-out runs had orphaned 21 competitors that were still running, unnoticed,
-# underneath the numbers.
+# THE DATASET, and it supersedes the model, the retracted figures and the older
+# per-fork curve. Direct wall-clock timing of the REAL bin/fm-session-start.sh on
+# MINGW64_NT-10.0-26200, bash 5.2.37, 22 cores. Each sample: a fresh empty
+# throwaway FM_HOME; a synthetic registration declaring a 10 s SessionStart
+# timeout, so the ceiling is 6 s and an explicit 9999 is genuinely CLAMPED to it;
+# parent side = total elapsed minus the 6 s bound. Competitors are fork-heavy
+# bash loops killed by a trap on every exit path. The truncation banner was
+# VERIFIED PRESENT on all 9 samples, so a run whose bound failed to fire could
+# never be silently averaged in, and the run self-reported a stale-competitor
+# count of 0 afterwards.
 #
-# "Parent side" below is a MODEL, not a direct timing: it applies the measured
-# per-creation costs to the measured parent-side mix of 20 exec-backed plus 20
-# pure creations. Labelled as a model wherever it appears, because it is one.
+#   competitors   parent side, 3 samples          mean      worst
+#     0           2.10 s, 2.13 s, 1.95 s          2.06 s    2.13 s
+#     8           14.89 s, 8.28 s, 7.83 s         10.3 s    14.89 s
+#    16           31.20 s, 19.78 s, 21.44 s       24.1 s    31.20 s
 #
-#   Sweep A, box otherwise idle:
-#     competitors   pure ms   exec ms   modelled parent side
-#       0            25.1      37.8       1258 ms
-#       4            58.3     101.9       3204 ms
-#       8            51.4     105.6       3140 ms
-#      16           113.9     316.7       8612 ms
-#      24          2497.5     397.2      57894 ms
+# 24 COMPETITORS IS DELIBERATELY EXCLUDED from the derivation. It is past the
+# 22-core count and thrashes - the earlier per-creation sweep measured 2497.5 ms
+# per pure fork there, a 57.9 s modelled parent side. No fixed margin can cover a
+# thrashing regime, so deriving from it would be meaningless. The exclusion is
+# recorded rather than the sample deleted, because deleting an inconvenient
+# sample is how a measurement becomes a story.
 #
-#   Sweep B, 3 repeats per point, taken while the validation pipeline was itself
-#   running on the same box - realistic concurrent load rather than a synthetic
-#   condition:
-#      12          606.5/425.9 -> 20648 ms, 317.9/445.0 -> 15258 ms, 224.6/620.8 -> 16908 ms
-#      16          267.7/641.2 -> 18178 ms, 244.9/765.6 -> 20210 ms, 296.6/783.8 -> 21608 ms
+# THE MODEL IS CORROBORATION AT IDLE AND UNRELIABLE UNDER LOAD. Applying measured
+# per-creation costs to the measured 20-exec/20-pure parent-side mix puts the
+# idle parent side at 1.26 s against a directly measured 2.06 s, which is the
+# same order and a reasonable idle proxy. Under contention it UNDERSTATES badly:
+# 8.6 s modelled against a 24.1 s measured mean at 16 competitors, about 2.8x
+# low. So no margin may be re-derived downward from the model, and the sweep it
+# came from is kept as the cost-input record rather than as the source of this
+# number.
 #
-# WHAT THE SWEEP ESTABLISHES, stated plainly rather than hedged:
-#   - Under EVERY contended condition modelled, 4 s is EXCEEDED. 3.1-3.2 s at 4-8
-#     competitors is already about 80% of it; 8.6 s at 16 on an otherwise idle box
-#     is 2.15x it; 15.3-21.6 s under real concurrent load is 4-5x it.
-#   - The direct timing is harsher still: 13.1 s at ZERO contention, which the
-#     model puts at 1.26 s. So 4 s was already exceeded before any competitor
-#     existed, and the earlier "sufficiency is unknown" framing is out of date in
-#     the other direction.
-#
-# WHAT IS RECORDED BUT NOT DERIVED FROM. The 24-competitor point, 57894 ms on a
-# 22-core box, is a thrashing regime past core count where no fixed margin helps.
-# It is kept because deleting an inconvenient sample is how a measurement becomes
-# a story, but 22 s is deliberately not derived from it.
-#
-# WHAT THIS DOES NOT CLAIM. The spread between Sweep A and Sweep B at the same
-# nominal competitor count - 8.6 s against 15.3-21.6 s at 16 - shows the dominant
-# variable is TOTAL BOX LOAD, not the competitor count alone. So the competitor
-# count does not determine the cost, this is not a curve to interpolate, and 22 s
-# is 1.7x a directly measured IDLE parent side rather than a proof of sufficiency
-# under load. The direct timing has one sample at one contention level; the
-# contended parent side has not been timed directly at all.
+# 1 s OFF WINDOWS is unchanged: creations cost about 1 ms there, and 1 s is the
+# strict-inequality margin the equal-deadline race needs.
 #
 # THE CLAMP AND THE BANNER READ THIS ONE VARIABLE, which is a requirement and not
 # a tidiness preference. fm_session_start_bind_ceiling subtracts it to derive the
@@ -218,7 +197,7 @@ FM_SESSION_START_DIGEST_WRAPPERS='fm-session-start.sh fm-sessionstart-run.sh fm-
 # the pre-fork window the margin itself pays for does not grow to measure it.
 fm_session_start_bind_margin() {
   case "${FM_PLATFORM_UNAME_OVERRIDE:-$FM_SESSION_START_PLATFORM}" in
-    MINGW*|MSYS*|CYGWIN*) FM_SESSION_START_NESTING_MARGIN=22 ;;
+    MINGW*|MSYS*|CYGWIN*) FM_SESSION_START_NESTING_MARGIN=32 ;;
     *) FM_SESSION_START_NESTING_MARGIN=1 ;;
   esac
 }
@@ -485,7 +464,7 @@ fm_session_start_hook_context() {
 }
 
 # The cap actually in force for an explicit bound on this path, and the reason it
-# applies. Prints "<seconds> <source>", where source is one of:
+# applies. Prints "<seconds> <source> <deadline>", where source is one of:
 #   harness - the shortest registered digest-tier hook timeout, minus the nesting
 #             margin. The number the machine will really give.
 #   default - no registration could be read AT ALL, so this platform's default
@@ -581,7 +560,7 @@ fm_session_start_cap() {  # [hook-context]
 #
 # THE CAP MAY BE HANDED IN, and on the path bin/fm-session-start.sh actually
 # takes it always is. A caller that has already derived the cap passes it as
-# `<seconds> <source>`, or the literal `none` for a positively established
+# `<seconds> <source> <deadline>`, or the literal `none` for a positively established
 # direct run where no cap applies; an empty second argument means "derive it
 # here". Deriving it twice is not merely wasteful, it is wasteful in the one
 # place that cannot afford it: the derivation costs a hook-context probe, a glob
@@ -733,7 +712,6 @@ fm_session_start_delivery_bound() {  # [explicit-seconds]
 # property while it was true of the bound and false of the cap beside it.
 fm_session_start_budget_advisory() {  # <requested> <effective> [context] [cap-spec]
   local requested=${1:-} effective=${2:-} context=${3:-} cap=${4:-} capsource=none capdeadline=0 caprest
-  fm_session_start_bind_margin
   case "$requested" in ''|*[!0-9]*) return 0 ;; esac
   case "$effective" in ''|*[!0-9]*|0) return 0 ;; esac
   requested=$((10#$requested))
@@ -745,10 +723,13 @@ fm_session_start_budget_advisory() {  # <requested> <effective> [context] [cap-s
     capsource=${caprest%% *}
     capdeadline=${caprest#* }
     # A spec without a usable deadline field can only come from a caller that
-    # built one by hand. Re-deriving beats printing a fabricated second, and the
-    # real caller always carries it, so this never runs on the session-start path.
+    # built one by hand, so re-deriving beats printing a fabricated second. 0 is
+    # NOT that case: it is the sentinel the `default` arm emits for "no deadline
+    # was read", and matching it here re-ran a derivation that had just failed,
+    # in the pre-fork window the margin pays for, to produce a number no branch
+    # then prints.
     case "$capdeadline" in
-      ''|*[!0-9]*|0) capdeadline=$(fm_session_start_hook_deadline) || capdeadline=0 ;;
+      ''|*[!0-9]*) capdeadline=$(fm_session_start_hook_deadline) || capdeadline=0 ;;
     esac
   fi
   printf '●  FM_SESSION_START_TIMEOUT=%ss was CLAMPED to %ss.\n' "$requested" "$effective"
@@ -816,7 +797,6 @@ fm_session_start_budget_advisory() {  # <requested> <effective> [context] [cap-s
 # construction the number in force.
 fm_session_start_bound_remedy() {  # <effective-budget> [context]
   local effective=${1:-} context=${2:-} cap capvalue capsource capdeadline caprest
-  fm_session_start_bind_margin
   case "$effective" in ''|*[!0-9]*) effective=0 ;; esac
   if [ -z "$context" ]; then
     fm_session_start_bind_context
@@ -833,7 +813,7 @@ fm_session_start_bound_remedy() {  # <effective-budget> [context]
   capsource=${caprest%% *}
   capdeadline=${caprest#* }
   case "$capdeadline" in
-    ''|*[!0-9]*|0) capdeadline=$(fm_session_start_hook_deadline) || capdeadline=0 ;;
+    ''|*[!0-9]*) capdeadline=$(fm_session_start_hook_deadline) || capdeadline=0 ;;
   esac
   if [ "$effective" -lt "$capvalue" ]; then
     printf '●  If it truncates again, raise FM_SESSION_START_TIMEOUT - to at most %ss, above\n' "$capvalue"

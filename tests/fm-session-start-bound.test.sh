@@ -647,11 +647,11 @@ test_a_registration_smaller_than_the_margin_still_bounds_the_clamp() {
 # kill second as cap + margin. That identity holds only while
 # ceiling = deadline - margin, which the sub-margin branch cannot satisfy - no
 # non-negative ceiling can. So the branch added to stop the clamp overstating the
-# bound left the banners overstating the deadline instead: with the margin at 22s
+# bound left the banners overstating the deadline instead: with the margin at 32s
 # a 20s registration produced a ceiling of 19 and a banner announcing a kill at
 # 41s, twenty-one seconds past what the registration declared.
 #
-# The band is every registration at or below the margin, which on MSYS is now 22s
+# The band is every registration at or below the margin, which on MSYS is now 32s
 # - a plausible misconfiguration rather than an absurd one, and it brackets the
 # 10s the nudge tier already uses.
 test_no_banner_names_a_deadline_past_the_registration_it_read() {

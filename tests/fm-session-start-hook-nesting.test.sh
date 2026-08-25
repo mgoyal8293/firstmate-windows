@@ -357,7 +357,7 @@ test_a_clamp_says_so_on_the_digest() {
 #
 # WHY THE COUNT IS WHAT THIS GUARDS, rather than the margin's sufficiency. The
 # margin is now derived from a clean contention sweep on the target box and is
-# 22 s on MSYS, taken from the worst non-thrashing measured point; the derivation,
+# 32 s on MSYS, taken from the worst non-thrashing directly measured point; the derivation,
 # its method and what it does not claim live in
 # bin/fm-session-start-bound-lib.sh and
 # docs/verification/session-start-fork-profile.md, and no per-creation cost is
@@ -429,6 +429,18 @@ PARENT_SIDE_CREATION_FLOOR=25
 # instrument is worse than no instrument, because every number downstream of it
 # is silently wrong.
 #
+# THREE statuses, because three different things must not share one answer:
+#   0 - measured.
+#   1 - the instrument CANNOT be built or preloaded here (no cc, no LD_PRELOAD,
+#       MINGW). A legitimate skip.
+#   2 - the instrument was built and RAN but MISCOUNTED the known-count program.
+#       A wrong instrument is worse than no instrument, so this fails the suite.
+#   3 - the FIXTURE could not be set up (no usable temp root, or a git that
+#       cannot init). The instrument may be perfectly good; the guard simply did
+#       not run, and reporting that as "no working interposer on this box" states
+#       a reason that is false and hides the fact that the only automated guard
+#       on the parent-side count was skipped.
+#
 # The distinction is load-bearing because `fail` cannot be used from inside this
 # function. It is only ever reached through a command substitution, where `fail`'s
 # `exit 1` leaves the subshell rather than the script - so a validation failure
@@ -439,7 +451,7 @@ PARENT_SIDE_CREATION_FLOOR=25
 # substitution, is what fails.
 count_parent_side_creations() {
   local dir so log out creations execs spawns truncated bound
-  dir=$(fm_test_tmproot fm-session-start-forkcount) || return 1
+  dir=$(fm_test_tmproot fm-session-start-forkcount) || return 3
   so="$dir/forkcount.so"
   command -v cc >/dev/null 2>&1 || return 1
   cc -shared -fPIC -O2 -o "$so" "$ROOT/tests/fixtures/forkcount.c" -ldl 2>/dev/null || return 1
@@ -459,8 +471,8 @@ count_parent_side_creations() {
 
   mkdir -p "$dir/home/state" "$dir/home/data" "$dir/home/config" "$dir/home/projects" \
     "$dir/fakebin" "$dir/root" "$dir/regs/.synthetic"
-  git init -q -b main "$dir/root" >/dev/null 2>&1 || return 1
-  git -C "$dir/root" commit -q --allow-empty -m init >/dev/null 2>&1 || return 1
+  git init -q -b main "$dir/root" >/dev/null 2>&1 || return 3
+  git -C "$dir/root" commit -q --allow-empty -m init >/dev/null 2>&1 || return 3
   local tool
   for tool in tmux node chrome-devtools-axi gh treehouse lavish-axi gh-axi no-mistakes; do
     printf '#!/bin/sh\nexit 0\n' > "$dir/fakebin/$tool"
@@ -503,6 +515,10 @@ test_the_parent_side_creation_count_has_not_risen() {
     # BUILT BUT WRONG. Not a skip: the instrument disagreed with a program whose
     # creation count is known, so nothing it reports can be trusted.
     2) fail "the fork interposer disagreed with the known-count program (7 creations asked for), so every number it would report is untrustworthy: fix or rebuild tests/fixtures/forkcount.c rather than skipping the count guard" ;;
+    # FIXTURE SETUP FAILED. Also not a skip: the interposer may be fine, so
+    # blaming the toolchain would state a false reason and quietly drop the only
+    # automated guard on the parent-side count.
+    3) fail "the parent-side count fixture could not be set up (temp root or git init failed), so the count guard did not run; this is not a missing interposer and must not be reported as one" ;;
     *)
       printf 'note: no working LD_PRELOAD fork interposer on this box (no cc, or preloading is unavailable), so the parent-side creation count is UNMEASURED here and this assertion did not run\n' >&2
       pass "parent-side creation count: SKIPPED - the interposer could not be built or preloaded on this box"
@@ -545,7 +561,7 @@ EOF
 #
 # Nor does it assert sufficiency at unbounded load, which the derivation itself
 # declines to claim: the measured spread at the same competitor count shows total
-# box load dominates, so 22 s covers the worst non-thrashing condition measured
+# box load dominates, so 32 s covers the worst non-thrashing condition measured
 # on that box rather than every condition that could occur.
 test_the_nesting_margin_is_per_platform_and_real_on_both_arms() {
   local margin portable

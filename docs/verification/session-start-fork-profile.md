@@ -175,14 +175,14 @@ That figure is a LOWER bound on the window: when it was taken, the mark sat afte
 Before the `startup` stage existed, a truncation inside that window could only report the stage as `unknown` and list no lost stages at all, which is the case where the banner explains least.
 The final stage's elapsed is bounded by the remaining budget rather than measured, because the child was killed inside it; it is a lower bound on that stage, which is why it is marked as not finished.
 
-## The nesting margin, and why it is 22 s on Windows
+## The nesting margin, and why it is 32 s on Windows
 
 The runtime bound governs the BOUNDED CHILD.
 The harness kills the PARENT, and the parent spends time outside that child at both ends, so the hook's wall time is prologue + bound + banner.
 A margin sized only for the equal-deadline race covers neither end, and the operator who does exactly what the truncation banner tells them - raise `FM_SESSION_START_TIMEOUT` to the printed ceiling - then loses the banner outright on MSYS.
 `FM_SESSION_START_NESTING_MARGIN` in [`../../bin/fm-session-start-bound-lib.sh`](../../bin/fm-session-start-bound-lib.sh) is therefore per platform, by the same `uname -s` arms as the default budget.
 
-### Three derivations retracted, in order
+### Four derivations retracted, in order
 
 The first counted 22 subprocesses on the DEFAULT path and landed on 3 s.
 That is WRONG and must not be cited: the default Windows bound is 300 s against a ceiling in the 330s, so the default path can never reach the ceiling, and only a CLAMPED bound ever equals it.
@@ -195,6 +195,10 @@ The third was the per-creation cost that produced a 4 s margin: 46.5 ms per pure
 **Those figures were not taken at idle.**
 Twenty-one orphaned competitor processes from two earlier timed-out measurement runs were still on the box, reparented to PID 1, and were not noticed until afterwards.
 They are kept named rather than deleted so nobody re-derives from them, and they are superseded entirely by the sweep below.
+
+The fourth was a **13.1 s direct idle parent side**, which produced a 22 s margin.
+It too was inflated by uncontrolled box load.
+The clean idle value is **2.06 s**, from the 9-sample dataset below, and 13.1 s must not be cited.
 
 ### What the parent side actually costs, measured end to end
 
@@ -255,44 +259,57 @@ Sweep B, 3 repeats per point, taken while the validation pipeline was itself run
 Under EVERY contended condition modelled, 4 s is EXCEEDED: 3.1-3.2 s at 4-8 competitors is already about 80% of it, 8.6 s at 16 on an otherwise idle box is 2.15x it, and 15.3-21.6 s under real concurrent load is 4-5x it.
 The direct timing below is harsher still, so 4 s was not merely unproven - it was too small, and the earlier "sufficiency is unknown" framing is out of date in the other direction.
 
-### The parent side, timed DIRECTLY on the box
+### The parent side, timed DIRECTLY on the box - the authoritative dataset
 
-This supersedes the model as the basis of the margin.
-The model above is an inference: measured per-creation costs applied to the measured 20-exec/20-pure parent-side mix.
-This is a wall clock on the real script.
+This supersedes the model, the retracted figures and the older 30.6 / 44.5 / 61.7 / 124.0 ms per-fork curve.
+The model above is an inference; this is a wall clock on the real script.
 
-Method: the real [`../../bin/fm-session-start.sh`](../../bin/fm-session-start.sh) executed on `MINGW64_NT-10.0-26200`, bash 5.2.37, 22 cores, each run against a fresh empty throwaway `FM_HOME`, competitors killed by a trap on every exit path, each run self-reporting its stale-competitor count as 0 before and after.
-The clamped path is forced with a synthetic 10 s registration, giving a 6 s ceiling, and an explicit `FM_SESSION_START_TIMEOUT=9999` clamped down to it.
+Method: the real [`../../bin/fm-session-start.sh`](../../bin/fm-session-start.sh) on `MINGW64_NT-10.0-26200`, bash 5.2.37, 22 cores.
+Each sample uses a fresh empty throwaway `FM_HOME` and a synthetic registration declaring a 10 s SessionStart timeout, so the ceiling is 6 s and an explicit `FM_SESSION_START_TIMEOUT=9999` is genuinely CLAMPED to it; parent side = total elapsed minus the 6 s bound.
+Competitors are fork-heavy bash loops killed by a trap on every exit path.
+The truncation banner was VERIFIED PRESENT on all 9 samples, so a run whose bound failed to fire could never be silently averaged in, and the run self-reported a stale-competitor count of 0 afterwards.
 
-| Contention | Total wall clock | Banner | Bound allowed the child | Parent side |
-|---|---|---|---|---|
-| 0 competitors | 19.1 s | present | 6 s | **13.1 s** |
+| Competitors | Parent side, 3 samples | Mean | Worst |
+|---|---|---|---|
+| 0 | 2.10 s, 2.13 s, 1.95 s | 2.06 s | 2.13 s |
+| 8 | 14.89 s, 8.28 s, 7.83 s | 10.3 s | 14.89 s |
+| 16 | 31.20 s, 19.78 s, 21.44 s | 24.1 s | **31.20 s** |
 
-**The model understates the real parent side by roughly tenfold.**
-It puts the idle parent side at 1258 ms; the direct timing of the same path at the same zero contention is 13.1 s.
-So no margin may be re-derived downward from the sweep: it is kept as the cost-input record and as the shape of how contention scales, not as the source of the number.
+**24 competitors is deliberately excluded from the derivation.**
+It is past the 22-core count and thrashes - the earlier per-creation sweep measured 2497.5 ms per pure fork there, a 57.9 s modelled parent side.
+No fixed margin can cover a thrashing regime, so deriving from it would be meaningless.
+The exclusion is recorded rather than the sample deleted, because deleting an inconvenient sample is how a measurement becomes a story.
 
-### The derivation, and what it does not claim
+**The model's standing, corrected.**
+At idle the model (1.26 s) and the direct measurement (2.06 s) agree to within the same order, so it is a reasonable idle proxy.
+Under contention it UNDERSTATES badly: 8.6 s modelled against a 24.1 s measured mean at 16 competitors, about 2.8x low.
+So no margin may be re-derived downward from it; the sweep stays as the cost-input record, not as the source of the number.
 
-Directly measured idle parent side = **13.1 s**.
-Margin = **22 s**, about **1.7x** that.
-Consequence: the derived ceiling moves from 360 - 4 = 356 to **360 - 22 = 338**.
-Off Windows the margin stays 1 s: creations cost about 1 ms there, and 1 s is the strict-inequality margin the equal-deadline race needs.
+### The derivation, and why the conservatism is free
 
-The 24-competitor point in the sweep, 57894 ms on a 22-core box, is a thrashing regime past core count where no fixed margin can help.
-It is recorded because deleting an inconvenient sample is how a measurement becomes a story, and 22 s is deliberately not derived from it.
+Worst directly measured non-thrashing parent side = **31.20 s**, at 16 fork-heavy competitors.
+Rounded up, the MSYS margin is **32 s**.
+Off Windows it stays 1 s: creations cost about 1 ms there, and 1 s is the strict-inequality margin the equal-deadline race needs.
 
-**What this does NOT claim.**
-The spread between Sweep A and Sweep B at the same nominal competitor count - 8.6 s against 15.3-21.6 s at 16 - shows the dominant variable is TOTAL BOX LOAD, not the competitor count alone.
-So this is not a curve to interpolate, and the competitor count does not determine the cost.
-And the direct timing that the margin now rests on is ONE sample at ONE contention level: 22 s is 1.7x a measured IDLE parent side, not a proof of sufficiency under load, because the contended parent side has not been timed directly at all.
+**The derived ceiling becomes 360 - 32 = 328 s, and the Windows DEFAULT budget is 300 s - still below it.**
+So default behaviour is COMPLETELY UNCHANGED by this margin.
+The clamp only ever bites an operator who has explicitly raised `FM_SESSION_START_TIMEOUT` above 328 s.
+A large margin therefore costs an ordinary session start nothing at all, which is precisely why the conservative value is the right one rather than a finely tuned smaller one.
 
-The two dedups - `fm_session_start_bind_budget` and `fm_session_start_bind_context`, each holding a derivation that used to run twice in the parent to one - remain correctness dependencies of this number rather than performance niceties.
+This closes the margin question.
+It is not to be re-derived or refined without evidence that actively contradicts the dataset above.
 
-### One value, read by both the clamp and the banner
+### One consumer of the margin, and a carried deadline
 
-`fm_session_start_hook_ceiling` subtracts the margin to derive the highest bound it will allow, and `fm_session_start_budget_advisory` and `fm_session_start_bound_remedy` add it back to name the second the harness will actually kill at.
-A second literal anywhere would let the number the operator is told diverge from the number in force, which is the failure the margin exists to prevent, so mutation M8 below is what holds them together.
+The margin has exactly ONE consumer: `fm_session_start_bind_ceiling` subtracts it to derive the highest bound the clamp will allow.
+Nothing else reads it.
+
+The banners do NOT reconstruct the kill second from it, and that is a correctness property rather than a tidiness one.
+They used to add the margin back to the cap, which reproduces the deadline only while `ceiling = deadline - margin` holds - and the sub-margin branch cannot satisfy that, because no non-negative ceiling can when the registration is smaller than the margin.
+So `fm_session_start_cap` carries the deadline it actually read as the third field of its spec (`<seconds> <source> <deadline>`, with `0` on the `default` arm where none was read), and `fm_session_start_budget_advisory` and `fm_session_start_bound_remedy` print that field.
+There is no second place the number can be derived, so the two cannot drift.
+
+A second literal margin anywhere still moves the ceiling and still fails `test_the_clamp_and_the_banner_agree_on_the_margin`, which is what M8 below falsifies.
 
 ## One bound for the digest and the detached worker
 
@@ -307,30 +324,18 @@ The result is not lost, it still surfaces as a durable wake, but it stops arrivi
 `bin/fm-session-start.sh` now resolves the bound once and exports it as `FM_SESSION_START_RESOLVED_BOUND` on the same `env` that forks the bounded child, which the worker inherits.
 `fm_session_start_delivery_bound` prefers it and falls back to a local resolution only when there is no digest to inherit from, which is the standalone case.
 
-## OPEN: the runtime bound did not fire in 3 of 4 clamped runs on MSYS
+## The runtime bound IS enforced on MSYS: 12 of 12
 
-**This is unresolved, it is the most serious open observation on this page, and nothing in this tree asserts that the runtime bound is reliably enforced on MSYS.**
+An earlier round recorded this as an OPEN, high-severity observation: with the bound clamped to 6 s, three of four runs reached 34.1 s, 270.6 s and 261.0 s with no truncation banner.
+**That observation is WITHDRAWN.** It was the measurement harness, not the shipped code.
 
-Method: the real [`../../bin/fm-session-start.sh`](../../bin/fm-session-start.sh) on `MINGW64_NT-10.0-26200`, bash 5.2.37, 22 cores, each run against a fresh empty throwaway `FM_HOME`, competitors killed by a trap on every exit path, each run self-reporting its stale-competitor count as 0 before and after.
-A synthetic 10 s registration gives a 6 s ceiling, and an explicit `FM_SESSION_START_TIMEOUT=9999` is clamped down to it.
-**The bound was 6 s in every one of the four runs below.**
+What a correctly cleaned harness shows, on `MINGW64_NT-10.0-26200`:
 
-| Contention | Repeat | Total wall clock | Truncation banner | Bound enforced |
-|---|---|---|---|---|
-| 0 competitors | 1 | 19.1 s | present | yes |
-| 0 competitors | 2 | 34.1 s | absent | **no** |
-| 8 competitors | 1 | 270.6 s | absent | **no** |
-| 8 competitors | 2 | 261.0 s | absent | **no** |
+- The bound fired on **12 of 12** samples - 3 diagnostic runs plus the 9-sample timed sweep above. The clamp resolves to 6 s and the truncation banner printed on every one.
+- `fm_run_timed` was also exercised directly: `rc=124` at about 2.2 s on 5 of 5 repeats against a 2 s bound, including against a child that installs `trap "" TERM`, so the `-k` kill path works too.
 
-A 6 s bound that lets a run reach 261-271 s is not a delayed kill.
-It is a kill that never happened.
-
-**What is NOT concluded from this.**
-Four samples with one success is a signal, not a result.
-This is not asserted to be a defect in the shipped code: it may be the measurement harness rather than `timeout` or the script, and it is being characterised separately.
-So this page says neither that the bound is enforced nor that it is broken, and no test in this tree encodes either claim.
-
-The one run where the bound DID fire is also the run the 13.1 s parent-side timing comes from, which is why that figure has a single sample.
+This is kept as a positive Windows result rather than deleted, because it is the opposite of what the earlier round concluded and because it is real verification of acceptance criteria 1 and 2 on the target platform.
+The retracted samples are named here so nobody re-derives an enforcement doubt from them.
 
 ## Windows verification: what is measured there, and what is NOT
 
@@ -340,18 +345,19 @@ As it stands, **criterion 6 is not satisfied by this document alone.**
 
 Windows-measured, on `MINGW64_NT-10.0-26200`, bash 5.2.37, 22 cores:
 
-- The clean contention sweep the 22 s margin is derived from: Sweep A at 0/4/8/16/24 competitors on an idle box, and Sweep B at 12 and 16 competitors with three repeats each under real concurrent load, N=40 creations per sample, with a self-cleaning trap and a stale-competitor count printed at both ends of every run. This is the measurement of record.
+- The direct 9-sample parent-side sweep the 32 s margin is derived from: 0, 8 and 16 competitors with three samples each, truncation banner verified present on every one. This is the measurement of record.
+- The earlier per-creation contention sweep (Sweep A and Sweep B), kept as the cost-input record. It is a reasonable idle proxy and understates by about 2.8x under contention, so no margin may be re-derived downward from it.
 - ~~The earlier per-fork contention curve, 30.6 / 44.5 / 61.7 / 124.0 ms~~ and ~~the 46.5 / 80.8 ms per-creation figures~~ - both SUPERSEDED by that sweep, and the second was taken with 21 orphaned competitors still running. Kept named so nobody re-derives from them.
 - The elapsed figures for an empty home, 74 s before the subprocess reductions and 64-70 s after, and the 72 s / 76 s / 123 s runs the raised bound is argued from.
 - The per-stage attribution a truncated startup prints, including the 9.9 s `startup` stage.
 - `fm_session_start_default_budget` and `fm_session_start_resolve_budget` answering `300` / `300` / `45` / `300`.
 - **A full, untruncated session start against an empty home at the Windows default bound.** 0 competitors: 57.5 s and 48.0 s. 8 competitors: 240.7 s and 264.0 s. The default budget this branch ships is 300 s, so at 8 fork-heavy competitors on a 22-core box an ordinary empty-home session start consumes 80-88% of its entire budget. It does not truncate; the headroom left is thin, and the original defect was a truncating startup.
-- **The clamped path timed directly**, giving the 13.1 s parent side the margin now rests on.
-- **The enforcement anomaly recorded in the section above**, which is MINGW64-executed on the current shape and open.
+- **The clamped path timed directly across three contention levels**, 9 samples with the truncation banner verified present on every one, giving the 31.20 s worst non-thrashing parent side the 32 s margin rests on.
+- **That the runtime bound is enforced**, 12 of 12, plus `fm_run_timed` returning rc=124 on 5 of 5 against a 2 s bound including a `trap "" TERM` child.
 
 NOT yet exercised on MINGW64, and this is the outstanding step:
 
-- The 22 s nesting margin actually in force, and the 338 s ceiling it derives there rather than the portable one.
+- The 32 s nesting margin actually in force, and the 328 s ceiling it derives there rather than the portable one. Note this changes nothing for a default run: the Windows default budget is 300 s, already below 328 s.
 - The fail-closed fallback to the platform default when no registration can be read.
 - The deadline predicate: that a transport declaring no kill deadline keeps its full bound and is never pointed at another harness's registrations.
 - `fm_session_start_bind_budget` and `fm_session_start_bind_context`, which assign rather than print, and the two-argument `fm_session_start_resolve_budget`.
@@ -592,10 +598,36 @@ not ok - a banner told the operator the harness kills at 41s against a registrat
 ```
 
 The invariant `ceiling = deadline - margin` is what let both banners rebuild the kill second by adding the margin back, and the sub-margin branch cannot satisfy it - no non-negative ceiling can, when the registration is smaller than the margin.
-So the branch that stopped the CLAMP overstating the bound left the BANNERS overstating the deadline, and raising the margin to 22 s widened the affected band from registrations of 4 s or less to registrations of 22 s or less, which brackets the 10 s the nudge tier already uses.
+So the branch that stopped the CLAMP overstating the bound left the BANNERS overstating the deadline, and raising the margin widened the affected band from registrations of 4 s or less to registrations at or below the margin - now 32 s, which brackets the 10 s the nudge tier already uses.
 `fm_session_start_cap` now carries the deadline it read as its third field and every operator-facing line prints that field, so there is no longer a second place the number can be derived.
 
 The mutation was applied to both banner sites at once, because reverting either one alone still leaves the other honest and the case would pass for the wrong reason.
+
+### Eighth round: fixture failure must not masquerade as a missing interposer
+
+| # | Guard | Mutation | Suite |
+|---|---|---|---|
+| M33a | a fixture-setup failure FAILS the count guard | fixture setup forced to fail, fix in place | hook-nesting |
+| M33b | the same failure with the protection removed | fixture setup forced to fail, status back to the skip code | hook-nesting |
+
+```console
+$ # M33a - the fix fires, naming the real reason
+not ok - the parent-side count fixture could not be set up (temp root or git init failed), so the count guard did not run; this is not a missing interposer and must not be reported as one
+$ # M33b - protection removed: the identical failure reports a green SKIP
+ok - parent-side creation count: SKIPPED - the interposer could not be built or preloaded on this box
+SCRIPT EXIT=0
+```
+
+The pair is what makes this falsifiable rather than the single red.
+M33b is the defect: a working interposer plus an unusable temp root reports green, blames a toolchain that is fine, and silently drops the only automated guard on the parent-side count.
+`count_parent_side_creations` now answers with three distinct statuses - 1 cannot build or preload, 2 built but miscounting, 3 fixture setup failed - and only 1 is a skip.
+
+A first attempt at this mutation forced `return 1` directly and stayed green, correctly: that simulates an unavailable toolchain, which is a legitimate skip. It is recorded here because the mutation that proves nothing is worth naming beside the one that does.
+
+**Three fixes this round have no independent behavioural signature, and that is stated rather than papered over.**
+Removing the two dead `fm_session_start_bind_margin` calls deletes a no-op side effect; dropping `0` from the missing-deadline case removes a re-derivation whose result was never printed; and the verification-page rewrite is prose.
+None of them changes any output, so none can be falsified by a test, and inventing a guard for them would be exactly the coverage-shaped-nothing this criterion exists to catch.
+What protects them is that the behaviour they touch is already guarded: the sentinel path is covered by the `default`-arm cases, and the margin's single-consumer property by M8.
 
 ### What is NOT independently falsifiable, said plainly
 
@@ -613,7 +645,7 @@ A refactor that moves the declaration still passes; a deleted declaration fails.
 What it does NOT cover is Pi itself changing how it invokes the extension, which no test in this repo can observe.
 
 **The margin's SUFFICIENCY at unbounded load has no guard, and cannot have one.**
-22 s is derived from the worst NON-THRASHING measured point, and the sweep it comes from shows total box load - not the competitor count - dominating the cost, with a 24-competitor thrashing point at 57.9 s that no fixed margin could cover.
+32 s is derived from the worst NON-THRASHING directly measured point, 31.20 s, and the 24-competitor thrashing regime it excludes is one no fixed margin could cover.
 So there is no assertion anywhere that the margin covers every condition, because that is not what the measurement supports.
 What IS guarded is the count not rising, which is the other input to the same product, and the derivation itself is recorded with its method and its limits rather than asserted in a test.
 
