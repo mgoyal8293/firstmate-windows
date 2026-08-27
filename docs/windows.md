@@ -224,8 +224,16 @@ path rather than replacing it.**
 - No Windows pid is recorded anywhere. `state/.lock` still holds a plain numeric
   MSYS pid, so every existing reader is unchanged and no caller becomes
   namespace-aware; the token lives beside it in `state/.lock.session`.
-- Nothing queries the Windows process table, per turn or otherwise. Reading a
-  token is an environment lookup plus one small file read.
+- Reading a token is an environment lookup plus one small file read, and nothing
+  on the token path itself queries the process table.
+  The gate in front of it does, exactly once per process: `fm_session_ancestry_unavailable`
+  has to prove the walk found nothing before a token may be honoured, so the walk
+  is evidence the predicate cannot skip.
+  It is memoised instead, because a process's own ancestry is fixed for its
+  lifetime while trying the token first would answer a different question in the
+  case where the walk does resolve.
+  `bin/fm-claude-stop-autoarm.sh` makes two ownership checks per turn and both
+  now share that one walk.
 
 A token proves identity, not liveness, so two things supply the rest:
 
@@ -396,6 +404,8 @@ A Windows operator meets them in this order.
 
 ## Not yet ported
 
+- A session token is verified for `claude` only, so under `codex`, `opencode`, `pi`, `pi-signed`, `grok`, `kimi` or `cursor` a Windows firstmate stays read-only for the whole session.
+  "How the session lock is owned" above owns why each row needs its own evidence before it may be added.
 - Relay's artifact writes (`x_mode_write_if_changed` in `bin/fm-bootstrap.sh`) still assert exact modes directly. Relay is off unless the home opts in.
 - Away mode's daemon launch (`bin/fm-afk-launch.sh`) is unexamined on Windows.
 - The macOS-only surfaces (`bin/backends/herdr.sh`, `bin/fm-remote-job-*.sh`, muse) are deliberately out of scope.

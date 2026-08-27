@@ -386,6 +386,10 @@
       "audience": "maintainer-verification"
     },
     {
+      "path": "docs/verification/windows-session-lock-cost.md",
+      "audience": "maintainer-verification"
+    },
+    {
       "path": "docs/verification/windows-python-probe.md",
       "audience": "maintainer-verification"
     },

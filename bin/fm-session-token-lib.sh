@@ -202,7 +202,31 @@ fm_session_token_held_by_other() {  # <state-dir>
 #
 # So this is gated on the platform as well, and the whole token path is
 # consequently unreachable off Windows: same code, byte-identical behaviour.
+#
+# MEMOISED for the life of the process, because the answer cannot change within
+# one. bin/fm-claude-stop-autoarm.sh makes two ownership checks per turn and this
+# predicate gates both, so the walk below was paid twice on every Windows turn,
+# where a walk costs most of a second (docs/verification/windows-session-lock-cost.md).
+#
+# A memo is the safe fix and REORDERING the caller to try the token first is not:
+# a process's own ancestry is fixed for its lifetime, so a second answer cannot
+# honestly differ from the first, while consulting the token first would answer a
+# DIFFERENT question in the case where the walk does resolve on Windows.
+#
+# Keyed on the platform seam rather than a bare "computed" flag, the same rule
+# bin/fm-proc-lib.sh's source guard uses: a test that drives FM_PROC_UNAME_S to a
+# second platform in one shell must get a fresh answer, or the Windows arm goes
+# vacuous. Both directions are cached, and the cached refusal is the safe one: it
+# keeps the home read-only rather than opening the token path.
+FM_SESSION_ANCESTRY_MEMO_SEAM=
+FM_SESSION_ANCESTRY_MEMO_RC=
 fm_session_ancestry_unavailable() {
+  if [ -n "$FM_SESSION_ANCESTRY_MEMO_RC" ] \
+    && [ "$FM_SESSION_ANCESTRY_MEMO_SEAM" = "${FM_PROC_UNAME_S:-}" ]; then
+    return "$FM_SESSION_ANCESTRY_MEMO_RC"
+  fi
+  FM_SESSION_ANCESTRY_MEMO_SEAM=${FM_PROC_UNAME_S:-}
+  FM_SESSION_ANCESTRY_MEMO_RC=1
   fm_platform_is_windows || return 1
   # A missing owner is uncertainty, and uncertainty refuses.
   # The walk lives in bin/fm-session-lock-lib.sh, which sources this file, so a
@@ -213,6 +237,7 @@ fm_session_ancestry_unavailable() {
   # falls back on upstream's own ancestry refusal.
   command -v fm_harness_ancestry_pids >/dev/null 2>&1 || return 1
   fm_harness_ancestry_pids >/dev/null 2>&1 && return 1
+  FM_SESSION_ANCESTRY_MEMO_RC=0
   return 0
 }
 

@@ -202,6 +202,33 @@ test_proc_field_rejects_bad_input() {
   pass "fm_proc_field: refuses an empty or non-numeric pid"
 }
 
+# The MSYS scalar reads are bash `$(< file)` substitutions, which cost no
+# subprocess where the old `$(cat ...)` cost a fork plus an exec on every ancestry
+# hop. Unlike `cat`, `< file` reports a missing file on the CALLER's stderr, so
+# the brace group around the assignment is the only thing keeping a vanished pid
+# silent - and a vanished pid is the ordinary case for every walk and reaper here.
+# Remove the brace group and this case fails on the stderr assertion, which is
+# what makes it a guard rather than a restatement of the return code above.
+test_proc_field_is_silent_on_a_pid_that_vanished() {
+  local root err out
+  root=$(fm_test_tmproot fm-proc) || fail "proc-field: could not create a fixture root"
+  fake_msys_proc "$root" 4243 1 4243 4243 /usr/bin/bash
+  # shellcheck disable=SC2034 # Read by bin/fm-proc-lib.sh fm_proc_root.
+  FM_PROC_ROOT_OVERRIDE=$root
+  # ppid stays, so the capability probe still selects the /proc path; the field
+  # actually being asked for is removed under it, exactly as a pid exiting
+  # mid-walk removes it.
+  rm -f "$root/4243/pgid"
+  out=$(fm_proc_field 4243 pgid 2>/dev/null) \
+    && fail "proc-field: a missing scalar file must not report success"
+  [ -z "$out" ] || fail "proc-field: a missing scalar file must print nothing, got '$out'"
+  err=$(fm_proc_field 4243 pgid 2>&1 >/dev/null)
+  [ -z "$err" ] \
+    || fail "proc-field: a vanished pid must not leak to stderr, got '$err'"
+  unset FM_PROC_ROOT_OVERRIDE
+  pass "fm_proc_field: a scalar file that vanished mid-walk returns 1 in silence"
+}
+
 test_proc_field_rejects_unknown_field() {
   local root
   root=$(fm_test_tmproot fm-proc) || fail "proc-field: could not create a fixture root"
@@ -873,6 +900,7 @@ test_proc_field_reads_msys_layout
 test_proc_field_falls_back_to_ps_where_proc_is_absent
 test_proc_field_rejects_bad_input
 test_proc_field_rejects_unknown_field
+test_proc_field_is_silent_on_a_pid_that_vanished
 test_symlink_probe_proves_rather_than_assumes
 test_symlink_preflight_reports_only_a_proven_capability_failure
 test_native_symlink_mode_is_set_and_preserves_operator_choice

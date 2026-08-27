@@ -146,6 +146,58 @@ test_ancestry_unavailable_requires_both_platform_and_empty_walk() {
   pass "fm_session_ancestry_unavailable: true only when the platform cannot answer AND the walk found nothing"
 }
 
+# The predicate is memoised for the life of the process, because
+# bin/fm-claude-stop-autoarm.sh gates two ownership checks per turn on it and the
+# walk it guards was measured at 756.75 ms per call on MINGW64_NT-10.0-26200. A
+# memo is safe where reordering the caller to try the token first is not: a
+# process's own ancestry is fixed for its lifetime, so the second answer cannot
+# honestly differ from the first, while the token path would answer a DIFFERENT
+# question in the case where the walk does resolve.
+#
+# Both halves of the memo are pinned, because they fail for different reasons.
+# The first is the saving: the walk must be asked exactly once no matter how many
+# times the predicate is. Remove the memo and the counter reads 2.
+test_ancestry_unavailable_is_memoised_and_the_verdict_is_unchanged() {
+  local out
+  out=$(
+    FM_PROC_UNAME_S=$WIN
+    walks=0
+    # shellcheck disable=SC2329 # Called indirectly by fm_session_ancestry_unavailable.
+    fm_harness_ancestry_pids() { walks=$((walks + 1)); return 1; }
+    first=0; second=0; third=0
+    fm_session_ancestry_unavailable || first=$?
+    fm_session_ancestry_unavailable || second=$?
+    fm_session_ancestry_unavailable || third=$?
+    printf 'walks=%s verdicts=%s%s%s\n' "$walks" "$first" "$second" "$third"
+  )
+  [ "$out" = "walks=1 verdicts=000" ] \
+    || fail "token: the memoised predicate must ask the walk once and answer identically every time, got '$out'"
+  pass "fm_session_ancestry_unavailable: asks the ancestry walk once per process and never changes its answer"
+}
+
+# The second half is the SEAM, and getting it wrong would be worse than the cost
+# it saves: a bare "already computed" flag would hand the first platform's
+# verdict to every later one, so the suite's Windows arm - the only regression
+# coverage these arms get off Windows - would silently start reporting whatever
+# the previous case asked. Both directions are driven, so neither a sticky 0 nor
+# a sticky 1 survives.
+test_ancestry_unavailable_memo_does_not_outlive_the_platform_seam() {
+  local out
+  out=$(
+    # shellcheck disable=SC2329 # Called indirectly by fm_session_ancestry_unavailable.
+    fm_harness_ancestry_pids() { return 1; }
+    win_first=0; linux_after=0; win_again=0
+    # shellcheck disable=SC2030 # Driving the platform seam inside this subshell is the point.
+    FM_PROC_UNAME_S=$WIN;   fm_session_ancestry_unavailable || win_first=$?
+    FM_PROC_UNAME_S=Linux;  fm_session_ancestry_unavailable || linux_after=$?
+    FM_PROC_UNAME_S=$WIN;   fm_session_ancestry_unavailable || win_again=$?
+    printf '%s%s%s\n' "$win_first" "$linux_after" "$win_again"
+  )
+  [ "$out" = "010" ] \
+    || fail "token: SECURITY - the memo must be re-resolved when the platform seam changes; expected Windows=0 Linux=1 Windows=0, got '$out'"
+  pass "fm_session_ancestry_unavailable: the memo is re-resolved when the platform seam changes, in both directions"
+}
+
 # The refusal a Windows user without a token actually reads. Naming the ancestry
 # walk there is true and useless: it can never answer for anyone on that platform,
 # which is precisely why ownership is token-based. So the two refusals are
@@ -375,6 +427,8 @@ test_ancestry_unavailable_refuses_when_the_walk_itself_is_absent() {
 test_token_is_ignored_where_ancestry_actually_works
 test_ancestry_unavailable_requires_both_platform_and_empty_walk
 test_ancestry_unavailable_refuses_when_the_walk_itself_is_absent
+test_ancestry_unavailable_is_memoised_and_the_verdict_is_unchanged
+test_ancestry_unavailable_memo_does_not_outlive_the_platform_seam
 test_the_windows_refusal_names_the_token_not_ancestry
 test_token_acquires_and_records_a_plain_pid
 test_same_session_reacquisition_is_idempotent
