@@ -72,6 +72,14 @@ fake_msys_proc() {  # <root> <pid> <ppid> <pgid> <sid> <exename> <arg>...
 # and no platform.
 test_proc_lib_source_guard_skips_repeats_without_blinding_the_platform_seam() {
   local out cleared
+  # SC2218 is a false positive on exactly this probe's shape. ShellCheck inlines
+  # `# shellcheck source=` targets and, for a file sourced SEVERAL times in one
+  # flow, attributes the functions to the LAST source it sees - which here is
+  # after the two uses below, so it reports them as used before their definition.
+  # They are not: the first source at the top of this subshell defines them, and
+  # every later source redefines them identically. The repeat sources are the
+  # subject of this case and cannot be reordered away.
+  # shellcheck disable=SC2218
   out=$(
     cd "$ROOT" || exit 1
     . bin/fm-proc-lib.sh

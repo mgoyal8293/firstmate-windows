@@ -472,7 +472,13 @@ count_parent_side_creations() {
   mkdir -p "$dir/home/state" "$dir/home/data" "$dir/home/config" "$dir/home/projects" \
     "$dir/fakebin" "$dir/root" "$dir/regs/.synthetic"
   git init -q -b main "$dir/root" >/dev/null 2>&1 || return 3
-  git -C "$dir/root" commit -q --allow-empty -m init >/dev/null 2>&1 || return 3
+  # The identity is passed inline, exactly as tests/lib.sh's fm_git_init_commit
+  # does it, because a CI runner has no git identity configured at all: without
+  # it `git commit` refuses with "Author identity unknown", the fixture reports
+  # setup failure, and the count guard below fails for the harness's reason
+  # rather than ever measuring the path.
+  git -C "$dir/root" -c user.name='Firstmate Tests' -c user.email='tests@example.invalid' \
+    commit -q --allow-empty -m init >/dev/null 2>&1 || return 3
   local tool
   for tool in tmux node chrome-devtools-axi gh treehouse lavish-axi gh-axi no-mistakes; do
     printf '#!/bin/sh\nexit 0\n' > "$dir/fakebin/$tool"

@@ -809,6 +809,30 @@ Two details of that interception are load-bearing and cost a round to find:
 **M46's real failure is not the one predicted.** The reasoning was that a leaked `FM_SESSION_START_STAGE_FILE` would make `tests/fixtures/forkcount.c` classify every record as `child`, collapsing `creations` to 0. What actually happens first is that `bin/fm-session-start.sh` itself reads the leaked variable as "I am the bounded child", skips the whole parent branch, and never resolves a bound or forks - so the case fails on the bound assertion instead. Same conclusion, different line: a false failure that blames the instrument or the clamp for an environment leak. Recorded as observed rather than as reasoned.
 The leak only reaches the forked run, so the `-u` flags fix that; a `FM_SESSION_START_HOOK_DEADLINE=none` leak into the suite's OWN shell additionally breaks its in-process resolver assertions, which no `env -u` on a child can address and which is out of scope here.
 
+### Twelfth round: what CI failed on, and both mutations
+
+CI on `c229a64` failed three checks, and neither cause was a ShellCheck diagnostic or a wrong assertion.
+
+| # | Guard | Mutation | Suite |
+|---|---|---|---|
+| M47 | the parent-side count fixture commits with an inline git identity | the `-c user.name`/`-c user.email` pair removed, on a host with no configured identity | hook-nesting |
+| M48 | `bin/fm-proc-lib.sh` skips its prologue instead of `return`ing from the source | the guard restored to a top-level `return 0` | lint gate |
+
+**M47 is the `Behavior portable serial 1` failure.** A GitHub runner has no git identity at all, so `git commit --allow-empty` in `count_parent_side_creations` refuses with "Author identity unknown", the fixture reports setup failure, and the case correctly fails - as the eighth round above made it - naming a fixture that never measured anything. The identity is now passed inline, exactly as `tests/lib.sh`'s `fm_git_init_commit` has always done it and for the same stated reason.
+
+Reproduced locally by removing the host's identity rather than by reading the CI log:
+
+```console
+$ GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_SYSTEM=/dev/null bash tests/fm-session-start-hook-nesting.test.sh
+not ok - the parent-side count fixture could not be set up (temp root or git init failed), so the count guard did not run; this is not a missing interposer and must not be reported as one
+$ # with the inline identity in place, same cleared environment
+ok - parent-side creation count: 35 creations (19 exec-backed), within [25, 40]; every one is paid inside the window the nesting margin covers
+```
+
+The count is unchanged at 35 creations / 19 exec-backed with `CI=true GITHUB_ACTIONS=true` set as well, so the guard the fixture exists to run reports the same figure on the runner's shape as on this box.
+
+**M48 is both `Lint` checks**, and its mutation is the section below on the source guard's shape: restoring the top-level `return 0` OOM-kills `bin/fm-lint.sh` at 15.3 GB, which is what exit 143 with no diagnostics meant. The counter-mutation is the same tree with that one `return 0` replaced by `:`, which lints clean in 34 s. Both directions were run against the real gate rather than against a fixture.
+
 ### What is NOT independently falsifiable, said plainly
 
 **The cap dedup has no guard and cannot have one.**
@@ -871,6 +895,34 @@ The churn is now bounded by wall clock instead - at most a second, less when bas
 
 The reduction was checked against the regression rather than assumed harmless.
 With the group redirection removed from `fm_lock_read_owner_pid`, the shortened loop still spilled 8804, 19809, 15975, 16756 and 16756 bytes of bash's own `No such file or directory` to stderr on five consecutive runs, and M11 above is that same mutation failing the real suite.
+
+## The source guard's SHAPE, and the lint gate it took down
+
+`bin/fm-proc-lib.sh`'s guard was first written the short way: a top-level `return 0` when the seam already matches, so a repeat source stops at line one.
+It reduced no fork the flag version does not also reduce, and it made the lint gate unrunnable.
+
+ShellCheck inlines `# shellcheck source=` targets, and this file sits at the bottom of a diamond: the graph under `tests/fm-pending-reply.test.sh` reaches it through SIXTEEN source sites.
+A top-level `return` inside an inlined region multiplies the paths through the enclosing root, and the cost is nothing like linear in the 1286 bytes the guard added to the file.
+
+Measured with the pinned ShellCheck 0.11.0, `--norc --external-sources`, on this box (22 cores, 15.7 GB):
+
+| Tree | `tests/fm-pending-reply.test.sh` alone | `CI=true bin/fm-lint.sh` (full set, 2 workers) |
+|---|---|---|
+| base | 4.42 GB, 33.9 s | 4.76 GB, 3m45s, exit 0 |
+| with the top-level `return` | 14.9 GB, unfinished at 240 s | 15.3 GB, 25m49s, **OOM-killed (137)** |
+| guarding the prologue instead | 4.77 GB, 33.2 s | 4.78 GB, 3m19s, exit 0 |
+
+The middle row is what CI reported as `Lint` and `Lint (Windows)` failing with exit 143 on a branch whose ShellCheck diagnostics were clean: the gate never got far enough to have an opinion about the code.
+Swapping ONLY the base tree's `bin/fm-proc-lib.sh` for this branch's reproduced it exactly, and replacing that one `return 0` with `:` in the same tree removed it (4.75 GB, 34.2 s), which is the mutation both directions.
+
+The flag spelling is not free either, and the cost is a lint one rather than a runtime one.
+Losing the top-level `return` also loses the "may have returned early" state ShellCheck derived from it, and that state was suppressing an SC2218 false positive in `tests/fm-windows-portability.test.sh`: for a file sourced several times in one flow ShellCheck attributes the functions to the LAST source, which in that probe is after two of the uses.
+The probe's repeat sources ARE the case, so they cannot be reordered, and the finding is disabled at that one call site with the reason recorded there.
+Reduced to a two-file fixture, the trigger is precisely "sourced, used, sourced again": one source before the use is clean, two before it are clean, and one before plus one after reports SC2218.
+
+What the shape costs at runtime is the re-parse of the function definitions below the prologue, on each of the 42 sources.
+It costs no subprocess: the remaining top-level statements are function definitions plus `fm_platform_enable_native_symlinks`, which is `case` and `export` only.
+So the fork counts on this page are the same under either spelling, and the parse cost is the one this branch is not measured on.
 
 ## Reproducing
 
