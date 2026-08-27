@@ -1,0 +1,21 @@
+tests/fm-windows-portability.test.sh, target tree 3bd6a81, run ON the real
+Git-for-Windows MINGW64 host (MINGW64_NT-10.0-26200) rather than simulated:
+
+ok - fm-proc-lib.sh: the source guard skips repeat sources without blinding FM_PLATFORM_UNAME_OVERRIDE
+ok - fm_proc_field: reads comm/args/ppid/pgid/sid from the MSYS /proc layout
+ok - fm_proc_field: on a platform whose ps rejects -o the fallback answers nothing rather than something wrong
+ok - fm_proc_field: refuses an empty or non-numeric pid
+ok - fm_proc_field: refuses a field it has no /proc equivalent for
+ok - fm_platform_symlink_probe: proves symlink creation and leaves no residue
+ok - symlink preflight: reports the lock-layer and skills-checkout failures, and stays silent otherwise
+ok - fm_platform_enable_native_symlinks: sets nativestrict on Windows, inert elsewhere, never overrides an explicit choice
+ok - fm_proc_pids_with_cwd_under: finds live processes rooted under a directory and forgets dead ones
+ok - fm_proc_pids_with_cwd_under: an unusable /proc returns failure, not an empty result
+ok - fm_proc_pids_with_cwd_under: a mount-aliased /proc cwd spelling still matches the caller's directory
+ok - fm_proc_pids_holding_path: a mount-aliased /proc fd target still matches the caller's path
+ok - fm_lock_same_path: widens a mount-aliased and an 8.3 short-name spelling through cygpath and stays strict everywhere else
+ok - fm_lock_points_to_owner: the strict readlink compare remains the primary, unresolved verdict
+ok - fm_pid_identity: bin/fm-proc-lib.sh answers from /proc where ps rejects -o, and detects pid reuse
+ok - root .gitattributes: a core.autocrlf=true clone still lands LF, and the one binary blob survives
+ok - fm_path_gotmpdir_export_line: translates and quotes on Windows, and falls back to the POSIX literal rather than an empty export when the caller has no quoter
+suite exit=0  (17 cases green, 0 red)

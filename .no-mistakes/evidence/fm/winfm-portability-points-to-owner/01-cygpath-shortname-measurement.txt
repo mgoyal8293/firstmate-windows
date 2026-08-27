@@ -1,0 +1,30 @@
+Real Git-for-Windows MINGW64 host (reached from WSL via C:\Program Files\Git\bin\bash.exe).
+Question: can 'cygpath -m' alone tell that an 8.3 SHORT spelling and the LONG
+spelling of one directory are the same location? That is what fm_lock_same_path asks.
+
+host: MINGW64_NT-10.0-26200   /tmp mounts at: C:/Users/johns/AppData/Local/Temp
+long  (POSIX): /tmp/fmprobe-verylongname-1234
+short (POSIX): /tmp/FMPROB~1
+
+--- same inode? (ls -di on both spellings of xdir)
+10133099162560147 /tmp/FMPROB~1/xdir
+10133099162560147 /tmp/fmprobe-verylongname-1234/xdir
+
+--- cygpath -m    (no -l): the pre-fix resolver
+  short -> C:/Users/johns/AppData/Local/Temp/FMPROB~1/xdir
+  long  -> C:/Users/johns/AppData/Local/Temp/fmprobe-verylongname-1234/xdir
+  VERDICT: DIFFERENT -> pre-fix fm_lock_same_path calls one location two
+
+--- cygpath -m -l (the fix)
+  short -> C:/Users/johns/AppData/Local/Temp/fmprobe-verylongname-1234/xdir
+  long  -> C:/Users/johns/AppData/Local/Temp/fmprobe-verylongname-1234/xdir
+  VERDICT: EQUAL -> one location, one string
+
+--- control 1: two genuinely DIFFERENT directories under -l
+  a -> C:/Users/johns/AppData/Local/Temp/fmprobe-verylongname-1234/xdir
+  b -> C:/Users/johns/AppData/Local/Temp/fmprobe-verylongname-1234/other
+  VERDICT: still different -> -l does not widen
+
+--- control 2: an UNRESOLVABLE path under -l (nothing on disk to expand)
+  -> C:/Users/johns/AppData/Local/Temp/NOSUCH~1/gone
+  (returned as spelled: the refusing direction)

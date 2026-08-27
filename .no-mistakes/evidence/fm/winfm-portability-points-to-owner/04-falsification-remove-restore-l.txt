@@ -1,0 +1,20 @@
+FALSIFICATION RECORD for the new guard in tests/fm-windows-portability.test.sh.
+A guard that still passes with the protection removed proves nothing, so remove it.
+Run on Linux - the guard is stub-driven by design and does not need a Windows host.
+
+--- 1. fix present
+    bin/fm-path-lib.sh:73-74 -> 2 call(s) resolve with 'cygpath -m -l'
+    ok - fm_lock_same_path: widens a mount-aliased and an 8.3 short-name spelling through cygpath and stays strict everywhere else
+    suite exit=0
+
+--- 2. fix removed: '-l' taken back out of fm_lock_same_path, nothing else touched
+    73:  wa=$(cygpath -m -- "$a" 2>/dev/null) || return 1
+    74:  wb=$(cygpath -m -- "$b" 2>/dev/null) || return 1
+    not ok - same-path: the short (8.3) and long spellings of one directory must resolve to the same location, or fm_lock_try_create never validates its own link and fm_lock_acquire_wait spins forever
+    suite exit=1   <- the guard FAILS without the fix
+
+--- 3. fix restored
+    73:  wa=$(cygpath -m -l -- "$a" 2>/dev/null) || return 1
+    74:  wb=$(cygpath -m -l -- "$b" 2>/dev/null) || return 1
+    ok - fm_lock_same_path: widens a mount-aliased and an 8.3 short-name spelling through cygpath and stays strict everywhere else
+    suite exit=0

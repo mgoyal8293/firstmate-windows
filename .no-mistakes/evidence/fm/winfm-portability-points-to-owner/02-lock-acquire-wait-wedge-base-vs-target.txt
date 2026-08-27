@@ -1,0 +1,24 @@
+THE HANG, END TO END, ON A REAL GIT-FOR-WINDOWS MINGW64 HOST.
+
+fm_lock_acquire_wait loops until fm_lock_try_create validates the symlink it
+just made (bin/fm-wake-lib.sh:475). Real cygpath, real native symlinks, a real
+8.3 short name Windows itself handed out, and one real inode reachable by both
+spellings (asserted in the fixture). The only stand-in is readlink's RENDERING:
+this host mounts /tmp at a LONG %TEMP% so its readlink echoes the spelling it
+was given, and the shim re-renders that one answer in the SHORT spelling of the
+same directory - what MSYS does where %TEMP% carries a short component, which
+is how GitHub's Windows runners spell it. Nothing else is simulated.
+
+=== BASE   4c5336c - resolver is cygpath -m (no -l)
+    lock path            : /tmp/fmwedge-verylongname-1234/state/.wake.lock
+    readlink will answer : /tmp/fmwedge-verylongname-1234/state/.wake.lock -> .../FMWEDG~1/state/.wake.lock.owner.XXXXXX
+    resolver in this tree: cygpath -m --
+    RESULT: fm_lock_acquire_wait NEVER RETURNED - killed at 20s (this is the wedge: firstmate hangs with no diagnosis)
+    lock now             : -> /tmp/fmwedge-verylongname-1234/state/.wake.lock.owner.nLnuDR
+
+=== TARGET 3bd6a81 - resolver is cygpath -m -l
+    lock path            : /tmp/fmwedge-verylongname-1234/state/.wake.lock
+    readlink will answer : /tmp/fmwedge-verylongname-1234/state/.wake.lock -> .../FMWEDG~1/state/.wake.lock.owner.XXXXXX
+    resolver in this tree: cygpath -m -l --
+    RESULT: fm_lock_acquire_wait returned rc=0 in 1s (lock acquired)
+    lock now             : -> /tmp/fmwedge-verylongname-1234/state/.wake.lock.owner.cBmUhL

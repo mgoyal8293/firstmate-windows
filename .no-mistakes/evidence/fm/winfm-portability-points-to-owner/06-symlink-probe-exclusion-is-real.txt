@@ -1,0 +1,18 @@
+CORROBORATION OF THE DELIBERATE EXCLUSION named in docs/windows.md.
+
+docs/windows.md states fm_platform_symlink_probe (bin/fm-proc-lib.sh) is a
+remaining known instance of the same raw-string spelling compare, not fixed
+here, tracked as winfm-symlink-probe-spelling. Run the whole suite on the real
+MINGW64 host at the non-round-tripping TMPDIR spelling and the probe case is
+exactly what still goes red - in the target tree as well as the base tree, so
+the caveat sentence describes a live gap rather than a hypothetical one:
+
+  --- BASE   4c5336c  TMPDIR=/c/Users/johns/AppData/Local/Temp
+      not ok - symlink-probe: a filesystem that supports symlinks must probe true
+      suite exit=1
+  --- TARGET 3bd6a81  TMPDIR=/c/Users/johns/AppData/Local/Temp
+      not ok - symlink-probe: a filesystem that supports symlinks must probe true
+      suite exit=1
+
+  For contrast, the same target tree at this host default TMPDIR=/tmp:
+      17 green, 0 red, suite exit=0

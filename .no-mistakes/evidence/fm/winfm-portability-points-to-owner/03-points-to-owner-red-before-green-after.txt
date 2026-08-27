@@ -1,0 +1,25 @@
+THE RED PORTABILITY CASE, RESOLVED - real Git-for-Windows MINGW64 host.
+
+tests/fm-windows-portability.test.sh's "points to owner" case builds its fixture
+at whatever spelling TMPDIR carries. Where that spelling does not round-trip
+through the usertemp mount table, readlink answers a DIFFERENT string for the
+same directory and the case stops testing the strict compare. Measured here:
+
+  TMPDIR spelled: /c/Users/johns/AppData/Local/Temp
+    ln -s target: /c/Users/johns/AppData/Local/Temp/fmrt.D4Ovz9/owner
+    readlink    : /tmp/fmrt.D4Ovz9/owner
+    -> does NOT round-trip: the case silently becomes a mount-table test and goes red
+  TMPDIR spelled: /tmp
+    ln -s target: /tmp/fmrt.PYR98X/owner
+    readlink    : /tmp/fmrt.PYR98X/owner
+    -> round-trips: the strict compare is what gets tested
+
+So run the case at the non-round-tripping spelling, base tree and target tree,
+same host, same configuration:
+
+  --- BASE   4c5336c (before)   TMPDIR=/c/Users/johns/AppData/Local/Temp
+      not ok - points-to-owner: an exact readlink match must be accepted without any resolver
+      exit=1
+  --- TARGET 3bd6a81 (after)   TMPDIR=/c/Users/johns/AppData/Local/Temp
+      ok - fm_lock_points_to_owner: the strict readlink compare remains the primary, unresolved verdict
+      exit=0
