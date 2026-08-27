@@ -788,7 +788,7 @@ fm_session_start_delivery_bound() {  # [explicit-seconds]
 # notice free of the subprocess a re-derivation would cost.
 fm_session_start_budget_advisory() {  # <requested> <effective> [context] [cap-spec]
   local requested=${1:-} effective=${2:-} context=${3:-} cap=${4:-} capsource=none capdeadline=0 caprest
-  local unusable= shown
+  local unusable='' shown
   case "$effective" in ''|*[!0-9]*|0) return 0 ;; esac
   case "$requested" in
     '') return 0 ;;
