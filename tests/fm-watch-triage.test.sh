@@ -1471,11 +1471,11 @@ test_busy_pane_default_turn_age_bound_is_3600s() {
 # so a worker that honestly declared a bounded external wait (paused:) or was
 # captain-held kept wedge-escalating every STALE_ESCALATE_SECS for as long as
 # the wait lasted - measured at a dozen false escalations across three hours of
-# one healthy task, each costing a supervisor turn. Any long command that
-# renders nothing to the pane (output redirected to a file, a background suite,
-# a quiet runner, a long model turn) is indistinguishable from a freeze by pane
-# bytes alone; the declaration is exactly the evidence the busy path was
-# missing. A declared bounded wait PLUS a genuinely busy harness is the least
+# one healthy task, each costing a supervisor turn. A bounded external wait
+# renders nothing to the pane while the harness still shows busy (a queued
+# upstream CI run, a rate-limit reset, an unpublished upstream release, a vendor
+# incident) and so is indistinguishable from a freeze by pane bytes alone; the
+# declaration is exactly the evidence the busy path was missing. A declared bounded wait PLUS a genuinely busy harness is the least
 # wedge-like state the watcher can observe, so it takes the same long
 # PAUSE_RESURFACE_SECS recheck a declared pause already gets when idle.
 # These cases pin BOTH halves - the noise is gone, and everything that must
@@ -1488,7 +1488,7 @@ test_busy_declared_pause_does_not_wedge_escalate() {
   printf 'Working...' > "$capture_file"
   printf 'window=%s\nkind=ship\nharness=pi\n' "$window" > "$state/busy-paused.meta"
   record_pi_busy "$state" busy-paused
-  printf 'paused: suite running, output redirected to a log\n' > "$state/busy-paused.status"
+  printf 'paused: waiting on the upstream CI run to finish\n' > "$state/busy-paused.status"
   sig=$(seen_sig "$state/busy-paused.status"); printf '%s' "$sig" > "$state/.seen-busy-paused_status"
   key=$(printf '%s' "$window" | tr ':/.' '___')
   pane_hash=$(hash_text "Working...")
@@ -1528,7 +1528,7 @@ test_busy_declared_pause_still_rechecks_on_the_long_cadence() {
   printf 'window=%s\nkind=ship\nharness=pi\n' "$window" > "$state/busy-recheck.meta"
   record_pi_busy "$state" busy-recheck
   statusf="$state/busy-recheck.status"
-  printf 'paused: suite running, output redirected to a log\n' > "$statusf"
+  printf 'paused: waiting on an upstream release to be published\n' > "$statusf"
   key=$(printf '%s' "$window" | tr ':/.' '___')
   pane_hash=$(hash_text "Working...")
   printf '%s' "$pane_hash" > "$state/.hash-$key"
@@ -1595,7 +1595,7 @@ test_busy_wedge_escalation_resumes_when_the_declared_pause_is_lifted() {
   printf 'window=%s\nkind=ship\nharness=pi\n' "$window" > "$state/busy-lifted.meta"
   record_pi_busy "$state" busy-lifted
   statusf="$state/busy-lifted.status"
-  printf 'paused: suite running, output redirected to a log\n' > "$statusf"
+  printf 'paused: waiting on the provider rate limit to reset\n' > "$statusf"
   sig=$(seen_sig "$statusf"); printf '%s' "$sig" > "$state/.seen-busy-lifted_status"
   key=$(printf '%s' "$window" | tr ':/.' '___')
   pane_hash=$(hash_text "Working...")
@@ -1618,7 +1618,7 @@ test_busy_wedge_escalation_resumes_when_the_declared_pause_is_lifted() {
 
   # Phase B: the wait clears - the crew's own log stops declaring it - so the
   # ordinary busy wedge timer must start again.
-  printf 'working: suite finished, back on the fix\n' >> "$statusf"
+  printf 'working: rate limit cleared, back on the fix\n' >> "$statusf"
   sig=$(seen_sig "$statusf"); printf '%s' "$sig" > "$state/.seen-busy-lifted_status"
   : > "$out"
   PATH="$fakebin:$PATH" FM_FAKE_TMUX_WINDOW="$window" FM_FAKE_TMUX_CAPTURE="$capture_file" \
@@ -1658,7 +1658,7 @@ test_busy_declared_pause_changing_hash_does_not_wedge_escalate() {
   printf 'Working... (3600.1s)' > "$capture_file"
   printf 'window=%s\nkind=ship\nharness=pi\n' "$window" > "$state/busy-tickpaused.meta"
   record_pi_busy "$state" busy-tickpaused
-  printf 'paused: suite running, output redirected to a log\n' > "$state/busy-tickpaused.status"
+  printf 'paused: waiting on a queued upstream CI run\n' > "$state/busy-tickpaused.status"
   sig=$(seen_sig "$state/busy-tickpaused.status"); printf '%s' "$sig" > "$state/.seen-busy-tickpaused_status"
   key=$(printf '%s' "$window" | tr ':/.' '___')
   touch -t 200001010000 "$state/busy-tickpaused.meta"
@@ -1697,7 +1697,7 @@ test_busy_declared_pause_recheck_throttle_survives_a_ticking_pane() {
   printf 'window=%s\nkind=ship\nharness=pi\n' "$window" > "$state/busy-throttle.meta"
   record_pi_busy "$state" busy-throttle
   statusf="$state/busy-throttle.status"
-  printf 'paused: suite running, output redirected to a log\n' > "$statusf"
+  printf 'paused: waiting on a vendor incident to be resolved\n' > "$statusf"
   key=$(printf '%s' "$window" | tr ':/.' '___')
   touch -t 200001010000 "$state/busy-throttle.meta"
   back=$(( $(date +%s) - 500 ))
@@ -1747,6 +1747,75 @@ test_busy_declared_pause_recheck_throttle_survives_a_ticking_pane() {
   [ -e "$state/.paused-resurfaced-$key" ] || fail "the re-surface throttle marker did not survive a ticking pane"
   [ -e "$state/.paused-$key" ] || fail "the paused flag did not survive a ticking pane"
   pass "the paused re-surface throttle survives a pane that renders a new hash every poll"
+}
+
+# Absorbing a busy poll must not spend the stale-hash suppressor. The
+# suppressor records which hash the stale triage has already classified, and a
+# busy pane has classified nothing - so if the busy absorb advances it, the
+# first genuinely stale sight of that same hash reads as already-triaged and
+# loses the immediate fail-open surface it is owed, waiting out
+# PAUSE_RESURFACE_SECS instead. The reachable failure is a hung harness: the
+# busy verdict comes from the event-sourced busy-state contract, not from pane
+# bytes, so a harness that hangs and stops refreshing its state goes busy ->
+# unknown with the pane frozen at byte-identical content. That worker is
+# exactly the wedge this change must never hide, so it is driven here through
+# the busy-state contract with the capture file held constant.
+test_busy_declared_pause_keeps_the_fail_open_surface_when_the_busy_verdict_lifts() {
+  local dir state fakebin out capture_file window key pane_hash sig pid statusf before wakes
+  dir=$(make_case busy-paused-failopen); state="$dir/state"; fakebin="$dir/fakebin"
+  out="$dir/watch.out"; capture_file="$dir/pane.txt"; window="test:fm-busy-failopen"
+  printf 'Working...' > "$capture_file"
+  printf 'window=%s\nkind=ship\nharness=pi\n' "$window" > "$state/busy-failopen.meta"
+  record_pi_busy "$state" busy-failopen
+  statusf="$state/busy-failopen.status"
+  printf 'paused: waiting on the upstream CI run to finish\n' > "$statusf"
+  sig=$(seen_sig "$statusf"); printf '%s' "$sig" > "$state/.seen-busy-failopen_status"
+  key=$(printf '%s' "$window" | tr ':/.' '___')
+  pane_hash=$(hash_text "Working...")
+  printf '%s' "$pane_hash" > "$state/.hash-$key"
+  printf '1\n' > "$state/.count-$key"
+  touch -t 200001010000 "$state/busy-failopen.meta"
+  echo $(( $(date +%s) - 500 )) > "$state/.stale-since-$key"
+
+  # Phase A: busy plus a standing declaration is absorbed on the long cadence.
+  PATH="$fakebin:$PATH" FM_FAKE_TMUX_WINDOW="$window" FM_FAKE_TMUX_CAPTURE="$capture_file" \
+    FM_STATE_OVERRIDE="$state" FM_CREW_STATE_BIN="$fakebin/fm-crew-state.sh" \
+    FM_BUSY_TURN_MAX_SECS=1 FM_STALE_ESCALATE_SECS=240 \
+    FM_PAUSE_RESURFACE_SECS=999999 FM_POLL=1 FM_SIGNAL_GRACE=1 \
+    FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=999999 "$WATCH" > "$out" &
+  pid=$!
+  if ! wait_live "$pid" 40; then
+    reap "$pid"; fail "phase A: the standing declared wait on a busy pane escalated: $(cat "$out")"
+  fi
+  [ -e "$state/.paused-$key" ] || { reap "$pid"; fail "phase A: the paused flag was not recorded"; }
+  reap "$pid"
+  ack_stopped_cycle "$state" || fail "could not acknowledge the intentional phase-A stop"
+
+  # Phase B: the harness hangs. Only the busy verdict moves - through the
+  # busy-state contract, never the capture file - and the pane stays frozen at
+  # byte-identical content, so this is a first stale sight that must surface at
+  # once rather than be absorbed on the 999999s pause cadence.
+  before=$(cat "$capture_file")
+  "$ROOT/bin/fm-busy-event.sh" apply "$state" busy-failopen unknown --current-gen \
+    --source pi-ext --event agent-stop >/dev/null \
+    || fail "phase B: could not lift the busy verdict through the busy-state contract"
+  [ "$(cat "$capture_file")" = "$before" ] || fail "phase B: the pane bytes changed, so this is not a frozen pane"
+  : > "$out"
+  PATH="$fakebin:$PATH" FM_FAKE_TMUX_WINDOW="$window" FM_FAKE_TMUX_CAPTURE="$capture_file" \
+    FM_STATE_OVERRIDE="$state" FM_CREW_STATE_BIN="$fakebin/fm-crew-state.sh" \
+    FM_BUSY_TURN_MAX_SECS=1 FM_STALE_ESCALATE_SECS=240 \
+    FM_PAUSE_RESURFACE_SECS=999999 FM_POLL=1 FM_SIGNAL_GRACE=1 \
+    FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=999999 "$WATCH" > "$out" &
+  pid=$!
+  if ! wait_for_exit "$pid" 40; then
+    reap "$pid"
+    fail "phase B: a hung harness under a stale declaration never surfaced: $(cat "$out")"
+  fi
+  grep -F "stale: $window" "$out" >/dev/null \
+    || fail "phase B: the hung harness did not print a stale wake: $(cat "$out")"
+  wakes=$(awk -F '\t' -v w="$window" '$3 == "stale" && $4 == w { n++ } END { print n + 0 }' "$state/.wake-queue")
+  [ "$wakes" -ge 1 ] || fail "phase B: the hung harness surface was not enqueued"
+  pass "absorbing a busy declared wait leaves the stale suppressor alone, so a hung harness still surfaces immediately"
 }
 
 test_nonterminal_stale_repairs_missing_or_corrupt_timer() {
@@ -2266,6 +2335,7 @@ test_busy_without_declared_pause_still_wedge_escalates
 test_busy_wedge_escalation_resumes_when_the_declared_pause_is_lifted
 test_busy_declared_pause_changing_hash_does_not_wedge_escalate
 test_busy_declared_pause_recheck_throttle_survives_a_ticking_pane
+test_busy_declared_pause_keeps_the_fail_open_surface_when_the_busy_verdict_lifts
 test_nonterminal_stale_not_working_surfaced
 test_nonterminal_stale_paused_absorbed_then_resurfaced
 test_exited_declared_pause_is_bounded_but_live_gate_surfaces

@@ -331,11 +331,12 @@ busy_turn_over_age() {  # <task>
 # Normally wedge_timer_check takes over. Exactly one state must not: a crew
 # whose own last status line DECLARES a bounded external wait (paused:) or a
 # captain hold. A busy pane proves the harness is alive but says nothing about
-# what it is doing, and any long command that renders nothing - a suite whose
-# output is redirected to a file, a background runner, a quiet tool, a long
-# model turn - is indistinguishable from a freeze by pane bytes alone. So the
-# wedge timer fired against an honestly declared wait every STALE_ESCALATE_SECS
-# for as long as that wait lasted, each escalation costing a supervisor turn.
+# what it is doing, and a bounded external wait renders nothing to the pane
+# while the harness still shows busy - a queued upstream CI run, a rate-limit
+# reset, an unpublished upstream release, a vendor incident - so it is
+# indistinguishable from a freeze by pane bytes alone. So the wedge timer fired
+# against an honestly declared wait every STALE_ESCALATE_SECS for as long as
+# that wait lasted, each escalation costing a supervisor turn.
 # A declared bounded wait PLUS a genuinely busy harness is the least wedge-like
 # state this watcher can observe, so it takes the same long PAUSE_RESURFACE_SECS
 # recheck a declared pause already gets when idle. Absorbed, never silenced:
@@ -348,7 +349,7 @@ busy_turn_over_age() {  # <task>
 busy_bound_triage() {  # <window> <task> <hash> <last-status> <since-file> <escalation-file>
   local win=$1 task=$2 h=$3 last=$4 ssf=$5 ewf=$6
   if ! afk_present && status_is_paused_or_captain_held "$last"; then
-    handle_paused_stale "$win" "$task" "$h"
+    handle_paused_stale "$win" "$task" "$h" 0
   else
     wedge_timer_check "$win" "$ssf" "busy (no completed turn)" "$ewf"
   fi
@@ -363,11 +364,19 @@ busy_bound_triage() {  # <window> <task> <hash> <last-status> <since-file> <esca
 # clock, a token counter) cannot keep resetting the cadence the way a hash-tied
 # timer would. A .paused-resurfaced-<key> throttle marker records the last
 # re-surface epoch so, once past the window, it fires once per window rather than
-# every poll. Advances the stale suppressor to <hash> and flags the key paused.
-handle_paused_stale() {  # <window> <task> <hash>
-  local win=$1 task=$2 h=$3 key statusf mtime age rf rf_age reason
+# every poll. Flags the key paused, and advances the stale suppressor to <hash>
+# unless <advance-suppressor> is 0. The suppressor records which hash the stale
+# triage has already classified, so only a caller that actually observed a stale
+# pane may advance it: a busy pane is by definition not stale and has classified
+# nothing, and burning the suppressor there would mark the hash already-triaged
+# and swallow the immediate fail-open surface the first genuinely stale sight of
+# it is owed.
+handle_paused_stale() {  # <window> <task> <hash> [advance-suppressor: 1 default, 0 from a busy poll]
+  local win=$1 task=$2 h=$3 advance=${4:-1} key statusf mtime age rf rf_age reason
   key=$(printf '%s' "$win" | tr ':/.' '___')
-  printf '%s' "$h" > "$STATE/.stale-$key"
+  if [ "$advance" = 1 ]; then
+    printf '%s' "$h" > "$STATE/.stale-$key"
+  fi
   : > "$STATE/.paused-$key"
   rm -f "$STATE/.stale-since-$key" "$STATE/.wedge-escalations-$key"
   statusf="$STATE/$task.status"
