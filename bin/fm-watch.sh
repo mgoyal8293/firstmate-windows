@@ -154,16 +154,19 @@ STALE_ESCALATE_SECS=${FM_STALE_ESCALATE_SECS:-240}  # idle secs before a provabl
 # footer changes every poll. BUSY_TURN_MAX_SECS bounds how long any busy pane
 # may go with no completed turn: once its task's
 # state/<id>.turn-ended marker (or, before any turn has completed, the task's
-# spawn record) is this old, busy_turn_over_age routes the pane through the
-# same STALE_ESCALATE_SECS-paced wedge_timer_check used for a provably-working
-# non-busy stale, so it escalates via the existing stale reason, escalation
-# counter, and demand-deep-inspection marker for human inspection only - never
-# an automatic interrupt, signal, or restart. A completed turn touches
+# spawn record) is this old, busy_turn_over_age hands the pane to
+# busy_bound_triage, which routes it through the same STALE_ESCALATE_SECS-paced
+# wedge_timer_check used for a provably-working non-busy stale - so it escalates
+# via the existing stale reason, escalation counter, and demand-deep-inspection
+# marker for human inspection only, never an automatic interrupt, signal, or
+# restart. See busy_bound_triage for the one state that takes the longer
+# declared-pause cadence at this bound instead. A completed turn touches
 # turn-ended and resets the age. Set generously above any legitimate interval
 # between completed turns, including long tool calls, builds, or test runs.
 BUSY_TURN_MAX_SECS=${FM_BUSY_TURN_MAX_SECS:-3600}
-# A crew that declared a pause is idling on a known external wait, so its stale
-# pane is absorbed rather than wedge-escalated.
+# A crew that declared a pause is waiting on a known external dependency, so its
+# pane is absorbed rather than wedge-escalated: when it reads stale, and, in
+# normal mode only, when a busy pane crosses BUSY_TURN_MAX_SECS.
 # A captain-held or paused crew whose agent has confidently exited uses the same
 # bounded cadence, while a live or ambiguously read agent still surfaces once.
 # These cases re-surface once for a recheck every PAUSE_RESURFACE_SECS - far
@@ -1206,7 +1209,7 @@ EOF
       else
         # Pane busy or not yet stably stale: reset pending escalation bookkeeping,
         # unless a genuinely busy pane has gone too long with no completed turn -
-        # then route it through the same wedge timer instead of erasing it.
+        # then hand it to busy_bound_triage instead of erasing it.
         if [ "$busy_now" -eq 0 ] && busy_turn_over_age "$task"; then
           busy_bound_triage "$w" "$task" "$h" "$last" "$ssf" "$ewf"
         else
