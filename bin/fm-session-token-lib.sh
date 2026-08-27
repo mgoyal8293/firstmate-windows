@@ -54,9 +54,11 @@ fi
 #     pid, so bin/fm-bootstrap.sh, bin/fm-claude-stop-autoarm.sh and
 #     bin/fm-session-start.sh keep reading exactly what they read today and no
 #     caller becomes namespace-aware. The token lives in its own file.
-#   - Reading a token is an environment lookup plus one small file read. Nothing
-#     here queries the Windows process table, so the every-turn Stop hook pays
-#     no per-turn process-enumeration cost.
+#   - Reading a token is an environment lookup plus one small file read, and the
+#     token path itself queries no process table. The gate in front of it does:
+#     fm_session_ancestry_unavailable below must prove the ancestry walk found
+#     nothing before a token may be honoured, so a process pays that walk once.
+#     The memo on that function owns why once is the floor and not zero.
 #
 # Verified token sources, most specific first. Add a row only after confirming
 # the value is present in the harness's OWN tool and hook subprocesses AND is
@@ -204,9 +206,15 @@ fm_session_token_held_by_other() {  # <state-dir>
 # consequently unreachable off Windows: same code, byte-identical behaviour.
 #
 # MEMOISED for the life of the process, because the answer cannot change within
-# one. bin/fm-claude-stop-autoarm.sh makes two ownership checks per turn and this
-# predicate gates both, so the walk below was paid twice on every Windows turn,
-# where a walk costs most of a second (docs/verification/windows-session-lock-cost.md).
+# one. Not for the steady-state Stop hook, which asks exactly once and saves
+# nothing here: bin/fm-claude-stop-autoarm.sh's second ownership check is inside
+# its RECOVER_SESSION_LOCK branch and is reached only after the first one fails.
+# The memo pays where one process asks more than once, which three callers do:
+# that recovery branch, bin/fm-lock.sh where fm_session_token_acquire_eligible
+# declines and the predicate is asked again directly, and current_session_still_ours
+# in bin/fm-turnend-guard-cursor.sh, which re-checks on every park and rearm step.
+# One walk is most of a second on Windows, so each repeat call was that again
+# (docs/verification/windows-session-lock-cost.md).
 #
 # A memo is the safe fix and REORDERING the caller to try the token first is not:
 # a process's own ancestry is fixed for its lifetime, so a second answer cannot

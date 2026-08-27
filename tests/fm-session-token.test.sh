@@ -146,9 +146,13 @@ test_ancestry_unavailable_requires_both_platform_and_empty_walk() {
   pass "fm_session_ancestry_unavailable: true only when the platform cannot answer AND the walk found nothing"
 }
 
-# The predicate is memoised for the life of the process, because
-# bin/fm-claude-stop-autoarm.sh gates two ownership checks per turn on it and the
-# walk it guards was measured at 756.75 ms per call on MINGW64_NT-10.0-26200. A
+# The predicate is memoised for the life of the process, because several callers
+# ask it more than once in one process - the stale-lock recovery branch in
+# bin/fm-claude-stop-autoarm.sh, bin/fm-lock.sh when token acquisition declines,
+# and current_session_still_ours in bin/fm-turnend-guard-cursor.sh - and the walk
+# it guards is expensive: fm_harness_ancestry_pids, which this predicate runs, was
+# measured as shipped at 746.70 ms per call on MINGW64_NT-10.0-26200, recorded in
+# docs/verification/windows-session-lock-cost.md. A
 # memo is safe where reordering the caller to try the token first is not: a
 # process's own ancestry is fixed for its lifetime, so the second answer cannot
 # honestly differ from the first, while the token path would answer a DIFFERENT

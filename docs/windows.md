@@ -232,8 +232,10 @@ path rather than replacing it.**
   It is memoised instead, because a process's own ancestry is fixed for its
   lifetime while trying the token first would answer a different question in the
   case where the walk does resolve.
-  `bin/fm-claude-stop-autoarm.sh` makes two ownership checks per turn and both
-  now share that one walk.
+  A steady-state turn makes one ownership check, so the memo saves nothing on
+  that path; it pays where one process asks more than once, such as the
+  stale-lock recovery branch in `bin/fm-claude-stop-autoarm.sh` or the repeated
+  current-session checks in `bin/fm-turnend-guard-cursor.sh`.
 
 A token proves identity, not liveness, so two things supply the rest:
 
