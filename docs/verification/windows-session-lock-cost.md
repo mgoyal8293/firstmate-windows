@@ -26,74 +26,104 @@ Two shapes, because they answer different questions and one of them flatters the
 
 The `.lock` fixture holds a pid that is not this process's ancestor, so the check runs to a verdict rather than short-circuiting.
 
-## The harnesses, so this page can be re-run
+## The exact harnesses, as run
 
-The staging directory these runs used is gone, so both harnesses are reproduced here rather than referenced.
-Stage a copy of `bin/` from each revision being compared on a local NTFS volume, not under a `\\wsl.localhost` path, and invoke Git Bash by full path because this box sets `interop.appendWindowsPath=false`.
-Point `<state-dir>` at a fixture whose `.lock` holds a pid that is not the caller's ancestor.
+These are the exact scripts as run, quoted rather than described from memory.
+Two of their own labels carry framing this page retracts.
+`measure.sh` prints "(per turn)" over the lock-ownership block and `measure-turn.sh` says "per turn" in its header comment and its output label, where the two-check shape is the autoarm recovery path rather than a steady-state turn.
+`measure.sh` also prints "must be identical across v0/v1" over the contract block, where only `comm`, `ppid` and the four return-code and silence cases were identical.
+Those strings are left unedited because editing them would make the quotation inexact, and the corrected sections of this page are authoritative over the scripts' own labels.
+These scripts produced the recorded numbers on the recorded date, and a re-run yields fresh numbers rather than these.
 
-The in-process loop harness, which produces the component-costs table and the contract block:
+`measure.sh`, which produces the component-costs table and the contract block:
 
 ```sh
 #!/usr/bin/env bash
-# measure.sh <bin-dir> <state-dir>
-BIN=$1 STATE=$2
-. "$BIN/fm-proc-lib.sh"
+# Measure the two audited costs against whichever bin/ is passed as $1.
+set -u
+BIN=$1
 . "$BIN/fm-session-lock-lib.sh"
 
-time_loop() {  # <n> <label> <command...>
-  local n=$1 label=$2 start end i
-  shift 2
-  start=$(date +%s%N)
-  for ((i = 0; i < n; i++)); do "$@" >/dev/null 2>&1; done
-  end=$(date +%s%N)
-  awk -v ns="$((end - start))" -v n="$n" -v l="$label" \
-    'BEGIN { printf "%s %.2f ms\n", l, ns / n / 1000000 }'
+ms_per() { # <iters> <total_ns>
+awk -v n="$1" -v t="$2" 'BEGIN{printf "%.2f", (t/n)/1000000}'
 }
 
-field_through_subst() { local v; v=$(fm_proc_field $$ ppid); }
+bench() { # <label> <iters> <command...>
+local label=$1 n=$2; shift 2
+local i s e
+s=$(date +%s%N)
+for ((i=0;i<n;i++)); do "$@" >/dev/null 2>&1 || true; done
+e=$(date +%s%N)
+printf '%-46s %8s ms/call (n=%s)\n' "$label" "$(ms_per "$n" "$((e-s))")" "$n"
+}
 
-time_loop 30 'fm_proc_field ppid direct'  fm_proc_field $$ ppid
-time_loop 30 'fm_proc_field ppid $( )'    field_through_subst
-time_loop 30 'fm_proc_field comm direct'  fm_proc_field $$ comm
-time_loop 15 'fm_harness_ancestry_pids'   fm_harness_ancestry_pids
-time_loop 15 'fm_session_ancestry_unavailable'  fm_session_ancestry_unavailable
-time_loop 15 'fm_session_lock_owned_by_self'    fm_session_lock_owned_by_self "$STATE"
-
-show()   { local l=$1 out rc; shift; out=$("$@" 2>&1); rc=$?; printf '%s=[%s] rc=%s\n' "$l" "$out" "$rc"; }
-refuse() { local l=$1 out rc; shift; out=$("$@" 2>&1); rc=$?; printf '%s rc=%s out=[%s]\n' "$l" "$rc" "$out"; }
-
-show ppid fm_proc_field $$ ppid
-show comm fm_proc_field $$ comm
-printf 'args=[%s]\n' "$(fm_proc_field $$ args 2>&1)"
-printf 'pgid=[%s] sid=[%s]\n' "$(fm_proc_field $$ pgid 2>&1)" "$(fm_proc_field $$ sid 2>&1)"
-refuse dead-pid   fm_proc_field 999999 ppid
-refuse empty-pid  fm_proc_field '' ppid
-refuse nonnum-pid fm_proc_field abc ppid
-refuse bad-field  fm_proc_field $$ nosuchfield
-refuse ancestry_unavailable fm_session_ancestry_unavailable
+echo "uname: $(uname -s) bash: $BASH_VERSION"
+echo "--- section 2.1: fm_proc_field ---"
+bench "fm_proc_field \$\$ ppid" 30 fm_proc_field "$$" ppid
+bench "fm_proc_field \$\$ comm" 30 fm_proc_field "$$" comm
+echo "--- section 2.2: lock ownership (per turn) ---"
+bench "fm_harness_ancestry_pids" 15 fm_harness_ancestry_pids
+bench "fm_session_ancestry_unavailable" 15 fm_session_ancestry_unavailable
+STATE=$(mktemp -d); echo 12345 > "$STATE/.lock"
+bench "fm_session_lock_owned_by_self" 15 fm_session_lock_owned_by_self "$STATE"
+rm -rf "$STATE"
+echo "--- contract outputs (must be identical across v0/v1) ---"
+printf 'ppid=[%s] rc=%s\n' "$(fm_proc_field "$$" ppid 2>/dev/null)" "$?"
+printf 'comm=[%s] rc=%s\n' "$(fm_proc_field "$$" comm 2>/dev/null)" "$?"
+printf 'args=[%s]\n' "$(fm_proc_field "$$" args 2>/dev/null)"
+printf 'pgid=[%s] sid=[%s]\n' "$(fm_proc_field "$$" pgid 2>/dev/null)" "$(fm_proc_field "$$" sid 2>/dev/null)"
+out=$(fm_proc_field 999999 ppid 2>&1); printf 'dead-pid rc=%s out=[%s]\n' "$?" "$out"
+out=$(fm_proc_field '' ppid 2>&1); printf 'empty-pid rc=%s out=[%s]\n' "$?" "$out"
+out=$(fm_proc_field abc ppid 2>&1); printf 'nonnum-pid rc=%s out=[%s]\n' "$?" "$out"
+out=$(fm_proc_field "$$" lstart 2>&1); printf 'bad-field rc=%s out=[%s]\n' "$?" "$out"
+fm_session_ancestry_unavailable; printf 'ancestry_unavailable rc=%s\n' "$?"
 ```
 
-The fresh-process harness, which produces the two-check and source-only rows:
+Invoked as, once per variant, with the staging directory on a local NTFS volume and Git Bash addressed by full path because this box sets `interop.appendWindowsPath=false`:
+
+```console
+"/mnt/c/Program Files/Git/bin/bash.exe" -c 'cd /d/AI/winfm-lockperf && ./measure.sh /d/AI/winfm-lockperf/v0/bin'
+```
+
+`measure-turn.sh`, which produces the two-check row and the through-`$( )` row:
 
 ```sh
 #!/usr/bin/env bash
-# perturn.sh <bin-dir> <state-dir> <checks: 0 or 2>
-BIN=$1 STATE=$2 CHECKS=$3
-start=$(date +%s%N)
-for i in $(seq 1 10); do
-  bash -c '
-    . "$1/fm-session-lock-lib.sh"
-    [ "$3" -eq 0 ] && exit 0
-    fm_session_lock_owned_by_self "$2" >/dev/null 2>&1
-    fm_session_lock_owned_by_self "$2" >/dev/null 2>&1
-  ' _ "$BIN" "$STATE" "$CHECKS"
+# The real per-turn shape: ONE fresh process that sources the library and makes
+# the two ownership checks bin/fm-claude-stop-autoarm.sh makes per turn.
+set -u
+BIN=$1; N=${2:-10}
+STATE=$(mktemp -d); echo 12345 > "$STATE/.lock"
+s=$(date +%s%N)
+for ((i=0;i<N;i++)); do
+bash -c '
+. "$1/fm-session-lock-lib.sh"
+fm_session_lock_owned_by_self "$2" >/dev/null 2>&1 || true
+fm_session_lock_owned_by_self "$2" >/dev/null 2>&1 || true
+' _ "$BIN" "$STATE"
 done
-end=$(date +%s%N)
-awk -v ns="$((end - start))" 'BEGIN { printf "%.1f ms per iteration\n", ns / 10 / 1000000 }'
+e=$(date +%s%N)
+awk -v n="$N" -v t="$((e-s))" 'BEGIN{printf "per-turn (fresh process, source + 2 owner checks) %8.1f ms (n=%d)\n",(t/n)/1000000,n}'
+rm -rf "$STATE"
+
+# And fm_proc_field the way real call sites use it: through a command substitution.
+. "$BIN/fm-proc-lib.sh"
+s=$(date +%s%N); for ((i=0;i<30;i++)); do v=$(fm_proc_field "$$" ppid); done; e=$(date +%s%N)
+awk -v t="$((e-s))" 'BEGIN{printf "fm_proc_field via $( ) as call sites use it %8.2f ms/call (n=30)\n",(t/30)/1000000}'
+: "$v"
 ```
 
-Nothing is carried between iterations of the second harness, so each one pays a cold memo exactly as a fresh hook process does.
+`measure-src.sh`, which produces the source-only row:
+
+```sh
+#!/usr/bin/env bash
+set -u
+BIN=$1; N=10
+s=$(date +%s%N)
+for ((i=0;i<N;i++)); do bash -c '. "$1/fm-session-lock-lib.sh"' _ "$BIN"; done
+e=$(date +%s%N)
+awk -v n="$N" -v t="$((e-s))" 'BEGIN{printf "fresh process + source only (zero checks) %8.1f ms (n=%d)\n",(t/n)/1000000,n}'
+```
 
 ## Two-check cost, measured
 
