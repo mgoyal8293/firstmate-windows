@@ -1,0 +1,66 @@
+### FM_SESSION_START_TIMEOUT=40s on MINGW64_NT-10.0-26200, brand-new empty home
+
+================================================================================
+SESSION START - /c/Users/johns/AppData/Local/Temp/fm-winverify/home-trunc-40
+================================================================================
+
+LOCK
+--------------------------------------------------------------------------------
+lock acquired: session token
+
+BOOTSTRAP
+--------------------------------------------------------------------------------
+
+●━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+●  STARTUP TRUNCATED - SESSION START HIT ITS 40s RUNTIME BOUND
+●  It stopped during the "bootstrap" stage, so everything above is COMPLETE
+●  only up to that point.
+●  RECONCILE these stages before acting on anything they would have shown:
+●    bootstrap wake-queue supervision-instructions read-once fleet-state network-checks context next-step
+●  Rerun bin/fm-session-start.sh now to finish taking the helm.
+●  If it truncates again, raise FM_SESSION_START_TIMEOUT - to at most 328s, above
+●  which this run cannot establish it will survive: nothing here proved a kill
+●  deadline binds, and the shortest registered session-start timeout in this
+●  checkout is 360s, so that is the largest bound it is safe to assume - and
+●  report the slow stage: a stage that cannot finish inside the bound is a fleet
+●  problem, not a reporting detail.
+●  Where the time went, per stage (ms), so the slow stage is named:
+●    startup                  start=+0       elapsed=3405
+●    lock                     start=+3405    elapsed=27724
+●    bootstrap                start=+31129   elapsed=8871  <- did not finish
+●━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+### total wall clock (bound + parent prologue + banner) = 42046ms
+
+### FM_SESSION_START_TIMEOUT=55s on MINGW64_NT-10.0-26200, brand-new empty home
+--------------------------------------------------------------------------------
+lock acquired: session token
+
+BOOTSTRAP
+--------------------------------------------------------------------------------
+MISSING: tmux (install: no Windows package; set config/backend to conpty instead (docs/conpty-backend.md))
+PLATFORM: cannot create a symlink in /c/Users/johns/AppData/Local/Temp/fm-winverify/home-trunc-55/state, so no fleet lock can ever be acquired and every lock wait would spin - enable Windows Developer Mode (Settings > System > For developers), or grant this account SeCreateSymbolicLinkPrivilege, then start a new session
+
+WAKE QUEUE
+--------------------------------------------------------------------------------
+
+●━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+●  STARTUP TRUNCATED - SESSION START HIT ITS 55s RUNTIME BOUND
+●  It stopped during the "wake-queue" stage, so everything above is COMPLETE
+●  only up to that point.
+●  RECONCILE these stages before acting on anything they would have shown:
+●    wake-queue supervision-instructions read-once fleet-state network-checks context next-step
+●  Rerun bin/fm-session-start.sh now to finish taking the helm.
+●  If it truncates again, raise FM_SESSION_START_TIMEOUT - to at most 328s, above
+●  which this run cannot establish it will survive: nothing here proved a kill
+●  deadline binds, and the shortest registered session-start timeout in this
+●  checkout is 360s, so that is the largest bound it is safe to assume - and
+●  report the slow stage: a stage that cannot finish inside the bound is a fleet
+●  problem, not a reporting detail.
+●  Where the time went, per stage (ms), so the slow stage is named:
+●    startup                  start=+0       elapsed=3687
+●    lock                     start=+3687    elapsed=28940
+●    bootstrap                start=+32627   elapsed=13924
+●    wake-queue               start=+46551   elapsed=8449  <- did not finish
+●━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+### total wall clock (bound + parent prologue + banner) = 56978ms
+

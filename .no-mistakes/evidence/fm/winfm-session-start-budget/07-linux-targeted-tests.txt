@@ -1,0 +1,147 @@
+FM_TEST_BEGIN 2026-08-26T14:12:01Z tests/fm-session-start-bound.test.sh family=session-bootstrap expected_gate_skip=none
+ok - fm_session_start_default_budget: MINGW/MSYS/CYGWIN raise the default bound above the portable 120s
+ok - fm_session_start_default_budget: non-Windows platforms keep the portable 120s default
+ok - fm_session_start_resolve_budget: an explicit FM_SESSION_START_TIMEOUT wins on every platform, including below the raised default
+ok - fm_session_start_resolve_budget: an unusable bound - including every zero-padded spelling of zero - falls back to the PLATFORM default, never to a portable constant
+ok - fm_session_start_budget_advisory: an unusable bound is discarded OUT LOUD, naming the rejected value and this platform's default, and stays silent when nothing was asked for
+ok - fm_session_start_resolve_budget: a zero-padded bound resolves to a value timeout enforces (120s), not to the absent deadline the raw value produces
+ok - fm_session_start_resolve_budget: clamps under a hook AND when hook context is undetermined, and honours a positively established direct run in full
+ok - fm_session_start_resolve_budget: a transport declaring no kill deadline keeps its full 718s bound and is never pointed at another harness's registrations
+ok - fm_session_start_bound_remedy: names the harness kill second only where a deadline was established, and describes the cap as the largest safe assumption otherwise
+ok - fm_session_start_budget_advisory: names the harness kill second only where a deadline was established, and never points an unestablished run at another harness's registrations
+ok - fm_session_start_hook_ceiling: a registration smaller than the margin still bounds the clamp at 1s rather than reporting as unreadable and releasing to the 300s default
+ok - fm_session_start_bind_ceiling: monotonic in the deadline and strictly under it on both arms, with 1s the one documented floor
+ok - the truncation banners name the 20s deadline the registration declared, not the ceiling plus the margin, on the sub-margin branch where those two differ
+ok - fm_session_start_resolve_budget: an unreadable registration set falls back to the 300s platform default instead of releasing the bound, and the advisory invents no harness deadline
+ok - fm_session_start_delivery_bound: a detached worker uses the 718s bound the digest resolved rather than the 359s its own context would clamp to
+ok - fm_session_start_bind_budget: every path defines all three return values, so a 'set -u' caller never aborts on one it did not set
+ok - fm_session_stage_mark: records a real stamp using shell builtins alone, spawning nothing on the path it measures
+ok - fm_session_stage_mark: appends every stage, and an unwritable or unset target never fails the digest
+ok - fm_session_stage_render: attributes elapsed time per stage and bounds the unfinished one by the budget
+ok - fm_session_stage_render: stays silent on an empty, missing, or unstamped record rather than inventing timings
+ok - fm-session-start.sh: a truncated startup names the stage it died in, attributes its elapsed time per stage, and caps its own remedy at the 359s harness ceiling
+ok - fm-session-start.sh: a failed breadcrumb mktemp leaves the /dev/null sentinel alone instead of handing it to rm
+ok - fm-session-start.sh: the bound the parent resolved is handed to the bounded child, which is what the detached network worker inherits it through
+ok - fm_session_start_bound_remedy: names the cap below the 359s ceiling and stops advising the knob entirely at or above it
+ok - fm-session-start.sh: each of the nine printed stages emits its header BEFORE its own output, so a long stage is attributable rather than silent
+FM_TEST_END 2026-08-26T14:12:09Z tests/fm-session-start-bound.test.sh exit=0 duration_ms=7553 gate_skip=false
+FM_TEST_BEGIN 2026-08-26T14:12:09Z tests/fm-session-start-hook-nesting.test.sh family=session-bootstrap expected_gate_skip=none
+ok - the session-start bound ceiling is derived from the resolver's own arms and covers the raised Windows arm (300s)
+ok - hook nesting: the 332s registration floor is the 300s largest default bound plus a real margin (widest arm 32s), not the bound alone
+ok - hook nesting: all 3 digest-running session-start hook(s) across 3 registration(s) clear the 332s bound-plus-margin floor, so firstmate's own bound bites first AND the banner has time to print
+ok - hook nesting: on all 12 platform arm(s) the clamped bound plus its own margin still fits inside the 360s shortest registration
+ok - hook nesting: an explicit FM_SESSION_START_TIMEOUT above the cap is clamped to 359s on every platform arm, strictly under the 360s shortest registration, and a usable value at or below it is untouched
+ok - hook nesting: a clamped bound names the requested value, the cap applied and why, and an unclamped one stays silent
+ok - parent-side creation count: 35 creations (19 exec-backed), within [25, 40]; every one is paid inside the window the nesting margin covers
+ok - hook nesting: the nesting margin is per platform and real on both arms (32s on MSYS against 1s portable); it is derived from the worst non-thrashing measured point, and its sufficiency at unbounded load is deliberately not asserted here
+ok - hook nesting: the clamp and every banner line on the Windows arm go through the one 32s margin, so the 328s bound and the 360s kill deadline they print cannot disagree
+FM_TEST_END 2026-08-26T14:12:14Z tests/fm-session-start-hook-nesting.test.sh exit=0 duration_ms=5579 gate_skip=false
+FM_TEST_BEGIN 2026-08-26T14:12:14Z tests/fm-pi-sessionstart-deadline.test.sh family=session-bootstrap expected_gate_skip=none
+ok - pi session-start deadline: the extension declares 'none' to the digest it spawns AND that declaration is true - the observed spawn arms no timeout and no AbortSignal
+FM_TEST_END 2026-08-26T14:12:15Z tests/fm-pi-sessionstart-deadline.test.sh exit=0 duration_ms=636 gate_skip=false
+FM_TEST_SUMMARY total=3 failed=0 skipped_gate=0 duration_ms=13908
+FM_TEST_SUMMARY_FAMILY family=session-bootstrap count=3 duration_ms=13768 failed=0
+FM_TEST_SLOWEST rank=1 script=tests/fm-session-start-bound.test.sh duration_ms=7553
+FM_TEST_SLOWEST rank=2 script=tests/fm-session-start-hook-nesting.test.sh duration_ms=5579
+FM_TEST_SLOWEST rank=3 script=tests/fm-pi-sessionstart-deadline.test.sh duration_ms=636
+EXIT=0
+FM_TEST_BEGIN 2026-08-26T14:12:38Z tests/fm-windows-portability.test.sh family=pure-contract-unit expected_gate_skip=none
+ok - fm-proc-lib.sh: the source guard skips repeat sources without blinding FM_PLATFORM_UNAME_OVERRIDE
+ok - fm_proc_field: reads comm/args/ppid/pgid/sid from the MSYS /proc layout
+ok - fm_proc_field: falls back to ps -o where the /proc scalar files are absent
+ok - fm_proc_field: refuses an empty or non-numeric pid
+ok - fm_proc_field: refuses a field it has no /proc equivalent for
+ok - fm_platform_symlink_probe: proves symlink creation and leaves no residue
+ok - symlink preflight: reports the lock-layer and skills-checkout failures, and stays silent otherwise
+ok - fm_platform_enable_native_symlinks: sets nativestrict on Windows, inert elsewhere, never overrides an explicit choice
+ok - fm_proc_pids_with_cwd_under: finds live processes rooted under a directory and forgets dead ones
+ok - fm_proc_pids_with_cwd_under: an unusable /proc returns failure, not an empty result
+ok - fm_proc_pids_with_cwd_under: a mount-aliased /proc cwd spelling still matches the caller's directory
+ok - fm_proc_pids_holding_path: a mount-aliased /proc fd target still matches the caller's path
+ok - fm_lock_same_path: widens a mount-aliased spelling through cygpath and stays strict everywhere else
+ok - fm_lock_points_to_owner: the strict readlink compare remains the primary, unresolved verdict
+ok - fm_pid_identity: bin/fm-proc-lib.sh answers from /proc where ps rejects -o, and detects pid reuse
+ok - root .gitattributes: a core.autocrlf=true clone still lands LF, and the one binary blob survives
+ok - fm_path_gotmpdir_export_line: translates and quotes on Windows, and falls back to the POSIX literal rather than an empty export when the caller has no quoter
+FM_TEST_END 2026-08-26T14:12:40Z tests/fm-windows-portability.test.sh exit=0 duration_ms=1956 gate_skip=false
+FM_TEST_BEGIN 2026-08-26T14:12:40Z tests/fm-watcher-lock.test.sh family=watcher-wake-lock expected_gate_skip=none
+ok - simultaneous watcher starts leave exactly one live process
+ok - fm_pid_identity real ps fallback is locale-invariant
+ok - fm_pid_identity is locale-invariant across LC_ALL/LC_TIME
+ok - /proc process identity ignores simulated btime changes
+ok - /proc process identity detects pid reuse
+ok - MSYS /proc process identity regression skipped on non-Windows host
+ok - killed watcher stale lock is reclaimed
+tests/fm-watcher-lock.test.sh: line 1127: 54871 Killed                  FM_STATE_OVERRIDE="$state" bash -c '
+    . "$1"
+    fm_lock_remove_path() {
+      if [ "$1" = "$STATE/.watch.lock" ]; then
+        kill -KILL "${BASHPID:-$$}"
+      fi
+      return 1
+    }
+    fm_lock_try_acquire "$2"
+  ' _ "$LIB" "$lockdir" > /dev/null 2>&1
+ok - stale watcher reclaim publishes durable recovery evidence before clear
+ok - live watcher lock with stale heartbeat is actionable
+ok - guard banner leads when down with pending wakes (repair-after-drain) and stays silent when live and fresh
+ok - concurrent fm_lock_try_acquire yields exactly one winner
+ok - dead-pid stale lock is reclaimed by a single acquirer
+ok - concurrent stale-lock steal yields exactly one winner
+ok - live steal mutex is not reclaimed
+ok - live-held lock is not stolen
+ok - empty mid-acquire lock keeps a minimum grace
+ok - late original claimant cannot claim a recreated lock
+ok - paused mid-acquire claimant backs off to active stealer
+ok - reading an owner pid file that is being deleted underneath stays silent and never fails the caller (reads=9377 hits=6877 misses=2500)
+ok - watch restart preserves recovery without signaling a reused pid
+ok - watch restart attaches to a verified healthy peer and later surfaces a successor gap
+ok - watcher self-evicts when the lock pid no longer names it
+ok - arm turns clean self-eviction without a successor into a typed failure
+ok - arm attaches to a live fresh watcher and fails loudly when that cycle has no successor
+ok - attached arm signals record a classified lifecycle entry
+ok - arm starts cleanly and resurfaces recovery after a dead-pid lock
+ok - arm cleans child watcher and temp output on HUP
+WAKE_ACK_REQUIRED: after handling completes run bin/fm-wake-drain.sh --ack-through 1 --recovery-generation 64150.1787753598.Bqa5ON
+ok - arm propagates an immediate watcher wake before confirmation
+ok - arm attaches to a peer watcher after child stands down and surfaces a missing successor
+watcher: lock held by live pid 64941 but heartbeat is stale for 841068801s (>300s); inspect or stop that watcher before re-arming.
+ok - arm reports FAILED and exits non-zero when no fresh watcher can be confirmed
+ok - cycle-exit ledger links a verified successor and remains size-capped
+ok - SIGSTOP distinguishes live PID from stale beacon and termination records the exit class
+FM_TEST_END 2026-08-26T14:13:35Z tests/fm-watcher-lock.test.sh exit=0 duration_ms=54593 gate_skip=false
+FM_TEST_BEGIN 2026-08-26T14:13:35Z tests/fm-cursor-primary.test.sh family=watcher-wake-lock expected_gate_skip=none
+ok - fm-turnend-guard: Cursor payload is inert without --cursor and blocks with it
+ok - fm-turnend-guard: a non-Cursor payload keeps blocking
+ok - fm-claude-stop-autoarm: inert on a Cursor-delivered payload
+ok - fm-sessionstart-run: inert on a Cursor payload, unchanged otherwise
+ok - fm-arm-pretool-check: Cursor duplicate allows, --cursor denies in Cursor's own shape
+ok - fm-cd-pretool-check: Cursor duplicate allows, --cursor denies in Cursor's own shape
+ok - cursor park: silent no-op when no supervision is needed
+ok - cursor park: an actionable close is delivered as one watcher-kind follow-up
+ok - cursor park: always exits 0, even when supervision is genuinely down
+ok - cursor park: the repair nag is bounded and then goes quiet
+ok - cursor park: a repair nag is emitted only after its budget persists
+ok - cursor park: a delivered wake resets the bounded repair budget
+ok - cursor park: the loop_count ceiling warns exactly once, then stops the loop
+ok - cursor park: an older park stands down after a newer stop claim
+ok - cursor park: the newest stop exclusively owns a concurrent commit
+ok - cursor park: a superseded park cannot consume repair budget
+ok - cursor park: inert while away mode is active
+ok - cursor park: an away-mode transition wins before follow-up commit
+ok - cursor park: inert when this session does not hold the home lock
+ok - cursor park: session takeover stops polling without output or state mutation
+ok - cursor park: inert inside a child crewmate worktree
+ok - cursor park: malformed payloads fail open without arming
+ok - fm-sessionstart-cursor: sessionStart injects context
+ok - fm-sessionstart-cursor: silent inside a child crewmate worktree
+ok - cursor registration: covers every primary event with a bounded stop loop
+ok - cursor bounds nest: firstmate's default ceiling stops the loop before Cursor's loop_limit does
+FM_TEST_END 2026-08-26T14:14:23Z tests/fm-cursor-primary.test.sh exit=0 duration_ms=47923 gate_skip=false
+FM_TEST_SUMMARY total=3 failed=0 skipped_gate=0 duration_ms=104613
+FM_TEST_SUMMARY_FAMILY family=pure-contract-unit count=1 duration_ms=1956 failed=0
+FM_TEST_SUMMARY_FAMILY family=watcher-wake-lock count=2 duration_ms=102516 failed=0
+FM_TEST_SLOWEST rank=1 script=tests/fm-watcher-lock.test.sh duration_ms=54593
+FM_TEST_SLOWEST rank=2 script=tests/fm-cursor-primary.test.sh duration_ms=47923
+FM_TEST_SLOWEST rank=3 script=tests/fm-windows-portability.test.sh duration_ms=1956
+EXIT=0

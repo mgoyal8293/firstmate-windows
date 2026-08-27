@@ -1,0 +1,24 @@
+Falsifiability: every new guard must FAIL with its protection removed.
+"It passes" is no evidence, so each protection below was REMOVED in a scratch
+copy of the tree and the guard that owns it was re-run. A guard that still
+passed would be vacuous.
+
+Scratch copy of e209b2d at /tmp/nm-falsify; the worktree under review was never
+mutated. Every mutation is reverted before the next.
+
+M1 default budget: Windows arm removed               GUARD FAILED (good) - not ok - uname -s 'MINGW64_NT-10.0-22631' must raise the default above the portable 120s, got '120'
+M2 nesting margin: per-platform arm collapsed        GUARD FAILED (good) - not ok - the MINGW ceiling is not below the Linux one, so the platform arms are not distinguishable here and the loop above proves nothing about Windo
+M3 'stage startup' mark removed                      GUARD FAILED (good) - not ok - the pre-lock setup window must be attributed with its own elapsed time, got: 
+M4 WAKE QUEUE header moved to stage END              GUARD FAILED (good) - not ok - stage 'wake-queue': its header is on line 17 but the stage had already printed on line 15, so the header was emitted when the stage FINISHED 
+M5 three execs added to the parent side              GUARD FAILED (good) - not ok - the parent side now execs 22 external commands, above the 20 on record: every one is paid inside the window the nesting margin covers, and th
+M6 unreadable registrations RELEASE the bound        GUARD FAILED (good) - not ok - with no readable registration an over-default bound must fall back to the 300s platform default, got 3000s: honouring it in full is the same 
+M7 /dev/null sentinel handed to rm                   GUARD FAILED (good) - not ok - the cleanup asked rm to delete /dev/null; running as root in a container that removes /dev/null for everything else running in it
+
+WHAT EACH ONE ESTABLISHES.
+  M1  the raised Windows bound is really keyed on the platform arm, not incidental
+  M2  the 32s margin is a real per-platform arm, not the host's number relabelled
+  M3  the pre-lock `startup` window is genuinely attributed, not just listed
+  M4  headers really are emitted as a stage BEGINS - moving one to the end fails
+  M5  the subprocess count is DERIVED, so a RISE fails the suite (22 execs > 20)
+  M6  an unreadable registration set caps rather than fails open
+  M7  the /dev/null breadcrumb sentinel never reaches rm

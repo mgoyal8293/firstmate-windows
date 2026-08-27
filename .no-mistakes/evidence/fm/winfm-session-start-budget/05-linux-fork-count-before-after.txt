@@ -1,0 +1,61 @@
+Part 2: session-start subprocess count, before and after, from an actual profile.
+
+INSTRUMENT. tests/fixtures/forkcount.c, the committed LD_PRELOAD interposer on
+fork(), execve() and posix_spawn(). Process creations are FORK + SPAWN records;
+EXEC is exec-after-fork and would double-count. The count comes from counting
+the calls themselves - nothing here greps source text.
+
+VALIDATED BEFORE USE, against a program whose creation count is known:
+  $ FORKCOUNT_LOG=v.log LD_PRELOAD=./forkcount.so bash -c \
+      'for i in 1 2 3 4 5; do /bin/true; done; x=$(/bin/echo hi); : $(/bin/date +%s)'
+  FORK=7  EXEC=7  SPAWN=0        <- 7 creations asked for, 7 counted
+
+METHOD. Each variant on its own pristine empty FM_HOME and its own clone
+checked out as a branch named `main`, identical stubbed toolchain, no
+FM_SESSION_START_TIMEOUT. Counts are taken after the detached network stage
+settles. Three runs per variant.
+
+VARIANTS. A = branch base 5756419; B = base + the runtime-bound commit e3b1503
+only; C = the final tree e209b2d.
+
+RESULT (identical across all three runs of every variant - deterministic):
+
+Variant                            at digest return   after settle  parent side
+---------------------------------- -------------- -------------- ------------
+A  base 5756419                              1788           1954           22
+B  + runtime bound e3b1503                   1792           1962           26
+C  final tree e209b2d                        1460           1593           22
+
+WHAT THIS SHOWS.
+  - The runtime-bound commit costs exactly +4 process creations (B - A), which is
+    the one `uname` for the platform default and its command substitution. That
+    is the figure docs/verification/session-start-fork-profile.md states, and it
+    reproduces exactly.
+  - The reductions then take the count from 1792 to 1460 at digest return:
+    332 fewer creations, 18.5%. Against the branch base's 1788 it is 328 fewer,
+    18.3%. After the detached stage settles, 1962 -> 1593, 369 fewer, 18.8%.
+  - Direction and order of magnitude match the branch's "cut by 19%" claim. The
+    absolute floors do not match the numbers in the profile document (1016 ->
+    817 there), and that document predicts this itself: the per-tree interposer
+    still sees whatever the digest's children find on PATH, so the RATIO is the
+    durable result and each absolute floor is reproducible only against its own
+    run. The ratio measured here is 18.3-18.8% against the 19.2-19.6% on record.
+
+RANKING BEFORE OPTIMISING - where the forks actually were, from the profile
+document's independent xtrace instrument (PS4 carrying BASH_SOURCE and LINENO),
+reproduced here for context rather than re-measured:
+    69  fm-proc-lib.sh    fm_proc_field's `ps` fallback
+    42  fm-wake-lib.sh    fm_lock_link_owner's readlink (3 per acquisition x 14)
+    41  fm-proc-lib.sh    prologue `uname -s` - the file was sourced 42 times
+  24+24 fm-session-lock-lib.sh  basename and grep -qE in the harness classifier
+    21  fm-session-lock-lib.sh  fm_proc_field | tr -d ' '
+    21  fm-cursor-lib.sh  basename in its process classifier
+The dominant pattern was libraries re-sourced from inside functions, each
+re-running its prologue: 158 source events per session start.
+
+THE COUNT IS NOT WRITTEN DOWN. tests/fm-session-start-hook-nesting.test.sh
+rebuilds the interposer, revalidates it against the known-count program, reruns
+the clamped path and RECOUNTS the parent side, failing when the count rises.
+Measured on this box during this run: 35 creations, 19 exec-backed, within the
+[25, 40] band and under the 20 exec-backed ceiling. Mutation M5 below proves a
+RISE fails the suite.

@@ -1,0 +1,24 @@
+Session-start bound resolution, run on the REAL Windows box
+Windows 11 build 10.0.26200, MINGW64_NT-10.0-26200, bash 5.2.37, 22 logical cores
+Probed through one batched 'powershell.exe -NoProfile -NonInteractive -WindowStyle Hidden'
+invocation for the host facts, then Git Bash for the library itself.
+
+uname -s                                  = MINGW64_NT-10.0-26200
+bash                                      = 5.2.37(1)-release
+FM_SESSION_START_PLATFORM (cached)        = MINGW64_NT-10.0-26200
+fm_session_start_default_budget            = 300
+fm_session_start_resolve_budget ""         = 300
+fm_session_start_resolve_budget 45         = 45
+fm_session_start_resolve_budget abc        = 300
+fm_session_start_resolve_budget 000        = 300
+FM_SESSION_START_NESTING_MARGIN            = 32
+fm_session_start_hook_deadline (shortest)  = 360
+fm_session_start_hook_ceiling              = 328
+default budget < ceiling (clamp inert)?    = yes
+worst observed case on this box            = 123s, and it TRUNCATED
+FM_SESSION_START_TIMEOUT=9999 under a hook = 328 (clamped)
+
+Measured against those numbers, on this same box:
+  empty-home completion, idle             = 68,972 ms  (23% of the 300s bound)
+  empty-home completion, 16 competitors   = 191,606 ms (64% of the 300s bound)
+  the old 120s bound against that load    = EXCEEDED at 191,606 ms -> would have truncated

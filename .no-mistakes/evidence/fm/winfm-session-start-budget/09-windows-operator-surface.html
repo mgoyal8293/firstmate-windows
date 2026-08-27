@@ -1,0 +1,108 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<title>Windows session-start budget - operator-facing evidence</title>
+<style>
+  :root { color-scheme: dark; }
+  body { margin:0; padding:32px; background:#0f1115; color:#e6e6e6;
+         font:15px/1.55 -apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif; }
+  h1 { font-size:22px; margin:0 0 4px; }
+  .lede { color:#9aa4b2; margin:0 0 28px; max-width:90ch; }
+  .card { margin:0 0 30px; }
+  h2 { font-size:16px; margin:0 0 4px; display:flex; align-items:center; gap:9px; }
+  .dot { width:9px; height:9px; border-radius:50%; display:inline-block; }
+  .sub { color:#9aa4b2; margin:0 0 10px; font-size:13.5px; max-width:100ch; }
+  .term { background:#05070a; border:1px solid #232833; border-radius:8px;
+           padding:16px 18px; overflow-x:auto; }
+  pre { margin:0; font:13px/1.45 'Cascadia Mono','SF Mono',Menlo,Consolas,monospace;
+         color:#d7dce4; white-space:pre; }
+  code { background:#1a1f28; padding:1px 5px; border-radius:4px; font-size:13px; }
+</style></head><body>
+<h1>Windows session start: the budget, and what a truncation now names</h1>
+<p class="lede">Captured on the real Windows box the defect lives on &mdash; Windows 11 build
+10.0.26200, <code>MINGW64_NT-10.0-26200</code>, bash 5.2.37, 22 logical cores &mdash; running
+<code>bin/fm-session-start.sh</code> against a brand-new home with no tasks, no projects and an
+absent backlog. This is the operator's own terminal surface, unedited.</p>
+
+  <section class="card">
+    <h2><span class="dot" style="background:#4ade80"></span>1. The digest completes, and the platform default is what bounds it</h2>
+    <p class="sub"><code>FM_SESSION_START_TIMEOUT</code> unset, box idle. 68,972&nbsp;ms against the 300s Windows arm &mdash; 23% of the bound. Under the old portable 120s it was 72s, already 60% of it. The wake-queue record seeded before the run is delivered, and <code>WAKE_ACK_REQUIRED</code> is emitted, so the drain is not lost.</p>
+    <div class="term"><pre>================================================================================
+SESSION START - /c/Users/johns/AppData/Local/Temp/fm-winverify/home-complete
+================================================================================
+
+LOCK
+--------------------------------------------------------------------------------
+lock acquired: session token
+
+BOOTSTRAP
+--------------------------------------------------------------------------------
+MISSING: tmux (install: no Windows package; set config/backend to conpty instead (docs/conpty-backend.md))
+PLATFORM: cannot create a symlink in /c/Users/johns/AppData/Local/Temp/fm-winverify/home-complete/state, so no fleet lock can ever be acquired and every lock wait would spin - enable Windows Developer Mode (Settings &gt; System &gt; For developers), or grant this account SeCreateSymbolicLinkPrivilege, then start a new session
+
+WAKE QUEUE
+--------------------------------------------------------------------------------
+1787753690	1	heartbeat	win-verify	seeded by the windows verification run
+WAKE_ACK_REQUIRED: after handling completes run bin/fm-wake-drain.sh --ack-through 1 --recovery-generation 1141.1787753692.eg8Knl
+================================================================================</pre></div>
+  </section>
+
+  <section class="card">
+    <h2><span class="dot" style="background:#4ade80"></span>2. Under ordinary load: 191.6s, which the old 120s bound could not have survived</h2>
+    <p class="sub">Same empty home, 16 fork-heavy competitors. The run exceeds the old bound by 71s &mdash; it would have truncated and lost the drain, the supervision instructions, the fleet state, the network checks and the whole context digest. At 300s it completes and delivers all of them.</p>
+    <div class="term"><pre>### stale competitor count BEFORE: 0
+### 16 fork-heavy competitors started on a 22-core box
+### stale competitor count AFTER: 0
+
+### session start exit=0 elapsed=191606ms   bound in force = platform default 300s
+### would the OLD 120s bound have held? NO - this run exceeded 120000ms and would have TRUNCATED
+
+### the three things a truncation loses, checked for presence in this run&#x27;s output:
+truncation banner absent           PASS
+WAKE QUEUE drain delivered         PASS - the seeded record was presented
+WAKE_ACK_REQUIRED emitted          PASS
+SUPERVISION INSTRUCTIONS           PASS
+READ-ONCE CONTRACT                 PASS
+FLEET STATE                        PASS
+NETWORK CHECKS                     PASS
+CONTEXT digest                     PASS
+NEXT STEP                          PASS
+digest declared complete           PASS</pre></div>
+  </section>
+
+  <section class="card">
+    <h2><span class="dot" style="background:#fbbf24"></span>3. A truncation now names the stage it died in</h2>
+    <p class="sub">Forced with <code>FM_SESSION_START_TIMEOUT=55</code>, which lands inside the wake-queue stage &mdash; the exact stage the reported defect died in. The banner names it, lists precisely the stages that never ran, and attributes the elapsed time per stage. Note <code>WAKE QUEUE</code> printing its header before it had produced any output: headers are emitted as a stage BEGINS.</p>
+    <div class="term"><pre>### FM_SESSION_START_TIMEOUT=55s on MINGW64_NT-10.0-26200, brand-new empty home
+--------------------------------------------------------------------------------
+lock acquired: session token
+
+BOOTSTRAP
+--------------------------------------------------------------------------------
+MISSING: tmux (install: no Windows package; set config/backend to conpty instead (docs/conpty-backend.md))
+PLATFORM: cannot create a symlink in /c/Users/johns/AppData/Local/Temp/fm-winverify/home-trunc-55/state, so no fleet lock can ever be acquired and every lock wait would spin - enable Windows Developer Mode (Settings &gt; System &gt; For developers), or grant this account SeCreateSymbolicLinkPrivilege, then start a new session
+
+WAKE QUEUE
+--------------------------------------------------------------------------------
+
+●━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+●  STARTUP TRUNCATED - SESSION START HIT ITS 55s RUNTIME BOUND
+●  It stopped during the &quot;wake-queue&quot; stage, so everything above is COMPLETE
+●  only up to that point.
+●  RECONCILE these stages before acting on anything they would have shown:
+●    wake-queue supervision-instructions read-once fleet-state network-checks context next-step
+●  Rerun bin/fm-session-start.sh now to finish taking the helm.
+●  If it truncates again, raise FM_SESSION_START_TIMEOUT - to at most 328s, above
+●  which this run cannot establish it will survive: nothing here proved a kill
+●  deadline binds, and the shortest registered session-start timeout in this
+●  checkout is 360s, so that is the largest bound it is safe to assume - and
+●  report the slow stage: a stage that cannot finish inside the bound is a fleet
+●  problem, not a reporting detail.
+●  Where the time went, per stage (ms), so the slow stage is named:
+●    startup                  start=+0       elapsed=3687
+●    lock                     start=+3687    elapsed=28940
+●    bootstrap                start=+32627   elapsed=13924
+●    wake-queue               start=+46551   elapsed=8449  &lt;- did not finish
+●━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+### total wall clock (bound + parent prologue + banner) = 56978ms</pre></div>
+  </section>
+</body></html>

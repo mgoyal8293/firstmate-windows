@@ -1,0 +1,18 @@
+### stale competitor count BEFORE: 0
+### 16 fork-heavy competitors started on a 22-core box
+### stale competitor count AFTER: 0
+
+### session start exit=0 elapsed=191606ms   bound in force = platform default 300s
+### would the OLD 120s bound have held? NO - this run exceeded 120000ms and would have TRUNCATED
+
+### the three things a truncation loses, checked for presence in this run's output:
+truncation banner absent           PASS
+WAKE QUEUE drain delivered         PASS - the seeded record was presented
+WAKE_ACK_REQUIRED emitted          PASS
+SUPERVISION INSTRUCTIONS           PASS
+READ-ONCE CONTRACT                 PASS
+FLEET STATE                        PASS
+NETWORK CHECKS                     PASS
+CONTEXT digest                     PASS
+NEXT STEP                          PASS
+digest declared complete           PASS

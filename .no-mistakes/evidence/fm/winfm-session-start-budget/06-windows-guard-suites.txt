@@ -1,0 +1,47 @@
+### MINGW64_NT-10.0-26200  bash 5.2.37(1)-release
+FM_TEST_BEGIN 2026-08-26T14:27:03Z tests/fm-session-start-bound.test.sh family=session-bootstrap expected_gate_skip=none
+ok - fm_session_start_default_budget: MINGW/MSYS/CYGWIN raise the default bound above the portable 120s
+ok - fm_session_start_default_budget: non-Windows platforms keep the portable 120s default
+ok - fm_session_start_resolve_budget: an explicit FM_SESSION_START_TIMEOUT wins on every platform, including below the raised default
+ok - fm_session_start_resolve_budget: an unusable bound - including every zero-padded spelling of zero - falls back to the PLATFORM default, never to a portable constant
+ok - fm_session_start_budget_advisory: an unusable bound is discarded OUT LOUD, naming the rejected value and this platform's default, and stays silent when nothing was asked for
+ok - fm_session_start_resolve_budget: a zero-padded bound resolves to a value timeout enforces (120s), not to the absent deadline the raw value produces
+note: no pty allocator (script/python3) on this box, so the direct-run branch is unverified here
+ok - fm_session_start_resolve_budget: clamps under a hook AND when hook context is undetermined, and honours a positively established direct run in full
+ok - fm_session_start_resolve_budget: a transport declaring no kill deadline keeps its full 656s bound and is never pointed at another harness's registrations
+ok - fm_session_start_bound_remedy: names the harness kill second only where a deadline was established, and describes the cap as the largest safe assumption otherwise
+ok - fm_session_start_budget_advisory: names the harness kill second only where a deadline was established, and never points an unestablished run at another harness's registrations
+ok - fm_session_start_hook_ceiling: a registration smaller than the margin still bounds the clamp at 1s rather than reporting as unreadable and releasing to the 300s default
+ok - fm_session_start_bind_ceiling: monotonic in the deadline and strictly under it on both arms, with 1s the one documented floor
+ok - the truncation banners name the 20s deadline the registration declared, not the ceiling plus the margin, on the sub-margin branch where those two differ
+note: no pty allocator on this box, so the direct-run leg of the unreadable-registration case is unverified here
+ok - fm_session_start_resolve_budget: an unreadable registration set falls back to the 300s platform default instead of releasing the bound, and the advisory invents no harness deadline
+ok - fm_session_start_delivery_bound: a detached worker uses the 656s bound the digest resolved rather than the 328s its own context would clamp to
+ok - fm_session_start_bind_budget: every path defines all three return values, so a 'set -u' caller never aborts on one it did not set
+ok - fm_session_stage_mark: records a real stamp using shell builtins alone, spawning nothing on the path it measures
+ok - fm_session_stage_mark: appends every stage, and an unwritable or unset target never fails the digest
+ok - fm_session_stage_render: attributes elapsed time per stage and bounds the unfinished one by the budget
+ok - fm_session_stage_render: stays silent on an empty, missing, or unstamped record rather than inventing timings
+ok - fm-session-start.sh: a truncated startup names the stage it died in, attributes its elapsed time per stage, and caps its own remedy at the 328s harness ceiling
+ok - fm-session-start.sh: a failed breadcrumb mktemp leaves the /dev/null sentinel alone instead of handing it to rm
+ok - fm-session-start.sh: the bound the parent resolved is handed to the bounded child, which is what the detached network worker inherits it through
+ok - fm_session_start_bound_remedy: names the cap below the 328s ceiling and stops advising the knob entirely at or above it
+ok - fm-session-start.sh: each of the nine printed stages emits its header BEFORE its own output, so a long stage is attributable rather than silent
+FM_TEST_END 2026-08-26T14:28:19Z tests/fm-session-start-bound.test.sh exit=0 duration_ms=76280 gate_skip=false
+FM_TEST_BEGIN 2026-08-26T14:28:20Z tests/fm-session-start-hook-nesting.test.sh family=session-bootstrap expected_gate_skip=none
+ok - the session-start bound ceiling is derived from the resolver's own arms and covers the raised Windows arm (300s)
+ok - hook nesting: the 332s registration floor is the 300s largest default bound plus a real margin (widest arm 32s), not the bound alone
+ok - hook nesting: all 3 digest-running session-start hook(s) across 3 registration(s) clear the 332s bound-plus-margin floor, so firstmate's own bound bites first AND the banner has time to print
+ok - hook nesting: on all 12 platform arm(s) the clamped bound plus its own margin still fits inside the 360s shortest registration
+ok - hook nesting: an explicit FM_SESSION_START_TIMEOUT above the cap is clamped to 328s on every platform arm, strictly under the 360s shortest registration, and a usable value at or below it is untouched
+ok - hook nesting: a clamped bound names the requested value, the cap applied and why, and an unclamped one stays silent
+note: no working LD_PRELOAD fork interposer on this box (no cc, or preloading is unavailable), so the parent-side creation count is UNMEASURED here and this assertion did not run
+ok - parent-side creation count: SKIPPED - the interposer could not be built or preloaded on this box
+ok - hook nesting: the nesting margin is per platform and real on both arms (32s on MSYS against 1s portable); it is derived from the worst non-thrashing measured point, and its sufficiency at unbounded load is deliberately not asserted here
+ok - hook nesting: the clamp and every banner line on the Windows arm go through the one 32s margin, so the 328s bound and the 360s kill deadline they print cannot disagree
+FM_TEST_END 2026-08-26T14:28:45Z tests/fm-session-start-hook-nesting.test.sh exit=0 duration_ms=25336 gate_skip=false
+FM_TEST_SUMMARY total=2 failed=0 skipped_gate=0 duration_ms=102899
+FM_TEST_SUMMARY_FAMILY family=session-bootstrap count=2 duration_ms=101616 failed=0
+FM_TEST_SLOWEST rank=1 script=tests/fm-session-start-bound.test.sh duration_ms=76280
+FM_TEST_SLOWEST rank=2 script=tests/fm-session-start-hook-nesting.test.sh duration_ms=25336
+### runner exit=0
