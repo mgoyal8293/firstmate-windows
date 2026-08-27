@@ -300,10 +300,20 @@ compare stays first and stays authoritative; where no `cygpath` exists the
 strict compare remains the only verdict, so this can widen a match and never
 silently accept an unresolvable one.
 
-It resolves the mount alias only.
-`fm_lock_same_path` calls `cygpath -m` without `-l`, so it cannot see through an 8.3 short component - the spelling GitHub's runners use for `%TEMP%` - and still compares a short spelling against a long one.
-The short-name expansion exists one layer down, in `fm_proc_cwd_prefixes` (`bin/fm-proc-lib.sh`), added for the `/proc` cwd read described in [`fm-test-windows-lane.md`](fm-test-windows-lane.md).
-The lock resolver has not been given it, and that gap is tracked as `winfm-portability-points-to-owner`.
+It resolves the mount alias and the 8.3 short name, because those are two aliasing layers and `cygpath -m` alone sees through only the first.
+`fm_lock_same_path` resolves with `cygpath -m -l`, the same way `fm_proc_cwd_prefixes` (`bin/fm-proc-lib.sh`) does for the `/proc` cwd read described in [`fm-test-windows-lane.md`](fm-test-windows-lane.md).
+Measured on Git-for-Windows MINGW64 against one directory reached by both spellings (identical inode):
+
+```
+$ cygpath -m    .../Temp/FMPROB~1/xdir  -> C:/Users/johns/AppData/Local/Temp/FMPROB~1/xdir
+$ cygpath -m    .../Temp/fmprobe-verylongname-1234/xdir  -> C:/Users/johns/AppData/Local/Temp/fmprobe-verylongname-1234/xdir
+$ cygpath -m -l (either spelling)       -> C:/Users/johns/AppData/Local/Temp/fmprobe-verylongname-1234/xdir
+```
+
+`%TEMP%` is where this bites, because Git for Windows mounts `/tmp` at whatever it names and GitHub's Windows runners spell it with a short component.
+`-l` expands a component only when the path resolves on disk and otherwise returns it unchanged, so an unresolvable pair is still compared as spelled - the refusing direction.
+
+`fm_platform_symlink_probe` (`bin/fm-proc-lib.sh`) is a remaining known instance of the same raw-string spelling compare, is not fixed here, and is tracked as its own separate follow-up, `winfm-symlink-probe-spelling`.
 
 ## Run end to end on Windows
 

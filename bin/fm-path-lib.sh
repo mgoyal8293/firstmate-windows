@@ -54,12 +54,24 @@ fi
 # runtime without cygpath the strict string compare above remains the only
 # verdict. This can therefore widen a match, never silently accept an
 # unresolvable one.
+#
+# `-l` is part of the resolution, not a refinement of it: the mount table is one
+# aliasing layer and NTFS 8.3 short names are a second, and `cygpath -m` alone
+# sees through only the first, so one inode reached by its short and long
+# spellings renders as two different Windows strings and the compare below says
+# "different location" about a path that is its own alias - the wedge this
+# helper exists to remove, straight back. `%TEMP%` is where it bites, because
+# Git for Windows mounts /tmp at whatever it names. `-l` expands a component
+# only when the path resolves on disk and otherwise returns it unchanged, so an
+# unresolvable pair is still compared as spelled - the refusing direction.
+# bin/fm-proc-lib.sh's fm_proc_cwd_prefixes resolves the same way, and
+# docs/windows.md carries the measurement.
 fm_lock_same_path() {
   local a=$1 b=$2 wa wb
   [ -n "$a" ] && [ -n "$b" ] || return 1
   command -v cygpath >/dev/null 2>&1 || return 1
-  wa=$(cygpath -m -- "$a" 2>/dev/null) || return 1
-  wb=$(cygpath -m -- "$b" 2>/dev/null) || return 1
+  wa=$(cygpath -m -l -- "$a" 2>/dev/null) || return 1
+  wb=$(cygpath -m -l -- "$b" 2>/dev/null) || return 1
   [ -n "$wa" ] && [ -n "$wb" ] || return 1
   [ "$wa" = "$wb" ]
 }

@@ -330,16 +330,11 @@ fm_proc_scan_available() {
 # uncertainty contract exists to prevent.
 #
 # `cygpath -m -l` is the resolver for the same reason bin/fm-path-lib.sh gives at
-# fm_lock_same_path - it owns the mount table, and `-l` additionally expands short
-# components - and converting the result back with `cygpath -u` yields the very
-# spelling /proc reports. Its presence is the capability probe, so a runtime
-# without cygpath keeps the caller's spelling as its only verdict.
-#
-# Read that citation narrowly: fm_lock_same_path is the precedent for resolving
-# through cygpath at all, NOT evidence that the short-name case is handled there.
-# It resolves with `cygpath -m` and no `-l`, so it cannot see through an 8.3
-# component and still compares a short spelling against a long one. That gap is
-# tracked as winfm-portability-points-to-owner and is deliberately not fixed here.
+# fm_lock_same_path, which resolves identically - it owns the mount table, and
+# `-l` additionally expands short components - and converting the result back
+# with `cygpath -u` yields the very spelling /proc reports.
+# Its presence is the capability probe, so a runtime without cygpath keeps the
+# caller's spelling as its only verdict.
 #
 # Resolved ONCE per scan rather than per pid, so the scan keeps costing a fixed
 # two forks instead of two per entry in the process table.

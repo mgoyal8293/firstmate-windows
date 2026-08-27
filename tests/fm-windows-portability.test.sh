@@ -589,6 +589,27 @@ with_path() {  # <path> <command>...
   return "$rc"
 }
 
+# The spelling a fixture is BUILT at is not necessarily the spelling this host
+# hands back, and a case about the strict compare has to be built at one that
+# round-trips or it silently becomes a case about the mount table instead.
+# Measured on Git-for-Windows MINGW64 with a fixture root under
+# /c/Users/<user>/AppData/Local/Temp/FMPROB~1: `ln -s` stored that Windows path,
+# the /tmp usertemp mount matched its prefix, and readlink answered
+# /tmp/FMPROB~1/... - a different string for the same directory. Converting the
+# root out to a Windows path and back is what MSYS itself does to produce that
+# answer, so it yields exactly the spelling readlink will use (also measured).
+# `-m` deliberately, without `-l`: the goal is the host's own rendering, not the
+# widest one. Off Windows there is no cygpath and the root is returned as given.
+mount_canonical_dir() {  # <dir>
+  local dir=$1 win posix
+  command -v cygpath >/dev/null 2>&1 || { printf '%s\n' "$dir"; return 0; }
+  win=$(cygpath -m -- "$dir" 2>/dev/null) || win=
+  [ -n "$win" ] || { printf '%s\n' "$dir"; return 0; }
+  posix=$(cygpath -u -- "$win" 2>/dev/null) || posix=
+  [ -n "$posix" ] || { printf '%s\n' "$dir"; return 0; }
+  printf '%s\n' "$posix"
+}
+
 # MSYS resolves a native symlink's stored Windows target back through its mount
 # table, so readlink can answer in a canonical POSIX spelling that is not the
 # one passed to `ln -s`. Measured on Git-for-Windows MINGW64: a directory
@@ -642,7 +663,51 @@ STUB
     /tmp/home/state/.wake.lock.owner.ZzZzZz || out=1
   [ "$out" = 1 ] \
     || fail "same-path: SECURITY - two genuinely different owner directories must never resolve the same"
-  pass "fm_lock_same_path: widens a mount-aliased spelling through cygpath and stays strict everywhere else"
+
+  # The mount table is not the only aliasing layer: NTFS gives a long directory
+  # an 8.3 SHORT name, and one location then has two Windows spellings as well
+  # as two POSIX ones. `cygpath -m` alone renders each spelling as given and
+  # reports one inode as two locations; only `-l` expands the short component.
+  # Measured on Git-for-Windows MINGW64 against a single directory reached both
+  # ways (identical inode): -m returned .../Temp/FMPROB~1/xdir versus
+  # .../Temp/fmprobe-verylongname-1234/xdir, -m -l returned the long form for
+  # both. %TEMP% is where this bites in the fleet, because Git for Windows
+  # mounts /tmp at whatever it names and GitHub's Windows runners spell it with
+  # a short component.
+  #
+  # This stub is the shape of that measurement rather than a restatement of the
+  # implementation: it expands the short component only when it is asked to, so
+  # a resolution that does not ask still sees two locations and this case fails.
+  mkdir -p "$dir/stub83"
+  cat > "$dir/stub83/cygpath" <<'STUB'
+#!/usr/bin/env bash
+# Stand-in for an 8.3 short name: SHORTDIR~1 and shortdir-with-a-long-name are
+# one directory, and only a caller passing -l is told so.
+expand=
+for a in "$@"; do [ "$a" = "-l" ] && expand=1; done
+p=${!#}
+[ -n "$expand" ] && p=${p//SHORTDIR~1/shortdir-with-a-long-name}
+printf 'C:%s\n' "$p"
+STUB
+  chmod +x "$dir/stub83/cygpath"
+  out=0
+  with_path "$dir/stub83:$PATH" \
+    fm_lock_same_path /c/temp/SHORTDIR~1/state/.wake.lock.owner.AbCdEf \
+    /c/temp/shortdir-with-a-long-name/state/.wake.lock.owner.AbCdEf || out=1
+  [ "$out" = 0 ] \
+    || fail "same-path: the short (8.3) and long spellings of one directory must resolve to the same location, or fm_lock_try_create never validates its own link and fm_lock_acquire_wait spins forever"
+  # The stub proves the case above is not vacuous: without -l these two really
+  # do render differently, which is exactly what a resolution missing -l sees.
+  [ "$(PATH="$dir/stub83:$PATH" cygpath -m -- /c/temp/SHORTDIR~1/x)" \
+    != "$(PATH="$dir/stub83:$PATH" cygpath -m -- /c/temp/shortdir-with-a-long-name/x)" ] \
+    || fail "same-path: fixture is vacuous - the stub must render the short and long spellings differently without -l"
+  out=0
+  with_path "$dir/stub83:$PATH" \
+    fm_lock_same_path /c/temp/SHORTDIR~1/state/.wake.lock.owner.AbCdEf \
+    /c/temp/shortdir-with-a-long-name/state/.wake.lock.owner.ZzZzZz || out=1
+  [ "$out" = 1 ] \
+    || fail "same-path: SECURITY - expanding a short component must not widen two genuinely different owner directories into one"
+  pass "fm_lock_same_path: widens a mount-aliased and an 8.3 short-name spelling through cygpath and stays strict everywhere else"
 }
 
 # The widening must live only in the fallback: an exact readlink answer is still
@@ -650,6 +715,11 @@ STUB
 test_lock_points_to_owner_still_accepts_an_exact_readlink_answer() {
   local dir
   dir=$(fm_test_tmproot fm-lock-points-to-owner) || fail "could not create a fixture dir"
+  # Built at the spelling this host round-trips, so the case exercises the
+  # strict compare rather than whether the fixture root happened to be spelled
+  # the way the mount table renders it back.
+  dir=$(mount_canonical_dir "$dir")
+  [ -d "$dir" ] || fail "fixture: the canonical spelling of the fixture root is not a directory: $dir"
   mkdir -p "$dir/owner" "$dir/nocyg"
   ln -s "$dir/owner" "$dir/lock" || fail "fixture: could not create the owner link"
   # A PATH carrying readlink and deliberately no cygpath, so the case holds on a
