@@ -313,6 +313,8 @@ $ cygpath -m -l (either spelling)       -> C:/Users/johns/AppData/Local/Temp/fmp
 `%TEMP%` is where this bites, because Git for Windows mounts `/tmp` at whatever it names and GitHub's Windows runners spell it with a short component.
 `-l` expands a component only when the path resolves on disk and otherwise returns it unchanged, so an unresolvable pair is still compared as spelled - the refusing direction.
 
+`fm_platform_symlink_probe` (`bin/fm-proc-lib.sh`) is a remaining known instance of the same raw-string spelling compare, is not fixed here, and is tracked as its own separate follow-up.
+
 ## Run end to end on Windows
 
 Everything above this section was proven one component at a time.
