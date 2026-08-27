@@ -391,6 +391,95 @@ test_lock_late_claim_loses_after_recreate() {
   pass "late original claimant cannot claim a recreated lock"
 }
 
+# The owner `pid` file is read back on every lock acquisition, and a concurrent
+# stale-lock steal DELETES it: fm_lock_release -> fm_lock_discard_owner, with
+# FM_LOCK_STALE_AFTER defaulting to 2s. So the read races the removal, and the
+# read is `$(<f)` guarded by `[ -r f ]` rather than by a redirection, because a
+# redirection on that substitution costs two forks and does not suppress the
+# error anyway. Lose the race and bash writes its own "No such file or directory"
+# to stderr - and bin/fm-session-start.sh harvests the wake-queue stage with
+# `2>&1`, so that raw shell error lands in the middle of the digest an operator
+# is being asked to act on.
+#
+# ASSERTED AS "NOT ONE BYTE OF STDERR" while the file is being deleted underneath
+# the reader. Note which way this case can fail: fm_lock_read_owner_pid suppresses
+# the spill unconditionally, so a green result here does not depend on winning or
+# losing any race - only a REGRESSION that puts the suppression back inside the
+# substitution, or drops it, can make it fail. It cannot flake green.
+#
+# THE CHURNER IS BOUNDED BY ELAPSED TIME, NOT BY AN ITERATION COUNT, and that is
+# a portability property rather than a tidy-up. `printf > file` is a builtin but
+# `rm -f` is not, so every churn cycle costs one process creation: a fixed 4000
+# cycles is 2.8 s here and, at the 42 ms a fork costs under MSYS - the platform
+# this suite's own library changes are for, and the one the captain runs daily -
+# about 168 s for this single case. The window being crossed is a property of the
+# loop, not of how long it runs, so the churn is bounded by wall clock instead -
+# at most one second, and less when `SECONDS` ticks early, since it is
+# whole-second granular - and the anti-vacuity assertions below are what say it
+# was enough. They are unchanged and still hard failures: the loop keeps running
+# past that slice only while an outcome has not been observed, so "reduce the
+# loop" cannot turn into "stop observing the window".
+#
+# The reduction was checked against the regression rather than assumed harmless:
+# with the group redirection removed from fm_lock_read_owner_pid, the shortened
+# loop still spilled 8.8-19.8 KB of bash's own "No such file or directory" to
+# stderr on five consecutive runs, so the case still fails the moment the
+# suppression does.
+test_lock_owner_pid_read_is_silent_while_the_file_is_being_deleted() {
+  local dir state ownerdir err out
+  dir=$(make_case lock-pid-read-race)
+  state="$dir/state"
+  ownerdir="$state/.contend.lock.owner"
+  err="$dir/reader.err"
+  mkdir -p "$ownerdir"
+  out=$(FM_STATE_OVERRIDE="$state" bash -c '
+    . "$1"
+    ownerdir=$2
+    stop="$ownerdir/../churn.stop"
+    # The churner recreates and removes the pid file as fast as it can, so the
+    # reader below crosses the window between its own [ -r ] and its read many
+    # times over. It stops when the reader has seen what it came for, so the
+    # process creations it spends are bounded by that and not by a fixed count.
+    ( i=0
+      while [ ! -e "$stop" ] && [ "$i" -lt 100000 ]; do
+        printf "%s\n" "$i" > "$ownerdir/pid" 2>/dev/null || true
+        rm -f "$ownerdir/pid" 2>/dev/null || true
+        i=$((i + 1))
+      done ) &
+    churner=$!
+    reads=0 hits=0 misses=0
+    SECONDS=0
+    # One second of racing, then as much longer as it takes to observe both
+    # outcomes, capped so a box that never produces one fails the assertions
+    # below rather than hanging.
+    while [ "$SECONDS" -lt 1 ] || [ "$hits" -eq 0 ] || [ "$misses" -eq 0 ]; do
+      kill -0 "$churner" 2>/dev/null || break
+      fm_lock_read_owner_pid "$ownerdir" || { printf "FAILED_RETURN\n"; break; }
+      reads=$((reads + 1))
+      if [ -n "$FM_LOCK_OWNER_PID" ]; then hits=$((hits + 1)); else misses=$((misses + 1)); fi
+      [ "$reads" -lt 400000 ] || break
+    done
+    : > "$stop"
+    wait "$churner" 2>/dev/null || true
+    printf "reads=%s hits=%s misses=%s\n" "$reads" "$hits" "$misses"
+  ' _ "$LIB" "$ownerdir" 2> "$err") || fail "reading a racing owner pid file must never fail the caller"
+
+  case "$out" in
+    *FAILED_RETURN*) fail "fm_lock_read_owner_pid returned non-zero on a racing read; every caller treats an unreadable pid file as 'not mine', not as an error" ;;
+  esac
+  [ -s "$err" ] \
+    && fail "reading the owner pid file while it is deleted underneath spilled to stderr, which bin/fm-session-start.sh merges into the digest with 2>&1: $(head -3 "$err")"
+  # Anti-vacuity: the reader must actually have observed BOTH outcomes, or it
+  # never approached the window this case exists to cover.
+  case "$out" in
+    *' hits=0 '*) fail "the reader never once read a present pid file, so nothing was raced: $out" ;;
+  esac
+  case "$out" in
+    *misses=0) fail "the reader never once found the pid file absent, so the deletion window was never crossed: $out" ;;
+  esac
+  pass "reading an owner pid file that is being deleted underneath stays silent and never fails the caller ($out)"
+}
+
 test_lock_paused_mid_acquire_claim_fails_during_steal() {
   local dir state lockdir out pid
   dir=$(make_case lock-paused-claim-steal)
@@ -1114,6 +1203,7 @@ test_lock_does_not_steal_live_lock
 test_lock_empty_pid_uses_minimum_grace
 test_lock_late_claim_loses_after_recreate
 test_lock_paused_mid_acquire_claim_fails_during_steal
+test_lock_owner_pid_read_is_silent_while_the_file_is_being_deleted
 test_watch_restart_rejects_reused_pid
 test_watch_restart_attaches_to_healthy_peer
 test_watcher_self_evicts_on_lock_takeover

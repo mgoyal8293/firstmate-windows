@@ -36,6 +36,20 @@
 # result inline or as a wake, for exactly that reason.
 set -u
 
+# This script is ONLY ever a hook entrypoint: every run-tier transport invokes it,
+# .cursor/hooks.json through bin/fm-sessionstart-cursor.sh which delegates here.
+# So it can positively assert hook context.
+export FM_SESSION_START_UNDER_HOOK=1
+
+# Whether a KILL DEADLINE binds is a different question from whether this is a
+# hook, and it is the one bin/fm-session-start-bound-lib.sh actually needs. This
+# script cannot answer it: the same entrypoint is reached from registrations that
+# declare a timeout and from .pi/extensions/fm-primary-turnend-guard.ts, which
+# spawns it with no deadline of any kind. So the transport declares, and this only
+# supplies the SAFE DEFAULT for one that did not - a caller's explicit `none` is
+# preserved, anything else is treated as bounded and clamped.
+export FM_SESSION_START_HOOK_DEADLINE="${FM_SESSION_START_HOOK_DEADLINE:-binds}"
+
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 FM_ROOT="${FM_ROOT_OVERRIDE:-$(cd "$SCRIPT_DIR/.." && pwd)}"
 FM_HOME="${FM_HOME:-${FM_ROOT_OVERRIDE:-$FM_ROOT}}"

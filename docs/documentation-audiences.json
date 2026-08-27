@@ -366,6 +366,10 @@
       "audience": "maintainer-verification"
     },
     {
+      "path": "docs/verification/session-start-fork-profile.md",
+      "audience": "maintainer-verification"
+    },
+    {
       "path": "docs/verification/stow-memory.md",
       "audience": "maintainer-verification"
     },

@@ -57,6 +57,87 @@ fake_msys_proc() {  # <root> <pid> <ppid> <pgid> <sid> <exename> <arg>...
 
 # --- 1. ps -o -> /proc -----------------------------------------------------
 
+# bin/fm-proc-lib.sh carries a source guard because it is re-sourced from inside
+# functions on poll paths - one session start sourced it 42 times, paying a
+# `uname` fork each time, which on MSYS is about 42 ms apiece.
+#
+# The guard's failure mode is SILENT and lands squarely on this file: keyed on a
+# bare "already loaded" flag it would skip the re-source that every case here
+# performs after setting FM_PLATFORM_UNAME_OVERRIDE, so every Windows arm above
+# would quietly go on testing the host platform and still report ok. So the seam
+# half below is the load-bearing assertion, not the skip half.
+#
+# "Did the prologue re-run?" is observed by clobbering the value the prologue
+# assigns and seeing whether a re-source restores it. That needs no fork counter
+# and no platform.
+test_proc_lib_source_guard_skips_repeats_without_blinding_the_platform_seam() {
+  local out cleared
+  # SC2218 is a false positive on exactly this probe's shape. ShellCheck inlines
+  # `# shellcheck source=` targets and, for a file sourced SEVERAL times in one
+  # flow, attributes the functions to the LAST source it sees - which here is
+  # after the two uses below, so it reports them as used before their definition.
+  # They are not: the first source at the top of this subshell defines them, and
+  # every later source redefines them identically. The repeat sources are the
+  # subject of this case and cannot be reordered away.
+  # shellcheck disable=SC2218
+  out=$(
+    cd "$ROOT" || exit 1
+    . bin/fm-proc-lib.sh
+    # A repeat source with an UNCHANGED seam must be skipped: the sentinel
+    # survives only if the prologue did not run again.
+    FM_PROC_UNAME_S=SENTINEL
+    . bin/fm-proc-lib.sh
+    printf 'unchanged=%s\n' "$FM_PROC_UNAME_S"
+    # A CHANGED seam must re-resolve, or every Windows arm in this file is vacuous.
+    FM_PLATFORM_UNAME_OVERRIDE=MINGW64_NT-10.0
+    . bin/fm-proc-lib.sh
+    printf 'seam_set=%s windows=%s\n' "$FM_PROC_UNAME_S" \
+      "$(fm_platform_is_windows && printf yes || printf no)"
+    # Changing it again must be honoured too, not just the first transition.
+    FM_PLATFORM_UNAME_OVERRIDE=Linux
+    . bin/fm-proc-lib.sh
+    printf 'seam_changed=%s windows=%s\n' "$FM_PROC_UNAME_S" \
+      "$(fm_platform_is_windows && printf yes || printf no)"
+    # Clearing it must return to the real host value rather than sticking.
+    # The value cleared FROM is an override no host ever reports, so "did it
+    # stick?" is answerable on every platform: a literal MINGW prefix would be
+    # unfalsifiable on Linux, where the host value could never look stuck, and
+    # would FAIL on a real Git Bash host, whose true uname IS MINGW64_NT-*.
+    FM_PLATFORM_UNAME_OVERRIDE=MINGW64_NT-0.0-fmtest-override
+    . bin/fm-proc-lib.sh
+    unset FM_PLATFORM_UNAME_OVERRIDE
+    . bin/fm-proc-lib.sh
+    printf 'seam_cleared=%s\n' "$FM_PROC_UNAME_S"
+    # The subshell's LAST command is what `out=$(...)` reports, so without this
+    # an earlier `. bin/fm-proc-lib.sh` that died left the `|| fail` below silent
+    # and the extraction working on a truncated blob.
+    printf 'probe_complete\n'
+  ) || fail "sourcing bin/fm-proc-lib.sh repeatedly must not fail"
+  assert_contains "$out" 'probe_complete' \
+    'the probe subshell must reach its end: without this a source that died midway is invisible, because only the last command status reaches the assignment'
+
+  assert_contains "$out" 'unchanged=SENTINEL' \
+    'a repeat source with an unchanged seam must be skipped, not re-run'
+  assert_contains "$out" 'seam_set=MINGW64_NT-10.0 windows=yes' \
+    'setting FM_PLATFORM_UNAME_OVERRIDE must re-resolve the platform, or every Windows arm here is vacuous'
+  assert_contains "$out" 'seam_changed=Linux windows=no' \
+    'changing the seam again must re-resolve, not just the first transition'
+  # PRESENCE BEFORE EXTRACTION. `${out##*seam_cleared=}` returns $out UNCHANGED
+  # when the marker never appears, so both checks below would pass on the whole
+  # captured blob - non-empty, and not equal to the override literal. That is the
+  # strongest half of this case going vacuous exactly when the thing it measures
+  # never ran.
+  assert_contains "$out" 'seam_cleared=' \
+    'the probe must have printed the cleared-seam marker at all, or the two checks below are extracting from a blob that never contained it'
+  cleared=${out##*seam_cleared=}
+  cleared=${cleared%%$'\n'*}
+  [ -n "$cleared" ] \
+    || fail 'clearing the seam must leave a resolved host platform, not an empty one'
+  [ "$cleared" != 'MINGW64_NT-0.0-fmtest-override' ] \
+    || fail "clearing the seam must re-resolve to the host value, not stick on the override ($cleared)"
+  pass "fm-proc-lib.sh: the source guard skips repeat sources without blinding FM_PLATFORM_UNAME_OVERRIDE"
+}
+
 test_proc_field_reads_msys_layout() {
   local root out
   root=$(fm_test_tmproot fm-proc) || fail "proc-field: could not create a fixture root"
@@ -787,6 +868,7 @@ STUB
   pass "fm_path_gotmpdir_export_line: translates and quotes on Windows, and falls back to the POSIX literal rather than an empty export when the caller has no quoter"
 }
 
+test_proc_lib_source_guard_skips_repeats_without_blinding_the_platform_seam
 test_proc_field_reads_msys_layout
 test_proc_field_falls_back_to_ps_where_proc_is_absent
 test_proc_field_rejects_bad_input

@@ -1,7 +1,12 @@
 #!/usr/bin/env bash
 # Shared durable wake queue and portable lock helpers.
 
-FM_WAKE_LIB_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# `${BASH_SOURCE[0]%/*}` rather than `$(dirname ...)`: this prologue runs on
+# every source of this file, and a session start sources it thirteen times.
+# bin/fm-path-lib.sh uses the same form for the same reason.
+FM_WAKE_LIB_DIR=${BASH_SOURCE[0]%/*}
+[ "$FM_WAKE_LIB_DIR" = "${BASH_SOURCE[0]}" ] && FM_WAKE_LIB_DIR=.
+FM_WAKE_LIB_DIR="$(cd "$FM_WAKE_LIB_DIR" && pwd)"
 # Sourced FIRST: fm_lock_try_create below builds every lock in the fleet with a
 # bare `ln -s`, and on default Git for Windows that resolves to a recursive COPY
 # which readlink can never validate, so every lock spins forever behind
@@ -13,7 +18,10 @@ FM_WAKE_LIB_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 . "$FM_WAKE_LIB_DIR/fm-proc-lib.sh"
 # shellcheck source=bin/fm-path-lib.sh
 . "$FM_WAKE_LIB_DIR/fm-path-lib.sh"
-FM_WAKE_DEFAULT_ROOT="$(cd "$FM_WAKE_LIB_DIR/.." && pwd)"
+# FM_WAKE_LIB_DIR is already absolute and normalised by the `pwd` above, so its
+# parent is a string operation rather than another subshell.
+FM_WAKE_DEFAULT_ROOT=${FM_WAKE_LIB_DIR%/*}
+[ -n "$FM_WAKE_DEFAULT_ROOT" ] || FM_WAKE_DEFAULT_ROOT=/
 FM_ROOT="${FM_ROOT_OVERRIDE:-${FM_ROOT:-$FM_WAKE_DEFAULT_ROOT}}"
 FM_HOME="${FM_HOME:-${FM_ROOT_OVERRIDE:-$FM_ROOT}}"
 STATE="${FM_STATE_OVERRIDE:-${STATE:-$FM_HOME/state}}"
@@ -23,8 +31,13 @@ FM_LOCK_STALE_AFTER="${FM_LOCK_STALE_AFTER:-2}"
 # Resolved once at source time: fm_path_mtime runs inside 0.2s confirm and 0.5s
 # attach polls, and forking uname per call is a measurable cost on the platform
 # (Git Bash/MSYS) that already pays the highest fork price.
-_FM_UNAME=$(uname 2>/dev/null || echo unknown)
-mkdir -p "$STATE"
+# bin/fm-proc-lib.sh, sourced above, already read this. FM_PROC_HOST_UNAME_S is
+# the REAL host value that deliberately ignores the platform test seam, which is
+# what this variable held before, so the Darwin arms below are unchanged.
+_FM_UNAME=${FM_PROC_HOST_UNAME_S:-unknown}
+# Tested first because this runs on every source, and after the first one the
+# directory always exists.
+[ -d "$STATE" ] || mkdir -p "$STATE"
 
 fm_current_pid() {
   printf '%s\n' "${BASHPID:-$$}"
@@ -89,7 +102,8 @@ fm_watcher_healthy() {
   FM_WATCHER_HEALTHY_IDENTITY=
   lockdir="$state/.watch.lock"
   beat="$state/.last-watcher-beat"
-  pid=$(cat "$lockdir/pid" 2>/dev/null || true)
+  fm_lock_read_owner_pid "$lockdir"
+  pid=$FM_LOCK_OWNER_PID
   fm_pid_alive "$pid" || return 1
   fm_watcher_lock_matches_pid "$state" "$watch_path" "$pid" "$home" || return 1
   identity=$FM_WATCHER_MATCHED_IDENTITY
@@ -271,14 +285,14 @@ fm_lock_clean_known_files() {
 }
 
 fm_lock_set_role() {
-  local lockdir=$1 role=$2 current pid back
+  local lockdir=$1 role=$2 current back
   case "$role" in
     autoarm|terminal-check) : ;;
     *) return 1 ;;
   esac
   current=${BASHPID:-$$}
-  pid=$(cat "$lockdir/pid" 2>/dev/null || true)
-  [ "$pid" = "$current" ] || return 1
+  fm_lock_read_owner_pid "$lockdir"
+  [ "$FM_LOCK_OWNER_PID" = "$current" ] || return 1
   printf '%s\n' "$role" > "$lockdir/role" 2>/dev/null || return 1
   back=$(cat "$lockdir/role" 2>/dev/null || true)
   [ "$back" = "$role" ]
@@ -290,8 +304,14 @@ fm_lock_role() {
 
 fm_lock_abs_path() {
   local path=$1 dir base
-  dir=$(dirname "$path")
-  base=$(basename "$path")
+  # Every lock acquisition calls this, and a session start acquires fourteen, so
+  # the two exec'd helpers here were paid twenty-eight times. The `cd`+`pwd -P`
+  # subshell stays: it is what resolves symlinked parents, which no string
+  # operation can do.
+  dir=${path%/*}
+  [ "$dir" = "$path" ] && dir=.
+  [ -n "$dir" ] || dir=/
+  base=${path##*/}
   dir=$(cd "$dir" 2>/dev/null && pwd -P) || return 1
   printf '%s/%s\n' "$dir" "$base"
 }
@@ -302,12 +322,53 @@ fm_lock_owner_dir() {
   mktemp -d "${lock_abs}.owner.XXXXXX" 2>/dev/null
 }
 
+# Reads a lock or owner directory's `pid` file into FM_LOCK_OWNER_PID, empty when
+# it cannot be read. Always succeeds, because every caller below treats an
+# unreadable pid file as "not mine" rather than as an error - which is exactly
+# what the `$(cat "$d/pid" 2>/dev/null || true)` form it replaces meant.
+#
+# `$(<f)` rather than `$(cat f)`: bash reads the file itself for that form with
+# no subprocess at all. Every lock acquisition reads this file back and a session
+# start acquires fourteen locks, so the `cat` here was paid twenty-eight times.
+# The contended path costs more again: fm_lock_acquire_wait re-enters
+# fm_lock_try_acquire every 100 ms until the lock frees, and every one of those
+# iterations read the pid file at least once, at the 42 ms a fork costs under
+# MSYS. That path is not in the measured steady-state profile, which had no
+# contention, so it was never ranked there.
+#
+# THE TWO REDIRECTIONS ARE BOTH DELIBERATE AND NEITHER IS INTERCHANGEABLE.
+# `$(<f 2>/dev/null)` is not the same thing: the redirection defeats bash's
+# special case, so it costs two forks per call, and it does not suppress the
+# error anyway (measured - see docs/verification/session-start-fork-profile.md).
+# So the readable case is decided by `[ -r ]`, a builtin. But `[ -r f ]` and the
+# read are two steps, and the file between them is one ANOTHER PROCESS deletes:
+# a stale-lock steal calls fm_lock_remove_path on the victim's lock, which
+# resolves the symlink to the victim's owner directory and hands it to
+# fm_lock_discard_owner -> fm_lock_clean_known_files, and that `rm -f` names
+# `pid` first. FM_LOCK_STALE_AFTER defaults to 2 s, so the window is real and not
+# theoretical, and the victim can be inside its own fm_lock_release reading the
+# very file being removed.
+# Lose that race and bash writes its own "No such file or directory" to stderr,
+# which bin/fm-session-start.sh harvests with `2>&1` - landing a raw shell error
+# in the middle of the digest. The `2>/dev/null` therefore sits on the enclosing
+# GROUP, where it is a plain fd save and restore rather than a subshell, so the
+# spill is suppressed and the zero-fork property is kept. This is one function
+# rather than three copies precisely because getting that placement wrong is
+# invisible until the race is lost.
+FM_LOCK_OWNER_PID=
+fm_lock_read_owner_pid() {  # <owner-dir>
+  FM_LOCK_OWNER_PID=
+  [ -r "$1/pid" ] || return 0
+  { FM_LOCK_OWNER_PID=$(<"$1/pid"); } 2>/dev/null || FM_LOCK_OWNER_PID=
+  return 0
+}
+
 fm_lock_prepare_owner() {
-  local ownerdir=$1 mypid back
+  local ownerdir=$1 mypid
   mypid=${BASHPID:-$$}
-  printf '%s\n' "$mypid" > "$ownerdir/pid" 2>/dev/null || return 1
-  back=$(cat "$ownerdir/pid" 2>/dev/null || true)
-  [ "$back" = "$mypid" ]
+  { printf '%s\n' "$mypid" > "$ownerdir/pid"; } 2>/dev/null || return 1
+  fm_lock_read_owner_pid "$ownerdir"
+  [ "$FM_LOCK_OWNER_PID" = "$mypid" ]
 }
 
 fm_lock_link_owner() {
@@ -356,8 +417,10 @@ fm_lock_remove_symlink_copy() {
   fm_platform_is_windows || return 0
   [ -d "$lockdir" ] && [ ! -L "$lockdir" ] || return 0
   mypid=${BASHPID:-$$}
-  [ "$(cat "$lockdir/pid" 2>/dev/null || true)" = "$mypid" ] || return 0
-  [ "$(cat "$ownerdir/pid" 2>/dev/null || true)" = "$mypid" ] || return 0
+  fm_lock_read_owner_pid "$lockdir"
+  [ "$FM_LOCK_OWNER_PID" = "$mypid" ] || return 0
+  fm_lock_read_owner_pid "$ownerdir"
+  [ "$FM_LOCK_OWNER_PID" = "$mypid" ] || return 0
   rm -rf -- "$lockdir" 2>/dev/null || true
 }
 
@@ -372,14 +435,14 @@ fm_lock_claim_blocked_by_steal() {
 }
 
 fm_lock_claim() {
-  local lockdir=$1 ownerdir=$2 allowed_steal_owner=${3:-} mypid back
+  local lockdir=$1 ownerdir=$2 allowed_steal_owner=${3:-} mypid
   mypid=${BASHPID:-$$}
   if ! { printf '%s\n' "$mypid" > "$ownerdir/pid"; } 2>/dev/null; then
     fm_lock_discard_owner "$ownerdir"
     return 1
   fi
-  back=$(cat "$ownerdir/pid" 2>/dev/null || true)
-  if [ "$back" != "$mypid" ]; then
+  fm_lock_read_owner_pid "$ownerdir"
+  if [ "$FM_LOCK_OWNER_PID" != "$mypid" ]; then
     fm_lock_discard_owner "$ownerdir"
     return 1
   fi
@@ -456,7 +519,8 @@ fm_lock_recheck_stale_owner() {
   elif [ -e "$lockdir" ] || [ -L "$lockdir" ]; then
     [ -d "$lockdir" ] && [ ! -L "$lockdir" ] || return 1
   fi
-  actual_pid=$(cat "$lockdir/pid" 2>/dev/null || true)
+  fm_lock_read_owner_pid "$lockdir"
+  actual_pid=$FM_LOCK_OWNER_PID
   [ "$actual_pid" = "$expected_pid" ] || return 1
   if fm_pid_alive "$actual_pid"; then
     return 1
@@ -729,7 +793,8 @@ fm_lock_try_acquire() {
 
   # Compare against ${BASHPID:-$$} inline, never via a command substitution:
   # $() forks a subshell whose BASHPID is not this frame's pid.
-  pid=$(cat "$lockdir/pid" 2>/dev/null || true)
+  fm_lock_read_owner_pid "$lockdir"
+  pid=$FM_LOCK_OWNER_PID
   if [ -n "$pid" ] && [ "$pid" = "${BASHPID:-$$}" ]; then
     # The recorded holder is THIS very process. Single-threaded bash can only
     # observe that when an interrupting trap abandoned the frame that held the
@@ -743,7 +808,8 @@ fm_lock_try_acquire() {
     if fm_lock_try_create "$lockdir"; then
       return 0
     fi
-    FM_LOCK_HELD_PID=$(cat "$lockdir/pid" 2>/dev/null || true)
+    fm_lock_read_owner_pid "$lockdir"
+    FM_LOCK_HELD_PID=$FM_LOCK_OWNER_PID
     return 1
   fi
   if fm_pid_alive "$pid"; then
@@ -757,13 +823,15 @@ fm_lock_try_acquire() {
 
   steal="$lockdir.steal"
   if ! fm_lock_try_acquire "$steal"; then
-    FM_LOCK_HELD_PID=$(cat "$lockdir/pid" 2>/dev/null || true)
+    fm_lock_read_owner_pid "$lockdir"
+    FM_LOCK_HELD_PID=$FM_LOCK_OWNER_PID
     FM_LOCK_OWNER_DIR=
     return 1
   fi
   steal_owner=${FM_LOCK_OWNER_DIR:-}
 
-  cur=$(cat "$lockdir/pid" 2>/dev/null || true)
+  fm_lock_read_owner_pid "$lockdir"
+  cur=$FM_LOCK_OWNER_PID
   if fm_pid_alive "$cur"; then
     fm_lock_release "$steal"
     FM_LOCK_HELD_PID=$cur
@@ -778,7 +846,8 @@ fm_lock_try_acquire() {
   fi
   if ! fm_lock_points_to_owner "$steal" "$steal_owner"; then
     fm_lock_release "$steal"
-    FM_LOCK_HELD_PID=$(cat "$lockdir/pid" 2>/dev/null || true)
+    fm_lock_read_owner_pid "$lockdir"
+    FM_LOCK_HELD_PID=$FM_LOCK_OWNER_PID
     FM_LOCK_OWNER_DIR=
     return 1
   fi
@@ -787,10 +856,12 @@ fm_lock_try_acquire() {
   if [ -L "$lockdir" ]; then
     primary_owner=$(fm_lock_link_owner "$lockdir" 2>/dev/null || true)
   fi
-  cur=$(cat "$lockdir/pid" 2>/dev/null || true)
+  fm_lock_read_owner_pid "$lockdir"
+  cur=$FM_LOCK_OWNER_PID
   if ! fm_lock_recheck_stale_owner "$lockdir" "$primary_owner" "$cur"; then
     fm_lock_release "$steal"
-    FM_LOCK_HELD_PID=$(cat "$lockdir/pid" 2>/dev/null || true)
+    fm_lock_read_owner_pid "$lockdir"
+    FM_LOCK_HELD_PID=$FM_LOCK_OWNER_PID
     FM_LOCK_OWNER_DIR=
     return 1
   fi
@@ -810,8 +881,9 @@ fm_lock_try_acquire() {
     FM_LOCK_RECOVERED_PID=$cur
   fi
   if [ "$rc" -ne 0 ]; then
+    fm_lock_read_owner_pid "$lockdir"
     # shellcheck disable=SC2034 # Read by callers after fm_lock_try_acquire returns.
-    FM_LOCK_HELD_PID=$(cat "$lockdir/pid" 2>/dev/null || true)
+    FM_LOCK_HELD_PID=$FM_LOCK_OWNER_PID
     FM_LOCK_OWNER_DIR=
   fi
   fm_lock_release "$steal"
@@ -826,20 +898,20 @@ fm_lock_acquire_wait() {
 }
 
 fm_lock_release() {
-  local lockdir=$1 pid current ownerdir
+  local lockdir=$1 current ownerdir
   current=${BASHPID:-$$}
   if [ -L "$lockdir" ]; then
     ownerdir=$(fm_lock_link_owner "$lockdir" 2>/dev/null || true)
     [ -n "$ownerdir" ] || return 0
-    pid=$(cat "$ownerdir/pid" 2>/dev/null || true)
-    [ "$pid" = "$current" ] || return 0
+    fm_lock_read_owner_pid "$ownerdir"
+    [ "$FM_LOCK_OWNER_PID" = "$current" ] || return 0
     fm_lock_points_to_owner "$lockdir" "$ownerdir" || return 0
     rm -f "$lockdir" 2>/dev/null || return 0
     fm_lock_discard_owner "$ownerdir"
     return 0
   fi
-  pid=$(cat "$lockdir/pid" 2>/dev/null || true)
-  [ "$pid" = "$current" ] || return 0
+  fm_lock_read_owner_pid "$lockdir"
+  [ "$FM_LOCK_OWNER_PID" = "$current" ] || return 0
   fm_lock_clean_known_files "$lockdir"
   rmdir "$lockdir" 2>/dev/null || true
 }
@@ -881,7 +953,7 @@ fm_task_set_lock_path() {  # <state-dir>
 }
 
 fm_failure_episode_reset() {
-  local state=$1 mode=${2:-acquire} lock current pid acquired=0 path
+  local state=$1 mode=${2:-acquire} lock current acquired=0 path
   lock="$state/.turnend-claude-blocks.lock"
   case "$mode" in
     acquire)
@@ -890,8 +962,8 @@ fm_failure_episode_reset() {
       ;;
     held)
       current=${BASHPID:-$$}
-      pid=$(cat "$lock/pid" 2>/dev/null || true)
-      [ "$pid" = "$current" ] || return 1
+      fm_lock_read_owner_pid "$lock"
+      [ "$FM_LOCK_OWNER_PID" = "$current" ] || return 1
       ;;
     *) return 1 ;;
   esac

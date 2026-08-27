@@ -48,6 +48,80 @@ One narrower variant remains outside that owner, `task_process_identity` in `bin
 Prefer capability detection over a platform name wherever the question is really "does this work here?" - `/proc` presence, chmod round-trip, symlink creation.
 Reserve the `uname -s` arms for behaviour that is genuinely platform-specific.
 
+## The session-start runtime bound is raised here, because a truncated startup is not supervising
+
+`bin/fm-session-start.sh` runs its whole digest as one bounded child.
+When that bound is hit the digest truncates, and the stages it loses are the wake-queue drain, the supervision operating instructions and the whole context digest - so a truncated startup is a session that looks started and is not steering, which is a supervision failure rather than a slow banner.
+
+A subprocess costs about 1 ms on Linux and about 42 ms under MSYS, so the identical digest that finishes in seconds here takes over a minute there, and one portable bound cannot be right for both.
+On a Windows 11 box under Git Bash, on a home with no tasks, no projects and an absent backlog - the floor, with nothing to reconcile and nothing to sync - the digest took 72 s and 76 s, already 60% of the old 120 s bound before any real work exists in the home.
+One run of that same empty home with a test lane competing for CPU took 123 s and truncated; because it truncated, 123 s is a lower bound on what that run needed rather than what it would have taken.
+
+So the default bound is now per platform: 120 s as before, and 300 s under MSYS, MINGW and Cygwin.
+[`../bin/fm-session-start-bound-lib.sh`](../bin/fm-session-start-bound-lib.sh) is the one owner of that resolution and records the reasoning behind the number.
+
+**Where 300 s comes from: it is pinned between two bounds measured on the box, not picked for roundness.**
+Bounded ABOVE at 328 s by the harness ceiling derived on that box - the 360 s shortest registered session-start timeout minus the 32 s nesting margin below.
+Past 328 s the clamp starts biting an ordinary default run and the margin that keeps the truncation banner alive is what gets spent, so that is a hard limit on how far the bound can go without giving up the property the raise exists to protect.
+Bounded BELOW at 123 s by the worst run actually observed - the empty home that truncated - which 300 s clears by 2.4x; and because that run truncated, the true multiple is smaller than 2.4x by an unmeasured amount.
+
+**What 300 s is still not justified by, since an earlier version of this page implied otherwise.**
+The observations above are the whole case for raising the bound, and they do not establish that 300 s is ENOUGH: this branch has since measured a load factor of about 5x on the parent side alone - 2.06 s idle, 10.3 s mean at 8 fork-heavy competitors, 24.1 s mean at 16 - and a 5x factor does not fit inside the 3.9x headroom 300 s has over the 76 s idle floor.
+There is no clean full-startup-to-completion timing under contention on the current tree, and a populated home does strictly more work than the empty one every number above came from.
+So the headroom of 300 s against a contended, populated home is an open question, not a measured result.
+What protects that case is the truncation path rather than the bound: the bound bites, the banner prints, and the stage that did not finish is named - and the nesting margin below is what keeps that banner from being lost.
+An explicit `FM_SESSION_START_TIMEOUT` still wins on every platform, including a value below the raised default; an unusable one falls back to the platform default rather than to a portable constant, because a zero bound disables the deadline outright.
+Unusable means NUMERICALLY zero, not the character `0`: `timeout 00 sleep 2` exits 0 after the full two seconds rather than 124, so a zero-padded bound leaves the digest with no deadline at all and a wedged startup never truncates and never prints a banner - the same silent non-supervision the bound exists to remove.
+**That fallback is not silent.** The digest names the rejected value and the platform default that replaced it, because an operator who set `FM_SESSION_START_TIMEOUT=0` and was told nothing reads a later truncation as their bound having been too small rather than as never having applied, and spends their next move raising a value that was never in force.
+An absent variable prints nothing, since that is the ordinary case rather than a discard.
+The one thing it does not win against is the harness: a value above the shortest registered session-start hook timeout is CLAMPED just under it, and the digest says so by name, because above that line the harness kills the hook outright and prints none of the banner - which is what the truncation banner's own "raise `FM_SESSION_START_TIMEOUT`" advice used to invite.
+The ceiling is read from the registrations rather than written down, so raising the hook timeouts raises it too and the operator's larger value is then honoured.
+The clamp is SCOPED to the runs a kill deadline actually binds, which is not the same question as "is this a hook": it applies when a deadline is positively established, and also when it cannot be established either way, and is skipped only where in-repo evidence positively proves none binds - a direct terminal invocation, or a transport that declares it armed no deadline.
+That distinction is a correction rather than a nicety.
+The Pi run tier spawns the same wrapper with no timeout, no AbortSignal and no kill, truncating on bytes rather than on a clock, so under the older "is this a hook" reading a Pi session was clamped by a ceiling derived entirely from the Claude, Codex and Cursor registrations - harnesses that were not running - and told a kill second that does not exist there.
+Each transport now declares its own deadline status at its own spawn site, and a transport that declares none is never pointed at another harness's registrations.
+So the clamp refuses time the machine will not give, or time this process cannot establish that the machine will give; it is not a global cap.
+Uncertainty falls to the clamp on purpose: a wrong "a deadline binds" costs bound the operator can recover, while a wrong "nothing kills me" costs the whole banner, so the two errors are not interchangeable and the unprovable negative never drives the unsafe branch.
+The same asymmetry decides what happens when no registration can be READ at all - a bin-only deployment, or a box without `awk`: the bound falls back to the platform default rather than being honoured in full, since a bound above a hook timeout this shell cannot see is killed exactly as silently as one above a timeout it can.
+The banner then says so instead of quoting a harness deadline nobody read.
+The gap between the bound and the shortest registration is per platform too, and it is what pays for the parent's own time: the harness kills the PARENT, which creates processes both before it forks the bounded child and again while printing the banner after the kill, none of which the bound covers.
+The path that has to be covered is the CLAMPED one, since the default 300 s bound never reaches the ceiling and only a clamped bound ever equals it.
+That count is not written down here or anywhere else: [`../tests/fm-session-start-hook-nesting.test.sh`](../tests/fm-session-start-hook-nesting.test.sh) derives it at test time with the interposer in [`../tests/fixtures/forkcount.c`](../tests/fixtures/forkcount.c) and fails when it rises, so the live number is whatever that guard reports.
+The margin there is 32 s against 1 s elsewhere, derived from the worst directly measured non-thrashing parent side on the box: 31.20 s at 16 fork-heavy competitors on 22 cores, across a 9-sample sweep whose truncation banner was verified present on every sample.
+**That conservatism is free.** The derived ceiling is 360 - 32 = 328 s, and the Windows default budget is 300 s - still below it - so default behaviour is completely unchanged, and the clamp only ever bites an operator who has explicitly raised `FM_SESSION_START_TIMEOUT` above 328 s.
+[`verification/session-start-fork-profile.md`](verification/session-start-fork-profile.md) records the dataset, the 24-competitor thrashing point excluded from the derivation and why, the earlier figures it supersedes - including a 13.1 s idle reading inflated by uncontrolled box load - and which facts are Windows-measured and which are not yet.
+The same page records the bound the digest resolves being handed to the deferred network stage rather than re-resolved there, so the window that stage keeps offering inline delivery for cannot fall behind the digest it reports to.
+`bin/fm-startup-network.sh` resolves its inline-delivery window through that same owner, so the worker keeps offering its result for exactly as long as the digest it reports to might still be running.
+Raising this bound also raised every registered run-tier hook timeout to sit strictly above it, because a harness that kills the hook first takes the parent with the child and there is no truncation banner at all - which is worse than truncating, and is asserted by [`../tests/fm-session-start-hook-nesting.test.sh`](../tests/fm-session-start-hook-nesting.test.sh) against a ceiling derived from the platform arms rather than a quoted number.
+
+Raising a bound does not make the subprocess count that forced it acceptable, so the truncation banner now attributes its own time.
+It already named the stage it died in and every stage it never reached; it also asked the operator to "report the slow stage" while nothing measured a stage.
+Each stage now records its entry instant, and the banner prints per-stage elapsed times with the unfinished stage marked, so the question the banner asks is answerable from the banner itself.
+Those marks are shell builtins reading `EPOCHREALTIME` and spawn nothing: the path being measured is one whose cost *is* its subprocess count, so an instrument that forked per stage would inflate the number it exists to report.
+The script's own setup is now a named stage too, because it was outside every stage before and a truncation inside it could only report `unknown` and list no lost stages; on Windows that window is 9.9 s against 312 ms on Linux, which is the first thing the attribution turned up.
+`tests/fm-session-start-bound.test.sh` drives the Windows arm from a POSIX runner through `FM_PLATFORM_UNAME_OVERRIDE`, the same seam `bin/fm-proc-lib.sh` uses, which is the only way that arm is covered by CI at all.
+
+## Subprocess count is the Windows cost, so the session-start path spawns fewer
+
+Raising the bound bought margin; it did not make the work cheaper.
+A session start on an empty home - no tasks, no projects, an absent backlog - created 1012 subprocesses on the blocking path, which at the 42 ms a fork costs under MSYS is most of that 72 s floor.
+[`verification/session-start-fork-profile.md`](verification/session-start-fork-profile.md) records the method, the ranked profile and the before/after counts; the reductions bring that to 817, 195 fewer and a 19.3% cut against the 1012 above, with 127 more removed from the concurrent network stage that shares the same libraries.
+The profile quotes the same reductions as 199 forks and 19.6% because it measures them against the 1016 the bound change itself cost, not against `main`'s 1012; both figures are exact and they are not the same baseline.
+A later re-measurement on the same box read 976 and 789 for the same two trees - 19.2%, so the ratio reproduces while the absolute floor did not; the profile keeps both readings and explains why the ratio is the durable one.
+The lock pid reads on the CONTENDED path are outside every one of those counts, because an uncontended home never reaches them: measured on its own, a waiter polling a held lock pays two forks per 100 ms iteration less than it did, and the uncontended figure is unchanged.
+
+The profile's own finding is that there was no single hot loop.
+The dominant cost was **libraries re-sourced from inside functions on poll paths**, each re-running its prologue: 158 library source events per session start, with `bin/fm-proc-lib.sh` alone sourced 42 times and paying its `uname` every time.
+That file now carries a source guard keyed on `FM_PLATFORM_UNAME_OVERRIDE` rather than on a bare "already loaded" flag, because everything at its top level is idempotent but the platform seam must still re-resolve - a guard that skipped a seam change would silently make every Windows arm in `../tests/fm-windows-portability.test.sh` test the host platform instead and still report ok.
+The remaining reductions replace exec'd helpers with the parameter expansions that answer the same question - `${p%/*}` and `${p##*/}` for `dirname` and `basename`, `[ -r f ] && x=$(<f)` for `$(cat f)` - which is the form [`../bin/fm-path-lib.sh`](../bin/fm-path-lib.sh) already used and documented for this exact reason.
+
+Two counted facts shape how those are written, because both are easy to get backwards.
+A command substitution forks even around a shell builtin, so `$(...)` is never free and wrapping a helper in one gives the fork back.
+And `$(<f)` is free only without a redirection attached: `$(<f 2>/dev/null)` costs two forks per call rather than zero, because the redirection defeats bash's special case, and it does not even suppress the error - so an unreadable file is handled by testing `[ -r f ]` first.
+
+This is a Windows-motivated fix to portable code, so the count is measured on Linux and the platform only changes what a fork costs.
+A Linux timing run would show nothing.
+
 ## Security note: the private-file mode assertion
 
 `fm_pr_private_file_valid` normally asserts an artifact's exact mode, so a

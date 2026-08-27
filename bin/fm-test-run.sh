@@ -202,7 +202,10 @@ family_for_basename() {
       printf '%s\n' secondmate
       ;;
     fm-bootstrap.test.sh|fm-fleet-sync.test.sh|fm-gate-refuse.test.sh|fm-gotmp.test.sh|\
-    fm-session-start.test.sh|fm-sessionstart-nudge.test.sh|fm-startup-network.test.sh|\
+    fm-pi-sessionstart-deadline.test.sh|\
+    fm-session-start.test.sh|fm-session-start-bound.test.sh|\
+    fm-session-start-hook-nesting.test.sh|\
+    fm-sessionstart-nudge.test.sh|fm-startup-network.test.sh|\
     fm-tangle-guard.test.sh|fm-update.test.sh)
       printf '%s\n' session-bootstrap
       ;;
@@ -478,6 +481,7 @@ tests/fm-opencode-primary-live-e2e.test.sh 24
 tests/fm-operational-input.test.sh 215
 tests/fm-pending-reply.test.sh 18724
 tests/fm-pi-primary-live-e2e.test.sh 20
+tests/fm-pi-sessionstart-deadline.test.sh 329
 tests/fm-pi-watch-extension.test.sh 27802
 tests/fm-pr-check-security.test.sh 236511
 tests/fm-pr-private-file-mode.test.sh 190
@@ -504,6 +508,8 @@ tests/fm-send-resolve-key.test.sh 15216
 tests/fm-send-secondmate-marker-herdr-e2e.test.sh 50
 tests/fm-send-secondmate-marker.test.sh 10761
 tests/fm-session-lock-ancestry.test.sh 1285
+tests/fm-session-start-bound.test.sh 5537
+tests/fm-session-start-hook-nesting.test.sh 4812
 tests/fm-session-start.test.sh 152852
 tests/fm-session-token.test.sh 2532
 tests/fm-sessionstart-hook-live-e2e.test.sh 19
@@ -685,6 +691,8 @@ tests/fm-review-diff.test.sh
 tests/fm-send-popup-settle.test.sh
 tests/fm-send-settle.test.sh
 tests/fm-send-strict.test.sh
+tests/fm-session-start-bound.test.sh
+tests/fm-session-start-hook-nesting.test.sh
 tests/fm-spawn-batch.test.sh
 tests/fm-spawn-pool-base-freshen.test.sh
 tests/fm-supervision-events.test.sh
@@ -734,6 +742,8 @@ tests/fm-review-diff.test.sh 83000
 tests/fm-send-popup-settle.test.sh 102000
 tests/fm-send-settle.test.sh 43000
 tests/fm-send-strict.test.sh 119000
+tests/fm-session-start-bound.test.sh 34795
+tests/fm-session-start-hook-nesting.test.sh 13439
 tests/fm-spawn-batch.test.sh 74000
 tests/fm-spawn-pool-base-freshen.test.sh 122000
 tests/fm-supervision-events.test.sh 15000

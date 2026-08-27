@@ -119,6 +119,8 @@ PUBLISH_LOCK="$STATE/.startup-network.lock"
 . "$SCRIPT_DIR/fm-wake-lib.sh"
 # shellcheck source=bin/fm-session-lock-lib.sh
 . "$SCRIPT_DIR/fm-session-lock-lib.sh"
+# shellcheck source=bin/fm-session-start-bound-lib.sh
+. "$SCRIPT_DIR/fm-session-start-bound-lib.sh"
 
 usage() {
   sed -n '2,/^set -u$/p' "$SCRIPT_DIR/fm-startup-network.sh" | sed 's/^# \{0,1\}//; $d'
@@ -153,10 +155,12 @@ stage_budget() {
   printf '%s' "$budget"
 }
 
+# How long this worker keeps offering its result for INLINE delivery, which is
+# exactly how long the digest it is reporting to could still be running. That is
+# one bound, not two, and bin/fm-session-start-bound-lib.sh owns which one -
+# including why this worker must not re-resolve it from its own context.
 delivery_budget() {
-  local budget=${FM_SESSION_START_TIMEOUT:-120}
-  case "$budget" in ''|*[!0-9]*|0) budget=120 ;; esac
-  printf '%s' "$budget"
+  printf '%s' "$(fm_session_start_delivery_bound "${FM_SESSION_START_TIMEOUT:-}")"
 }
 
 # Is a `running` record a stage that is genuinely still in flight? Two

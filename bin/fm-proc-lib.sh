@@ -25,33 +25,72 @@
 # LC_ALL pinning elsewhere in bin/, never a write to fleet state.
 
 # ---------------------------------------------------------------------------
-# Platform identity
+# Source guard
 # ---------------------------------------------------------------------------
+# This file is sourced from inside FUNCTIONS on poll paths - bin/fm-wake-lib.sh,
+# bin/fm-cursor-lib.sh and bin/fm-session-lock-lib.sh each re-source it per
+# record - so one session start sourced it 42 times and paid this prologue's
+# `uname` fork every time. Every top-level statement below is idempotent: two
+# platform strings and fm_platform_enable_native_symlinks, which returns early
+# when the mode is already set. A repeat source in the SAME process is therefore
+# pure cost, and on MSYS that cost is about 42 ms each.
+#
+# The key is the platform SEAM, not a bare "already loaded" flag. A test that
+# changes FM_PLATFORM_UNAME_OVERRIDE has to get a fresh resolution or the seam
+# stops working and the Windows arms silently go untested - which would trade a
+# fork for a vacuous test suite. bin/fm-path-lib.sh already guards its own source
+# of this file on the same key.
+#
+# WHY THIS SKIPS THE PROLOGUE RATHER THAN `return`ing FROM THE SOURCE, which is
+# the shorter spelling and was measured to be unusable. ShellCheck inlines
+# `# shellcheck source=` targets, and the graph under
+# tests/fm-pending-reply.test.sh reaches this file through SIXTEEN source sites;
+# a top-level `return` inside an inlined region multiplies that root's
+# control-flow paths.
+# Measured with ShellCheck 0.11.0 on the pinned lint set: with the `return`, that
+# one root cost 14.8 GB RSS and had not finished after 240 s, and `bin/fm-lint.sh`
+# was OOM-killed at 15.3 GB after 25m49s; skipping the prologue instead, byte for
+# byte the same guard otherwise, that root is 4.77 GB in 33 s and the full lint is
+# 4.78 GB in 3m19s, exit 0. The saving this guard exists for is the prologue's
+# `uname` fork, and that is unchanged either way: the remaining top-level
+# statements are function definitions plus fm_platform_enable_native_symlinks,
+# which are all builtins and create no process. Re-parsing them is not free, but
+# it costs no subprocess, which is the cost this branch is measured on
+# (docs/verification/session-start-fork-profile.md).
+if [ "${FM_PROC_LIB_SEAM+set}" != set ] \
+  || [ "$FM_PROC_LIB_SEAM" != "${FM_PLATFORM_UNAME_OVERRIDE-}" ] \
+  || ! command -v fm_proc_field >/dev/null 2>&1; then
+  FM_PROC_LIB_SEAM=${FM_PLATFORM_UNAME_OVERRIDE-}
 
-# Resolved once at source time: these helpers run inside sub-second poll loops
-# and forking uname per call is a measurable cost on exactly the platform
-# (Git Bash/MSYS) that already pays the highest fork price.
-# FM_PLATFORM_UNAME_OVERRIDE is the same test seam as FM_PROC_ROOT_OVERRIDE
-# below: it lets the suite drive the Windows arms from a POSIX runner, which is
-# the only way those arms get regression coverage at all before someone runs the
-# suite on Windows.
-FM_PROC_UNAME_S="${FM_PLATFORM_UNAME_OVERRIDE:-$(uname -s 2>/dev/null || echo unknown)}"
-# The same read with the test seam deliberately NOT consulted, for the one thing
-# the seam must never reach: the identity string fm_pid_identity prints.
-# A capability arm is evaluated now and acted on now, so the suite driving it from
-# a POSIX runner is exactly the point. An identity is written once and compared
-# later, possibly by another process, so an identity whose bytes moved with the
-# seam would mismatch for a live unchanged process - the false-dead verdict this
-# file exists to prevent.
-# Only the seam being set can make the two differ, and that happens in tests
-# alone, so the second `uname` is forked only there: with the seam unset the line
-# above already holds the real host value. This file has no source guard and
-# bin/fm-wake-lib.sh re-sources it from inside functions on a poll path, so a
-# second unconditional fork here would be paid per record per poll.
-if [ -n "${FM_PLATFORM_UNAME_OVERRIDE:-}" ]; then
-  FM_PROC_HOST_UNAME_S="$(uname -s 2>/dev/null || echo unknown)"
-else
-  FM_PROC_HOST_UNAME_S="$FM_PROC_UNAME_S"
+  # ---------------------------------------------------------------------------
+  # Platform identity
+  # ---------------------------------------------------------------------------
+
+  # Resolved once at source time: these helpers run inside sub-second poll loops
+  # and forking uname per call is a measurable cost on exactly the platform
+  # (Git Bash/MSYS) that already pays the highest fork price.
+  # FM_PLATFORM_UNAME_OVERRIDE is the same test seam as FM_PROC_ROOT_OVERRIDE
+  # below: it lets the suite drive the Windows arms from a POSIX runner, which is
+  # the only way those arms get regression coverage at all before someone runs the
+  # suite on Windows.
+  FM_PROC_UNAME_S="${FM_PLATFORM_UNAME_OVERRIDE:-$(uname -s 2>/dev/null || echo unknown)}"
+  # The same read with the test seam deliberately NOT consulted, for the one thing
+  # the seam must never reach: the identity string fm_pid_identity prints.
+  # A capability arm is evaluated now and acted on now, so the suite driving it from
+  # a POSIX runner is exactly the point. An identity is written once and compared
+  # later, possibly by another process, so an identity whose bytes moved with the
+  # seam would mismatch for a live unchanged process - the false-dead verdict this
+  # file exists to prevent.
+  # Only the seam being set can make the two differ, and that happens in tests
+  # alone, so the second `uname` is forked only there: with the seam unset the line
+  # above already holds the real host value. Keeping it conditional still matters
+  # with the source guard above in place, because the guard is what makes this
+  # prologue run once per PROCESS - and a session start runs a dozen processes.
+  if [ -n "${FM_PLATFORM_UNAME_OVERRIDE:-}" ]; then
+    FM_PROC_HOST_UNAME_S="$(uname -s 2>/dev/null || echo unknown)"
+  else
+    FM_PROC_HOST_UNAME_S="$FM_PROC_UNAME_S"
+  fi
 fi
 
 # True on the Windows POSIX-emulation runtimes: Git for Windows / MSYS2

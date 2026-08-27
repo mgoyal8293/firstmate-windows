@@ -187,9 +187,44 @@ Measured by running all 98 candidate scripts serially from a frozen checkout wit
 45 + 41 + 12 = 98.
 One of the 41, `tests/fm-teardown.test.sh`, has its cause isolated below; the other 40 are recorded but not chased.
 
-The lane now enumerates **40** members, because `tests/fm-python-lib.test.sh` was admitted after this campaign closed and was never one of its 98 candidates.
-It was measured on its own terms, green twice through the runner on the captain's Git Bash box at 11512 ms and 11129 ms, and the lower of those is its hint.
+The lane now enumerates **42** members. Three were admitted after this campaign closed and were never among its 98 candidates.
+
+`tests/fm-python-lib.test.sh` was measured on its own terms, green twice through the runner on the captain's Git Bash box at 11512 ms and 11129 ms, and the lower of those is its hint.
 That is a floor measured on one developer machine rather than a figure from a CI runner, and GitHub's Windows runners are slower, so treat it the way the shard predictions below are treated: good enough to pack a shard with, not a promise about wall time.
+
+### `fm-session-start-bound` and `fm-session-start-hook-nesting`, and why they belong here specifically
+
+These two own the Windows session-start bound: the per-platform default, the nesting margin, and the harness ceiling the clamp is derived from.
+They are on this lane for a reason stronger than "they pass there" - **their Linux runs are structurally unable to see a whole class of defect in them.**
+
+The Windows arm's other coverage is `FM_PLATFORM_UNAME_OVERRIDE` on a POSIX runner, and an assertion written against *the ambient host* rather than against a second overridden arm is green on every Linux runner by construction, because on Linux the host and the override really do differ.
+One such assertion shipped: the anti-vacuity guard in `tests/fm-session-start-bound.test.sh` compared the MINGW ceiling against the host's, which on MINGW64 are legitimately the same number, and it fired a false failure only there.
+It was caught by a hand-run WSL-interop session rather than by CI.
+Lane membership is what stops the next one needing a human on a Windows box.
+
+Measured on `MINGW64_NT-10.0-26200`, msys 3.6.3-7674c51e.x86_64, bash 5.2.37(1)-release, 22 cores, run directly under Git Bash from a Windows-visible stage with a real git index:
+
+| script | runs | green | hint (lowest green) |
+|---|---|---|---:|
+| `tests/fm-session-start-bound.test.sh` | 34795 / 36516 / 36743 ms | 3/3, 25 assertions each | **34795** |
+| `tests/fm-session-start-hook-nesting.test.sh` | 13439 / 14080 / 18088 ms | 3/3, 9 assertions each | **13439** |
+
+Same caveat as `fm-python-lib` above: a developer-box floor, not a runner promise.
+
+**Two admission caveats belong with these, and neither is hypothetical.**
+
+`fm-session-start-hook-nesting` **requires `jq`** and hard-fails without it rather than skipping - deliberately, because a skip there would hide an inverted nesting the suite exists to catch.
+So its membership presupposes `jq` on the runner. It is present on `windows-latest` and was present on the box above (`jq-1.8.1`); if a future image drops it, this member fails the lane loudly instead of going quiet, which is the intended direction.
+
+The same suite's parent-side fork-count assertion **skips** on this platform, and that is correct rather than a hole: there is no working `LD_PRELOAD` interposer under MSYS, so it prints `parent-side creation count: SKIPPED - the interposer could not be built or preloaded on this box` plus an explicit `UNMEASURED here and this assertion did not run` note.
+Confirmed on the box above. The fork count stays a Linux measurement; adding the suite to this lane does not turn that skip into a lane failure, and it must not be "fixed" into one.
+
+**Admitting `fm-session-start-bound` also required fixing two real Windows-only failures in it**, both in the end-to-end case that asserts each stage prints its header before its own output:
+
+- On MSYS the session lock is owned by a per-session token rather than by process ancestry (see [`windows.md`](windows.md#how-the-session-lock-is-owned) "How the session lock is owned"), and this suite's fixture strips every harness marker on purpose - so the `LOCK` stage legitimately prints its read-only banner instead of an `acquired`/`held` line. The body pattern covered only the POSIX shapes. That is product behaviour, not a fixture defect, so the pattern now covers the read-only shape too.
+- `skipped (read-only session)` is printed by **two** stages, `WAKE QUEUE` and `NETWORK CHECKS` (`bin/fm-session-start.sh:755` and `:916`), and the helper's contract is that a body pattern matches a line only its *own* stage emits. Searching globally, the network-checks pattern matched the wake-queue's line and reported the header as arriving 70 lines late. Both patterns are now qualified past the shared prefix. Only these two stages share it, so the collision class is closed rather than patched at the one call site that happened to fail.
+
+Neither failure is reachable on Linux, because there the fixture acquires the lock and no stage prints a read-only line at all - which is the second half of why these two suites are worth the lane's budget.
 
 ### The six green-by-skip scripts are not lane members
 
@@ -208,29 +243,31 @@ What it buys is honesty about what the lane runs: a dropped member is visible in
 That is the same principle behind the Linux serial lane's "Require tmux for e2e tests" step (`.github/workflows/ci.yml`), which hard-fails so those scripts cannot quietly skip on a required gate.
 The Windows lane reaches it from the other direction: no tool, no member.
 
-Total lane cost: **62.1 min** of serial Git Bash work (3,724,512 ms of hints).
+Total lane cost: **62.9 min** of serial Git Bash work (3,772,746 ms of hints across 42 members).
 The longest single script is `tests/fm-decision-hold-lifecycle.test.sh` at 860s, which is the floor no shard count can lower - so 4 shards is the useful maximum here, not 8 or 16.
 Beyond 4 the floor binds and extra runners buy nothing.
 
 | shard | scripts | predicted |
 |---|---:|---:|
-| `windows-1of4` | 6 | 931s (15.5 min) |
-| `windows-2of4` | 7 | 931s (15.5 min) |
-| `windows-3of4` | 14 | 931.5s (15.5 min) |
-| `windows-4of4` | 13 | 931s (15.5 min) |
-| imbalance | | 512 ms |
+| `windows-1of4` | 7 | 943.8s (15.7 min) |
+| `windows-2of4` | 8 | 943.0s (15.7 min) |
+| `windows-3of4` | 13 | 943.0s (15.7 min) |
+| `windows-4of4` | 14 | 943.0s (15.7 min) |
+| imbalance | | 844 ms |
+
+Those four rows are the packer's own output for the current hint list, not a hand estimate: admitting the two session-start suites (48,234 ms) added 12s to each shard and re-assigned scripts across all four, which is what the greedy packer does with any admission.
 
 **`windows-4of4` was run end to end on Git Bash to check that sum against reality: rc=0, 14/14 scripts, 0 failures, 2 gate skips, wall 932s (15.5 min)** against 927s predicted - 0.5% out, which is what makes the other three shards' predicted figures trustworthy.
 That run was taken before the six green-by-skip scripts were dropped, so it covered 14 scripts including the 2 that skipped; the same shard is now 13 scripts and 931s, and the drop moves no measured work.
 Note that the packer is greedy over the hint list, so admitting a member re-assigns scripts across all four shards rather than only the one it lands in: `windows-4of4` no longer holds exactly the scripts that were run end to end.
 What that run evidences is that a shard's hint sum predicts its wall time to within 0.5%, which is the claim the other three rows rest on, and that does not depend on which scripts made up the sum.
 
-`timeout-minutes: 40` is a hang tripwire with roughly 2.6x margin over a healthy 15.5-minute shard, not the expected end of the lane.
+`timeout-minutes: 40` is a hang tripwire with roughly 2.5x margin over a healthy 15.7-minute shard, not the expected end of the lane.
 GitHub's Windows runners are slower than the machine these numbers came from.
 
 ### The hints those shards are packed from
 
-`windows_weight_hints` in `bin/fm-test-run.sh` holds the measured Git Bash duration for each of the 40 members - 3,724,512 ms in total - and a member with no entry there is packed at the flat `WINDOWS_DEFAULT_WEIGHT_MS`, 95205 ms, the per-script mean of the 39 members the campaign above admitted.
+`windows_weight_hints` in `bin/fm-test-run.sh` holds the measured Git Bash duration for each of the 42 members - 3,772,746 ms in total - and a member with no entry there is packed at the flat `WINDOWS_DEFAULT_WEIGHT_MS`, 95205 ms, the per-script mean of the 39 members the campaign above admitted.
 
 `--check-coverage` reports `unmeasured_windows=<n>` and names the members behind it, for the same reason it reports `unmeasured_serial` for the Linux serial lane: a member packed at the default is what unbalances a shard, and a Windows shard that overruns `timeout-minutes: 40` is cancelled with no verdict rather than merely slow.
 On the shipped lane it is **0**, and it should stay there: this lane's admission rule already requires a member to be measured green on Windows, so an unhinted member is one admitted without the measurement its own rule demands.

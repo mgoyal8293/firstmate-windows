@@ -25,6 +25,8 @@ set -u
 
 # shellcheck source=tests/lib.sh
 . "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
+# shellcheck source=tests/session-start-bound-helpers.sh
+. "$(dirname "${BASH_SOURCE[0]}")/session-start-bound-helpers.sh"
 
 TMP_ROOT=$(fm_test_tmproot fm-cursor-primary)
 fm_git_identity fmtest fmtest@example.invalid
@@ -607,7 +609,7 @@ test_sessionstart_silent_in_child_worktree() {
 # --- registration ------------------------------------------------------------
 
 test_tracked_registration_covers_the_primary_events() {
-  local reg
+  local reg bound
   reg="$ROOT/.cursor/hooks.json"
   [ -f "$reg" ] || fail "firstmate must ship a tracked project-scope .cursor/hooks.json"
   jq -e '.hooks.stop and .hooks.sessionStart and .hooks.preToolUse' "$reg" >/dev/null 2>&1 \
@@ -616,8 +618,27 @@ test_tracked_registration_covers_the_primary_events() {
     || fail "preCompact staging is deliberately deferred to a follow-up and must stay unregistered"
   jq -e '[.hooks.stop[] | select(.loop_limit != null and .loop_limit > 0)] | length == 1' "$reg" >/dev/null 2>&1 \
     || fail "the stop registration needs an explicit positive loop_limit: without it Cursor's default is unlimited"
-  jq -e '[.hooks.sessionStart[]] | all(.timeout > 120)' "$reg" >/dev/null 2>&1 \
-    || fail "the session-open timeout must sit above bin/fm-session-start.sh's own 120s budget"
+  # DERIVED, never a literal: this assertion read `.timeout > 120` while the
+  # Windows arm resolved to 300s, so a 180s registration stayed green the whole
+  # time it was preempting the truncation banner on MSYS.
+  # tests/fm-session-start-hook-nesting.test.sh owns the same invariant across
+  # every registration; this keeps the Cursor one honest where it is registered.
+  # And the floor is the bound PLUS its nesting margin, not the bound alone. The
+  # margin is what pays for the parent's pre-fork prologue and its post-kill
+  # banner, so a registration that merely exceeds the bound still preempts the
+  # banner mid-print - the same off-by-a-number this assertion was already caught
+  # by once, one term further along.
+  bound=$(fm_test_min_registration_floor) \
+    || fail "could not derive bin/fm-session-start.sh's highest default budget plus its nesting margin"
+  # `length > 0` is not belt-and-braces, it is the assertion. `all` over an EMPTY
+  # array is TRUE in jq, and an empty array is TRUTHY, so the existence check
+  # above passes on `sessionStart: []` too - emptying the array would have left
+  # this whole case green while Cursor registered nothing at session open, and
+  # the pass line would still have claimed the floor was reached. A guard that
+  # passes when its subject is absent reads as coverage and is worse than none.
+  jq -e --argjson bound "$bound" \
+    '[.hooks.sessionStart[]] | length > 0 and all(.timeout >= $bound)' "$reg" >/dev/null 2>&1 \
+    || fail "the session-open registration must exist AND its timeout must reach bin/fm-session-start.sh's highest default budget plus its nesting margin (${bound}s), or Cursor either registers nothing at session open or kills the hook before the truncation banner is printed"
   pass "cursor registration: covers every primary event with a bounded stop loop"
 }
 
