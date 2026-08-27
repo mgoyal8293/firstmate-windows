@@ -394,12 +394,26 @@ handle_paused_stale() {  # <window> <task> <hash> [advance-suppressor: 1 default
   triage_log "absorbed stale (paused, awaiting external, age ${age}s): $win"
 }
 
+# The re-surface throttle is the only piece of pause bookkeeping that outlives a
+# single classification, because it bounds a cadence rather than remembering a
+# verdict. Every clear below the top of the window loop fires on a poll that
+# merely failed to re-confirm the pause (an inconclusive liveness read, a busy
+# verdict that lifted), not on one that observed the declaration end - and a
+# busy/not-busy alternation would otherwise re-arm the recheck on each flap and
+# wake once per flap instead of once per PAUSE_RESURFACE_SECS. So the throttle
+# survives for exactly as long as the crew's own last status still declares the
+# wait; the top-of-loop clear runs only once that declaration has lapsed, and
+# there this drops it with everything else.
 clear_pause_state() {  # <window>
-  local win=$1 key
+  local win=$1 key task
   key=${win//:/_}
   key=${key//\//_}
   key=${key//./_}
-  rm -f "$STATE/.paused-$key" "$STATE/.paused-rechecked-$key" "$STATE/.paused-resurfaced-$key"
+  rm -f "$STATE/.paused-$key" "$STATE/.paused-rechecked-$key"
+  task=$(window_to_task "$win" "$STATE")
+  if ! status_is_paused_or_captain_held "$(last_status_line "$STATE/$task.status")"; then
+    rm -f "$STATE/.paused-resurfaced-$key"
+  fi
 }
 
 clear_pause_tracking() {  # <window>
