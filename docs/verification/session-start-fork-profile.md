@@ -152,7 +152,8 @@ $ fm_session_start_resolve_budget abc  ; # 300
 
 Elapsed on an empty home, steady state: 74 s before, 64-70 s after.
 That is directional only, not a precise figure - other work was running on the box during these runs, and it is the reason the fork count rather than a stopwatch is the measurement of record.
-All ten sections are present in the completed digest after the change and `SUPERVISION INSTRUCTIONS` is absent before it, which is what that stage's missing header looked like in practice.
+All ten sections are present in the completed digest after the change.
+A truncated pre-change run stopped before the `SUPERVISION OPERATING INSTRUCTIONS` heading was emitted, so that section and everything after it was absent from the digest entirely.
 
 The attribution is what changed most visibly. At a 40 s bound, before:
 
