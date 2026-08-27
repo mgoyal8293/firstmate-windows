@@ -54,9 +54,11 @@ fi
 #     pid, so bin/fm-bootstrap.sh, bin/fm-claude-stop-autoarm.sh and
 #     bin/fm-session-start.sh keep reading exactly what they read today and no
 #     caller becomes namespace-aware. The token lives in its own file.
-#   - Reading a token is an environment lookup plus one small file read. Nothing
-#     here queries the Windows process table, so the every-turn Stop hook pays
-#     no per-turn process-enumeration cost.
+#   - Reading a token is an environment lookup plus one small file read, and the
+#     token path itself queries no process table. The gate in front of it does:
+#     fm_session_ancestry_unavailable below must prove the ancestry walk found
+#     nothing before a token may be honoured, so a process pays that walk once.
+#     The memo on that function owns why once is the floor and not zero.
 #
 # Verified token sources, most specific first. Add a row only after confirming
 # the value is present in the harness's OWN tool and hook subprocesses AND is
@@ -202,7 +204,40 @@ fm_session_token_held_by_other() {  # <state-dir>
 #
 # So this is gated on the platform as well, and the whole token path is
 # consequently unreachable off Windows: same code, byte-identical behaviour.
+#
+# MEMOISED for the life of the process, because the answer cannot change within
+# one. Not for the steady-state Stop hook, which asks exactly once and saves
+# nothing here: bin/fm-claude-stop-autoarm.sh's second ownership check is inside
+# its RECOVER_SESSION_LOCK branch and is reached only after the first one fails.
+# The memo pays where one process asks more than once, which three callers do:
+# that recovery branch, bin/fm-lock.sh where fm_session_token_acquire_eligible
+# declines and the predicate is asked again directly, and current_session_still_ours
+# in bin/fm-turnend-guard-cursor.sh, which re-checks on every park and rearm step.
+# With the fork removal in place the recorded fixed fm_harness_ancestry_pids is
+# 392.73 ms, so each repeat call the memo saves is about 0.4 s on Windows
+# (docs/verification/windows-session-lock-cost.md).
+#
+# A memo is the safe fix and REORDERING the caller to try the token first is not:
+# a process's own ancestry is fixed for its lifetime, so a second answer cannot
+# honestly differ from the first, while consulting the token first would answer a
+# DIFFERENT question in the case where the walk does resolve on Windows.
+# That case is driven under "Decision preservation" in
+# docs/verification/windows-session-lock-cost.md.
+#
+# Keyed on the platform seam rather than a bare "computed" flag, the same rule
+# bin/fm-proc-lib.sh's source guard uses: a test that drives FM_PROC_UNAME_S to a
+# second platform in one shell must get a fresh answer, or the Windows arm goes
+# vacuous. Both directions are cached, and the cached refusal is the safe one: it
+# keeps the home read-only rather than opening the token path.
+FM_SESSION_ANCESTRY_MEMO_SEAM=
+FM_SESSION_ANCESTRY_MEMO_RC=
 fm_session_ancestry_unavailable() {
+  if [ -n "$FM_SESSION_ANCESTRY_MEMO_RC" ] \
+    && [ "$FM_SESSION_ANCESTRY_MEMO_SEAM" = "${FM_PROC_UNAME_S:-}" ]; then
+    return "$FM_SESSION_ANCESTRY_MEMO_RC"
+  fi
+  FM_SESSION_ANCESTRY_MEMO_SEAM=${FM_PROC_UNAME_S:-}
+  FM_SESSION_ANCESTRY_MEMO_RC=1
   fm_platform_is_windows || return 1
   # A missing owner is uncertainty, and uncertainty refuses.
   # The walk lives in bin/fm-session-lock-lib.sh, which sources this file, so a
@@ -213,6 +248,7 @@ fm_session_ancestry_unavailable() {
   # falls back on upstream's own ancestry refusal.
   command -v fm_harness_ancestry_pids >/dev/null 2>&1 || return 1
   fm_harness_ancestry_pids >/dev/null 2>&1 && return 1
+  FM_SESSION_ANCESTRY_MEMO_RC=0
   return 0
 }
 

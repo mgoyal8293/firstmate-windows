@@ -406,6 +406,10 @@
       "audience": "maintainer-verification"
     },
     {
+      "path": "docs/verification/windows-session-lock-cost.md",
+      "audience": "maintainer-verification"
+    },
+    {
       "path": "docs/voice-relay.md",
       "audience": "operator-current"
     },

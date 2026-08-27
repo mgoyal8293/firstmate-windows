@@ -166,18 +166,19 @@ STALE_ESCALATE_SECS=${FM_STALE_ESCALATE_SECS:-240}  # idle secs before a provabl
 # footer changes every poll. BUSY_TURN_MAX_SECS bounds how long any busy pane
 # may go with no completed turn: once its task's
 # state/<id>.turn-ended marker (or, before any turn has completed, the task's
-# spawn record) is this old, busy_turn_over_age routes the pane through
-# busy_turn_bound_check, which hands a crossed bound to the same
-# STALE_ESCALATE_SECS-paced wedge_timer_check used for a provably-working
-# non-busy stale - so it escalates via the existing stale reason, escalation
-# counter, and demand-deep-inspection marker for human inspection only, never an
-# automatic interrupt, signal, or restart - unless the crew declared the wait
-# itself, which takes the long pause cadence instead. A completed turn touches
+# spawn record) is this old, busy_turn_over_age hands the pane to
+# busy_bound_triage, which routes it through the same STALE_ESCALATE_SECS-paced
+# wedge_timer_check used for a provably-working non-busy stale - so it escalates
+# via the existing stale reason, escalation counter, and demand-deep-inspection
+# marker for human inspection only, never an automatic interrupt, signal, or
+# restart. See busy_bound_triage for the one state that takes the longer
+# declared-pause cadence at this bound instead. A completed turn touches
 # turn-ended and resets the age. Set generously above any legitimate interval
 # between completed turns, including long tool calls, builds, or test runs.
 BUSY_TURN_MAX_SECS=${FM_BUSY_TURN_MAX_SECS:-3600}
-# A crew that declared a pause is idling on a known external wait, so its stale
-# pane is absorbed rather than wedge-escalated.
+# A crew that declared a pause is waiting on a known external dependency, so its
+# pane is absorbed rather than wedge-escalated: when it reads stale, and, in
+# normal mode only, when a busy pane crosses BUSY_TURN_MAX_SECS.
 # A captain-held or paused crew whose agent has confidently exited uses the same
 # bounded cadence, while a live or ambiguously read agent still surfaces once; a
 # secondmate earns the cadence on its declaration alone, because its endpoint
@@ -408,12 +409,40 @@ wedge_timer_check() {  # <window> <since-file> <triage-label> <escalation-count-
 # signal every verified harness's turn-end hook touches; before any turn has
 # completed, ages the task's spawn record instead so a fresh task still gets a
 # bound. The caller checks that the pane is busy and routes a crossed bound
-# through busy_turn_bound_check, never anything that touches the worker itself.
+# through busy_bound_triage, never anything that touches the worker itself.
 busy_turn_over_age() {  # <task>
   local task=$1 f
   f="$STATE/$task.turn-ended"
   [ -e "$f" ] || f="$STATE/$task.meta"
   [ "$(age_of "$f")" -ge "$BUSY_TURN_MAX_SECS" ]
+}
+
+# Triage for a busy pane that has crossed the completed-turn bound above.
+# Normally wedge_timer_check takes over. Exactly one state must not: a crew
+# whose own last status line DECLARES a bounded external wait (paused:) or a
+# captain hold. A busy pane proves the harness is alive but says nothing about
+# what it is doing, and a bounded external wait renders nothing to the pane
+# while the harness still shows busy - a queued upstream CI run, a rate-limit
+# reset, an unpublished upstream release, a vendor incident - so it is
+# indistinguishable from a freeze by pane bytes alone. So the wedge timer fired
+# against an honestly declared wait every STALE_ESCALATE_SECS for as long as
+# that wait lasted, each escalation costing a supervisor turn.
+# A declared bounded wait PLUS a genuinely busy harness is the least wedge-like
+# state this watcher can observe, so it takes the same long PAUSE_RESURFACE_SECS
+# recheck a declared pause already gets when idle. Absorbed, never silenced:
+# handle_paused_stale still re-surfaces the wait for confirmation, and the moment
+# the crew's log stops declaring it the ordinary wedge timer resumes on the very
+# next poll. Away mode is excluded because the daemon owns triage there and wants
+# the unmodified wake stream. While the declaration stands the escalation count
+# and demand-deep-inspection marker do not accumulate; docs/architecture.md owns
+# that tradeoff.
+busy_bound_triage() {  # <window> <task> <hash> <last-status> <since-file> <escalation-file>
+  local win=$1 task=$2 h=$3 last=$4 ssf=$5 ewf=$6
+  if ! afk_present && status_is_paused_or_captain_held "$last"; then
+    handle_paused_stale "$win" "$task" "$h" 0
+  else
+    wedge_timer_check "$win" "$ssf" "busy (no completed turn)" "$ewf" "$task"
+  fi
 }
 
 # Absorb a stale pane under a declared external-wait pause (paused:) or a
@@ -424,18 +453,33 @@ busy_turn_over_age() {  # <task>
 # status file mtime, not a per-hash marker, so a churny idle pane (a ticking
 # clock, a token counter) cannot keep resetting the cadence the way a hash-tied
 # timer would. The bounded re-surface itself is the shared resurface_absorbed
-# above, throttled by this window's own .paused-resurfaced-<key> marker. Advances
-# the stale suppressor to <hash> and flags the key paused.
+# above, throttled by this window's own .paused-resurfaced-<key> marker, which
+# records the last re-surface epoch so, once past the window, it fires once per
+# window rather than every poll. Flags the key paused, and advances the stale
+# suppressor to <hash> unless <advance-suppressor> is 0. The suppressor records
+# which hash the stale triage has already classified, and the rule is narrower
+# than "only a stale caller advances it". The caller that must NOT advance it is a
+# BUSY poll: it has classified nothing, so burning the suppressor there would mark
+# the hash already-triaged and swallow the immediate fail-open surface the first
+# genuinely stale sight of it is owed. That is the whole reason the parameter
+# exists. Every other caller advances, and all but one of them observed a stably
+# stale pane. The exception is the changed-hash declared-pause arm, which advances
+# on a poll where the pane demonstrably just changed; it is reachable only for a
+# crew whose backend confidently reports its agent dead, and a dead agent's pane
+# cannot change again, so there is no later first sight for the suppressor to
+# swallow.
 #
 # The recheck names WHICH human the declared wait is on, because that is the whole
 # point of a recheck the captain reads: an external dependency for paused:, and the
 # captain themself for a verified hold. Only the captain-held verb takes the second
 # wording; a caller that reached the bounded cadence off pause tracking alone, with
 # no declaring verb left on the log, keeps the external-wait wording it always had.
-handle_paused_stale() {  # <window> <task> <hash>
-  local win=$1 task=$2 h=$3 key statusf mtime age detail reason
+handle_paused_stale() {  # <window> <task> <hash> [advance-suppressor: 1 default, 0 from a busy poll]
+  local win=$1 task=$2 h=$3 advance=${4:-1} key statusf mtime age detail reason
   key=$(window_key "$win")
-  printf '%s' "$h" > "$STATE/.stale-$key"
+  if [ "$advance" = 1 ]; then
+    printf '%s' "$h" > "$STATE/.stale-$key"
+  fi
   : > "$STATE/.paused-$key"
   rm -f "$STATE/.stale-since-$key" "$STATE/.wedge-escalations-$key"
   clear_write_tracking "$key"
@@ -454,38 +498,40 @@ handle_paused_stale() {  # <window> <task> <hash>
   triage_log "absorbed stale ($detail, age ${age}s): $win"
 }
 
-# Apply the busy-pane completed-turn bound to a window whose bound has already
-# crossed, honoring the worker's OWN declared external wait. Prints/queues
-# nothing itself; it only chooses which absorber owns the crossed bound.
-# 0 when the declared-pause cadence took the pane, 1 when the wedge timer did.
+# The re-surface throttle is the only piece of pause bookkeeping that outlives a
+# single classification, because it bounds a cadence rather than remembering a
+# verdict. Every clear below the top of the window loop fires on a poll that
+# merely failed to re-confirm the pause (an inconclusive liveness read, a busy
+# verdict that lifted), not on one that observed the declaration end - and a
+# busy/not-busy alternation would otherwise re-arm the recheck on each flap and
+# wake once per flap instead of once per PAUSE_RESURFACE_SECS. So the throttle
+# survives for exactly as long as the crew's own last status still declares the
+# wait; the top-of-loop clear fires on any key whose declaration has lapsed while
+# ANY pause artifact remains, so nothing this retains can outlive the declaration
+# that created it.
 #
-# A busy pane past BUSY_TURN_MAX_SECS is normally a wedge suspect because a hung
-# foreground call can hide behind a busy signature. A `paused:` declaration or
-# verified captain-held transfer instead identifies that live foreground call as
-# the expected external wait. The caller has already confirmed liveness through
-# the busy verdict, so this exception does not suppress undeclared wedges or
-# alter the separate non-busy classification. handle_paused_stale keeps the
-# exception bounded by re-surfacing it once per PAUSE_RESURFACE_SECS. Away mode
-# remains daemon-owned and receives the undecorated wake identity for its own
-# classification.
-busy_turn_bound_check() {  # <window> <task> <hash> <since-file> <escalation-file>
-  local win=$1 task=$2 h=$3 since_file=$4 escalation_file=$5
-  if ! afk_present && status_is_paused_or_captain_held "$(last_status_line "$STATE/$task.status")"; then
-    handle_paused_stale "$win" "$task" "$h"
-    return 0
+# <last-status> is the caller's own snapshot of the crew's last status line, so
+# one poll has one verdict on whether the declaration stands, and the O(fleet)
+# window_to_task scan stays out of the poll's hot path. Passing three arguments
+# is what selects the snapshot: an EMPTY <last-status> is a real value (an empty
+# status log declares nothing), so only an omitted one falls back to reading.
+clear_pause_state() {  # <window> [task] [last-status]
+  local win=$1 task=${2:-} last=${3:-} key
+  key=$(window_key "$win")
+  rm -f "$STATE/.paused-$key" "$STATE/.paused-rechecked-$key"
+  if [ "$#" -lt 3 ]; then
+    [ -n "$task" ] || task=$(window_to_task "$win" "$STATE")
+    last=$(last_status_line "$STATE/$task.status")
   fi
-  wedge_timer_check "$win" "$since_file" "busy (no completed turn)" "$escalation_file" "$task"
-  return 1
+  if ! status_is_paused_or_captain_held "$last"; then
+    rm -f "$STATE/.paused-resurfaced-$key"
+  fi
 }
 
-clear_pause_state() {  # <window-key>
-  local key=$1
-  rm -f "$STATE/.paused-$key" "$STATE/.paused-rechecked-$key" "$STATE/.paused-resurfaced-$key"
-}
-
-clear_pause_tracking() {  # <window-key>
-  local key=$1
-  clear_pause_state "$key"
+clear_pause_tracking() {  # <window> [task] [last-status]
+  local win=$1 key
+  key=$(window_key "$win")
+  clear_pause_state "$@"
   clear_write_tracking "$key"
   rm -f "$STATE/.stale-$key" "$STATE/.stale-since-$key" "$STATE/.wedge-escalations-$key"
 }
@@ -1137,8 +1183,9 @@ EOF
     task=$(window_to_task "$w" "$STATE")
     key=$(window_key "$w")
     last=$(last_status_line "$STATE/$task.status")
-    if ! status_is_paused_or_captain_held "$last" && [ -e "$STATE/.paused-$key" ]; then
-      clear_pause_tracking "$key"
+    if ! status_is_paused_or_captain_held "$last" && { [ -e "$STATE/.paused-$key" ] ||
+      [ -e "$STATE/.paused-rechecked-$key" ] || [ -e "$STATE/.paused-resurfaced-$key" ]; }; then
+      clear_pause_tracking "$w" "$task" "$last"
     fi
     # An idle secondmate endpoint is healthy by design, so a mate is admitted to
     # the pane-stale path ONLY to serve a declared wait's bounded re-surface -
@@ -1174,7 +1221,7 @@ EOF
         if [ "$kind" = secondmate ]; then
           case "$(pause_state_class "$w" "$task")" in
             paused) handle_paused_stale "$w" "$task" "$h" ;;
-            *)      clear_pause_tracking "$key" ;;
+            *)      clear_pause_tracking "$w" "$task" "$last" ;;
           esac
         elif afk_present; then
           # Daemon owns triage: one-shot per distinct stale hash, as before.
@@ -1199,7 +1246,7 @@ EOF
           # authoritative source fm-crew-state.sh itself already prioritizes
           # over the log) a chance to override before trusting the log.
           if [ "$(cat "$sf" 2>/dev/null || true)" != "$h" ]; then
-            if crew_is_provably_working "$(window_to_task "$w" "$STATE")"; then
+            if crew_is_provably_working "$task"; then
               printf '%s' "$h" > "$sf"
               date +%s > "$ssf"
               clear_write_tracking "$key"
@@ -1209,7 +1256,7 @@ EOF
               printf '%s' "$h" > "$sf"
               rm -f "$ssf"
               clear_write_tracking "$key"
-              mark_surfaced "$STATE/$(window_to_task "$w" "$STATE").status"
+              mark_surfaced "$STATE/$task.status"
               wake "stale: $w"
             fi
           elif [ -e "$ssf" ]; then
@@ -1238,10 +1285,9 @@ EOF
           #     waiting on a decision, or wedged) instead of leaving the finish to
           #     wait out the timer.
           if [ "$(cat "$sf" 2>/dev/null || true)" != "$h" ]; then
-            task=$(window_to_task "$w" "$STATE")
             case "$(pause_state_class "$w" "$task")" in
               working)
-                clear_pause_tracking "$key"
+                clear_pause_tracking "$w" "$task" "$last"
                 printf '%s' "$h" > "$sf"
                 date +%s > "$ssf"
                 triage_log "absorbed non-terminal stale (provably working): $w"
@@ -1254,11 +1300,10 @@ EOF
                 ;;
             esac
           else
-            task=$(window_to_task "$w" "$STATE")
-            if [ -e "$pf" ] || status_is_paused_or_captain_held "$(last_status_line "$STATE/$task.status")"; then
+            if [ -e "$pf" ] || status_is_paused_or_captain_held "$last"; then
               case "$(pause_state_class "$w" "$task")" in
                 paused)  handle_paused_stale "$w" "$task" "$h" ;;
-                working) clear_pause_state "$key"
+                working) clear_pause_state "$w" "$task" "$last"
                          printf '%s' "$h" > "$sf"
                          wedge_timer_check "$w" "$ssf" "non-terminal stale (provably working after a declared pause)" "$ewf" "$task"
                          triage_log "absorbed non-terminal stale (provably working): $w" ;;
@@ -1272,43 +1317,32 @@ EOF
       else
         # Pane busy or not yet stably stale: reset pending escalation bookkeeping,
         # unless a genuinely busy pane has gone too long with no completed turn -
-        # then route it through busy_turn_bound_check, which hands the crossed
-        # bound to the same wedge timer unless the crew declared the wait itself.
-        paused_bound=1
+        # then hand it to busy_bound_triage instead of erasing it.
         if [ "$busy_now" -eq 0 ] && busy_turn_over_age "$task"; then
-          busy_turn_bound_check "$w" "$task" "$h" "$ssf" "$ewf" && paused_bound=0
+          busy_bound_triage "$w" "$task" "$h" "$last" "$ssf" "$ewf"
         else
           rm -f "$ssf" "$ewf"
           clear_write_tracking "$key"
         fi
-        # A busy pane normally means real work resumed, so stale pause bookkeeping
-        # is cleared - but not in the same poll the declared-pause cadence just
-        # recorded it, or the re-surface throttle it depends on would be erased and
-        # the pause would re-surface every poll instead of once per long cadence.
-        if [ "$paused_bound" -ne 0 ] && [ -e "$pf" ] && { [ "$n" -ge 2 ] || ! status_is_paused_or_captain_held "$(last_status_line "$STATE/$(window_to_task "$w" "$STATE").status")"; }; then
-          clear_pause_tracking "$key"
-        fi
+        # No pause-clear here or in the changed-hash branch below: the clear at
+        # the head of this window loop is the single owner of clearing pause
+        # tracking, so a busy poll neither clears nor needs to re-clear a
+        # standing declaration.
       fi
     else
       printf '%s' "$h" > "$hf"
       echo 0 > "$cf"
-      paused_bound=1
       if [ "$busy_now" -eq 0 ] && busy_turn_over_age "$task"; then
-        busy_turn_bound_check "$w" "$task" "$h" "$ssf" "$ewf" && paused_bound=0
+        busy_bound_triage "$w" "$task" "$h" "$last" "$ssf" "$ewf"
       else
         rm -f "$ssf" "$ewf"
         clear_write_tracking "$key"
       fi
-      task=$(window_to_task "$w" "$STATE")
-      if ! afk_present && status_is_paused_or_captain_held "$(last_status_line "$STATE/$task.status")" && [ "$busy_now" -ne 0 ]; then
+      if ! afk_present && status_is_paused_or_captain_held "$last" && [ "$busy_now" -ne 0 ]; then
         case "$(pause_state_class "$w" "$task")" in
           paused) handle_paused_stale "$w" "$task" "$h" ;;
-          *)      clear_pause_tracking "$key" ;;
+          *)      clear_pause_tracking "$w" "$task" "$last" ;;
         esac
-      elif [ "$paused_bound" -ne 0 ] && [ -e "$pf" ]; then
-        # Same rule as the stable-hash branch: never clear pause bookkeeping the
-        # declared-pause cadence recorded on this very poll.
-        clear_pause_tracking "$key"
       fi
     fi
   done < <(recorded_windows)

@@ -117,10 +117,14 @@ The remaining reductions replace exec'd helpers with the parameter expansions th
 
 Two counted facts shape how those are written, because both are easy to get backwards.
 A command substitution forks even around a shell builtin, so `$(...)` is never free and wrapping a helper in one gives the fork back.
-And `$(<f)` is free only without a redirection attached: `$(<f 2>/dev/null)` costs two forks per call rather than zero, because the redirection defeats bash's special case, and it does not even suppress the error - so an unreadable file is handled by testing `[ -r f ]` first.
+And `$(<f)` is free only without a redirection attached: `$(<f 2>/dev/null)` costs two forks per call rather than zero, because the redirection defeats bash's special case, and it does not even suppress the error.
+Which form a given read then takes - `[ -r f ]` first, or `{ x=$(<f); } 2>/dev/null` where the file can vanish between that test and the read, as a pid exiting mid-walk does - is measured and owned by [`verification/session-start-fork-profile.md`](verification/session-start-fork-profile.md).
 
 This is a Windows-motivated fix to portable code, so the count is measured on Linux and the platform only changes what a fork costs.
 A Linux timing run would show nothing.
+
+That was a session-start count, and the same class of fix later reached the path a turn pays: one `fm_proc_field` scalar read on the `/proc` path - the read every ancestry walk, reaper and lock check makes here - went from three child processes to none, and the session-lock ownership check stopped paying its ancestry walk more than once per process.
+[`verification/windows-session-lock-cost.md`](verification/windows-session-lock-cost.md) records those counts, the Windows timings taken beside them, and what was deliberately left on the table.
 
 ## Security note: the private-file mode assertion
 
@@ -224,8 +228,21 @@ path rather than replacing it.**
 - No Windows pid is recorded anywhere. `state/.lock` still holds a plain numeric
   MSYS pid, so every existing reader is unchanged and no caller becomes
   namespace-aware; the token lives beside it in `state/.lock.session`.
-- Nothing queries the Windows process table, per turn or otherwise. Reading a
-  token is an environment lookup plus one small file read.
+- Reading a token is an environment lookup plus one small file read, and nothing
+  on the token path itself queries the process table.
+  The gate in front of it does, exactly once per process: `fm_session_ancestry_unavailable`
+  has to prove the walk found nothing before a token may be honoured, so the walk
+  is evidence the predicate cannot skip.
+  It is memoised instead, because a process's own ancestry is fixed for its
+  lifetime while trying the token first would answer a different question in the
+  case where the walk does resolve.
+  A steady-state turn makes one ownership check, so the memo saves nothing on
+  that path; it pays where one process asks more than once, such as the
+  stale-lock recovery branch in `bin/fm-claude-stop-autoarm.sh` or the repeated
+  current-session checks in `bin/fm-turnend-guard-cursor.sh`.
+  [`verification/windows-session-lock-cost.md`](verification/windows-session-lock-cost.md)
+  is the evidence: the walk counts the memo removes, and the driven case that
+  rules out consulting the token first.
 
 A token proves identity, not liveness, so two things supply the rest:
 
@@ -300,10 +317,20 @@ compare stays first and stays authoritative; where no `cygpath` exists the
 strict compare remains the only verdict, so this can widen a match and never
 silently accept an unresolvable one.
 
-It resolves the mount alias only.
-`fm_lock_same_path` calls `cygpath -m` without `-l`, so it cannot see through an 8.3 short component - the spelling GitHub's runners use for `%TEMP%` - and still compares a short spelling against a long one.
-The short-name expansion exists one layer down, in `fm_proc_cwd_prefixes` (`bin/fm-proc-lib.sh`), added for the `/proc` cwd read described in [`fm-test-windows-lane.md`](fm-test-windows-lane.md).
-The lock resolver has not been given it, and that gap is tracked as `winfm-portability-points-to-owner`.
+It resolves the mount alias and the 8.3 short name, because those are two aliasing layers and `cygpath -m` alone sees through only the first.
+`fm_lock_same_path` resolves with `cygpath -m -l`, the same way `fm_proc_cwd_prefixes` (`bin/fm-proc-lib.sh`) does for the `/proc` cwd read described in [`fm-test-windows-lane.md`](fm-test-windows-lane.md).
+Measured on Git-for-Windows MINGW64 against one directory reached by both spellings (identical inode):
+
+```
+$ cygpath -m    .../Temp/FMPROB~1/xdir  -> C:/Users/johns/AppData/Local/Temp/FMPROB~1/xdir
+$ cygpath -m    .../Temp/fmprobe-verylongname-1234/xdir  -> C:/Users/johns/AppData/Local/Temp/fmprobe-verylongname-1234/xdir
+$ cygpath -m -l (either spelling)       -> C:/Users/johns/AppData/Local/Temp/fmprobe-verylongname-1234/xdir
+```
+
+`%TEMP%` is where this bites, because Git for Windows mounts `/tmp` at whatever it names and GitHub's Windows runners spell it with a short component.
+`-l` expands a component only when the path resolves on disk and otherwise returns it unchanged, so an unresolvable pair is still compared as spelled - the refusing direction.
+
+`fm_platform_symlink_probe` (`bin/fm-proc-lib.sh`) is a remaining known instance of the same raw-string spelling compare, is not fixed here, and is tracked as its own separate follow-up, `winfm-symlink-probe-spelling`.
 
 ## Run end to end on Windows
 
@@ -396,6 +423,8 @@ A Windows operator meets them in this order.
 
 ## Not yet ported
 
+- A session token is verified for `claude` only, so under `codex`, `opencode`, `pi`, `pi-signed`, `grok`, `kimi` or `cursor` a Windows firstmate stays read-only for the whole session.
+  "How the session lock is owned" above owns why each row needs its own evidence before it may be added.
 - Relay's artifact writes (`x_mode_write_if_changed` in `bin/fm-bootstrap.sh`) still assert exact modes directly. Relay is off unless the home opts in.
 - Away mode's daemon launch (`bin/fm-afk-launch.sh`) is unexamined on Windows.
 - The macOS-only surfaces (`bin/backends/herdr.sh`, `bin/fm-remote-job-*.sh`, muse) are deliberately out of scope.
