@@ -1910,6 +1910,98 @@ test_busy_declared_pause_resurface_throttle_survives_a_busy_verdict_flap() {
   pass "the paused re-surface throttle survives a busy/not-busy flap, so one window still yields one recheck"
 }
 
+# The other half of that throttle's lifetime. Because it now outlives the
+# not-busy arm's teardown, the only thing left to drop it is the clear at the
+# head of the window loop - and that clear has to notice a key whose .paused-
+# flag the flap already removed, or the throttle outlives the declaration that
+# created it and is never collected. A marker that outlives its declaration is
+# not inert: it is the same file the NEXT declaration's first re-surface is
+# throttled against.
+test_lapsed_declaration_clears_every_pause_artifact_after_a_flap() {
+  local dir state fakebin out capture_file window key sig pid writer back statusf i
+  dir=$(make_case lapsed-after-flap); state="$dir/state"; fakebin="$dir/fakebin"
+  out="$dir/watch.out"; capture_file="$dir/pane.txt"; window="test:fm-lapsed-flap"
+  printf 'Working... (0.0s)' > "$capture_file"
+  printf 'window=%s\nkind=ship\nharness=pi\n' "$window" > "$state/lapsed-flap.meta"
+  record_pi_busy "$state" lapsed-flap
+  statusf="$state/lapsed-flap.status"
+  printf 'paused: waiting on a queued upstream CI run\n' > "$statusf"
+  key=$(printf '%s' "$window" | tr ':/.' '___')
+  touch -t 200001010000 "$state/lapsed-flap.meta"
+  back=$(( $(date +%s) - 500 ))
+  if [ "$(uname)" = Darwin ]; then touch -mt "$(date -r "$back" '+%Y%m%d%H%M.%S')" "$statusf"
+  else touch -m -d "@$back" "$statusf"; fi
+  sig=$(seen_sig "$statusf"); printf '%s' "$sig" > "$state/.seen-lapsed-flap_status"
+
+  # A ticking footer, so every poll lands on the changed-hash branch - the arm
+  # that drops .paused- while keeping the throttle.
+  # Redirect the writer's own stdout: a forked subshell inherits this script's
+  # block-buffered stdout when the suite is run into a file, and would re-flush
+  # those pending bytes on exit, duplicating earlier ok lines in the report.
+  ( while :; do printf 'Working... (%s)' "$(date +%s%N)" > "$capture_file"; sleep 0.2; done ) >/dev/null 2>&1 &
+  writer=$!
+
+  # Step 1, busy past the completed-turn bound: the declaration re-surfaces, so
+  # the throttle marker gets written.
+  PATH="$fakebin:$PATH" FM_FAKE_TMUX_WINDOW="$window" FM_FAKE_TMUX_CAPTURE="$capture_file" \
+    FM_STATE_OVERRIDE="$state" FM_CREW_STATE_BIN="$fakebin/fm-crew-state.sh" \
+    FM_BUSY_TURN_MAX_SECS=1 FM_STALE_ESCALATE_SECS=240 \
+    FM_PAUSE_RESURFACE_SECS=240 FM_POLL=1 FM_SIGNAL_GRACE=1 \
+    FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=999999 "$WATCH" >> "$out" &
+  pid=$!
+  if ! wait_for_exit "$pid" 60; then
+    reap "$pid"; kill "$writer" 2>/dev/null; wait "$writer" 2>/dev/null
+    fail "step 1: the declared pause past the recheck window never re-surfaced: $(cat "$out")"
+  fi
+  [ -e "$state/.paused-resurfaced-$key" ] || { kill "$writer" 2>/dev/null
+    wait "$writer" 2>/dev/null; fail "step 1: the throttle marker was not written"; }
+  ack_stopped_cycle "$state" || { kill "$writer" 2>/dev/null; wait "$writer" 2>/dev/null
+    fail "step 1: could not acknowledge the recheck"; }
+
+  # Step 2, the busy verdict lifts while the declaration still stands: this drops
+  # .paused- and deliberately keeps the throttle (the round-3 behavior).
+  "$ROOT/bin/fm-busy-event.sh" apply "$state" lapsed-flap unknown --current-gen \
+    --source pi-ext --event agent-stop >/dev/null || { kill "$writer" 2>/dev/null
+    wait "$writer" 2>/dev/null; fail "step 2: could not lift the busy verdict"; }
+  PATH="$fakebin:$PATH" FM_FAKE_TMUX_WINDOW="$window" FM_FAKE_TMUX_CAPTURE="$capture_file" \
+    FM_STATE_OVERRIDE="$state" FM_CREW_STATE_BIN="$fakebin/fm-crew-state.sh" \
+    FM_BUSY_TURN_MAX_SECS=1 FM_STALE_ESCALATE_SECS=240 \
+    FM_PAUSE_RESURFACE_SECS=240 FM_POLL=1 FM_SIGNAL_GRACE=1 \
+    FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=999999 "$WATCH" >> "$out" &
+  pid=$!
+  if ! wait_live "$pid" 30; then
+    reap "$pid"; kill "$writer" 2>/dev/null; wait "$writer" 2>/dev/null
+    fail "step 2: the lifted busy verdict under a standing declaration woke: $(cat "$out")"
+  fi
+  reap "$pid"
+  [ ! -e "$state/.paused-$key" ] || { kill "$writer" 2>/dev/null; wait "$writer" 2>/dev/null
+    fail "step 2: the flap did not drop the paused flag, so the leak path is not being exercised"; }
+  [ -e "$state/.paused-resurfaced-$key" ] || { kill "$writer" 2>/dev/null
+    wait "$writer" 2>/dev/null; fail "step 2: the throttle did not survive the flap"; }
+  ack_stopped_cycle "$state" || { kill "$writer" 2>/dev/null; wait "$writer" 2>/dev/null
+    fail "step 2: could not acknowledge the intentional stop"; }
+
+  # Step 3, the wait clears: the crew's own log stops declaring it, so every
+  # pause artifact for this key must go - including the orphaned throttle.
+  printf 'working: the upstream run finished, back on the fix\n' >> "$statusf"
+  sig=$(seen_sig "$statusf"); printf '%s' "$sig" > "$state/.seen-lapsed-flap_status"
+  PATH="$fakebin:$PATH" FM_FAKE_TMUX_WINDOW="$window" FM_FAKE_TMUX_CAPTURE="$capture_file" \
+    FM_STATE_OVERRIDE="$state" FM_CREW_STATE_BIN="$fakebin/fm-crew-state.sh" \
+    FM_BUSY_TURN_MAX_SECS=1 FM_STALE_ESCALATE_SECS=240 \
+    FM_PAUSE_RESURFACE_SECS=240 FM_POLL=1 FM_SIGNAL_GRACE=1 \
+    FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=999999 "$WATCH" >> "$out" &
+  pid=$!
+  i=0
+  while [ "$i" -lt 80 ] && [ -e "$state/.paused-resurfaced-$key" ]; do sleep 0.1; i=$((i + 1)); done
+  reap "$pid"
+  kill "$writer" 2>/dev/null; wait "$writer" 2>/dev/null
+  [ ! -e "$state/.paused-resurfaced-$key" ] \
+    || fail "the re-surface throttle outlived the declaration that created it"
+  [ ! -e "$state/.paused-$key" ] || fail "the paused flag outlived the lapsed declaration"
+  [ ! -e "$state/.paused-rechecked-$key" ] || fail "the pause recheck marker outlived the lapsed declaration"
+  pass "a lapsed declaration clears every pause artifact, even when a flap already removed its paused flag"
+}
+
 # Away mode is excluded from the declared-pause busy absorb on purpose: there
 # the supervise-daemon owns triage and wants the unmodified wake stream. That
 # exclusion is a single disjunct, so it gets its own guard - a busy pane under
@@ -2472,6 +2564,7 @@ test_busy_declared_pause_changing_hash_does_not_wedge_escalate
 test_busy_declared_pause_recheck_throttle_survives_a_ticking_pane
 test_busy_declared_pause_keeps_the_fail_open_surface_when_the_busy_verdict_lifts
 test_busy_declared_pause_resurface_throttle_survives_a_busy_verdict_flap
+test_lapsed_declaration_clears_every_pause_artifact_after_a_flap
 test_afk_busy_declared_pause_still_takes_the_away_mode_wedge_path
 test_nonterminal_stale_not_working_surfaced
 test_nonterminal_stale_paused_absorbed_then_resurfaced

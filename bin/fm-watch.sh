@@ -402,26 +402,36 @@ handle_paused_stale() {  # <window> <task> <hash> [advance-suppressor: 1 default
 # busy/not-busy alternation would otherwise re-arm the recheck on each flap and
 # wake once per flap instead of once per PAUSE_RESURFACE_SECS. So the throttle
 # survives for exactly as long as the crew's own last status still declares the
-# wait; the top-of-loop clear runs only once that declaration has lapsed, and
-# there this drops it with everything else.
-clear_pause_state() {  # <window>
-  local win=$1 key task
+# wait; the top-of-loop clear fires on any key whose declaration has lapsed while
+# ANY pause artifact remains, so nothing this retains can outlive the declaration
+# that created it.
+#
+# <last-status> is the caller's own snapshot of the crew's last status line, so
+# one poll has one verdict on whether the declaration stands, and the O(fleet)
+# window_to_task scan stays out of the poll's hot path. Passing three arguments
+# is what selects the snapshot: an EMPTY <last-status> is a real value (an empty
+# status log declares nothing), so only an omitted one falls back to reading.
+clear_pause_state() {  # <window> [task] [last-status]
+  local win=$1 task=${2:-} last=${3:-} key
   key=${win//:/_}
   key=${key//\//_}
   key=${key//./_}
   rm -f "$STATE/.paused-$key" "$STATE/.paused-rechecked-$key"
-  task=$(window_to_task "$win" "$STATE")
-  if ! status_is_paused_or_captain_held "$(last_status_line "$STATE/$task.status")"; then
+  if [ "$#" -lt 3 ]; then
+    [ -n "$task" ] || task=$(window_to_task "$win" "$STATE")
+    last=$(last_status_line "$STATE/$task.status")
+  fi
+  if ! status_is_paused_or_captain_held "$last"; then
     rm -f "$STATE/.paused-resurfaced-$key"
   fi
 }
 
-clear_pause_tracking() {  # <window>
+clear_pause_tracking() {  # <window> [task] [last-status]
   local win=$1 key
   key=${win//:/_}
   key=${key//\//_}
   key=${key//./_}
-  clear_pause_state "$win"
+  clear_pause_state "$@"
   rm -f "$STATE/.stale-$key" "$STATE/.stale-since-$key" "$STATE/.wedge-escalations-$key"
 }
 
@@ -1065,8 +1075,9 @@ EOF
     key=${key//\//_}
     key=${key//./_}
     last=$(last_status_line "$STATE/$task.status")
-    if ! status_is_paused_or_captain_held "$last" && [ -e "$STATE/.paused-$key" ]; then
-      clear_pause_tracking "$w"
+    if ! status_is_paused_or_captain_held "$last" && { [ -e "$STATE/.paused-$key" ] ||
+      [ -e "$STATE/.paused-rechecked-$key" ] || [ -e "$STATE/.paused-resurfaced-$key" ]; }; then
+      clear_pause_tracking "$w" "$task" "$last"
     fi
     if [ "$kind" = secondmate ] && ! status_is_paused "$last"; then
       continue
@@ -1096,7 +1107,7 @@ EOF
         if [ "$kind" = secondmate ]; then
           case "$(pause_state_class "$w" "$task")" in
             paused) handle_paused_stale "$w" "$task" "$h" ;;
-            *)      clear_pause_tracking "$w" ;;
+            *)      clear_pause_tracking "$w" "$task" "$last" ;;
           esac
         elif afk_present; then
           # Daemon owns triage: one-shot per distinct stale hash, as before.
@@ -1161,7 +1172,7 @@ EOF
             task=$(window_to_task "$w" "$STATE")
             case "$(pause_state_class "$w" "$task")" in
               working)
-                clear_pause_tracking "$w"
+                clear_pause_tracking "$w" "$task" "$last"
                 printf '%s' "$h" > "$sf"
                 date +%s > "$ssf"
                 triage_log "absorbed non-terminal stale (provably working): $w"
@@ -1178,7 +1189,7 @@ EOF
             if [ -e "$pf" ] || status_is_paused_or_captain_held "$(last_status_line "$STATE/$task.status")"; then
               case "$(pause_state_class "$w" "$task")" in
                 paused)  handle_paused_stale "$w" "$task" "$h" ;;
-                working) clear_pause_state "$w"
+                working) clear_pause_state "$w" "$task" "$last"
                          printf '%s' "$h" > "$sf"
                          wedge_timer_check "$w" "$ssf" "non-terminal stale (provably working after a declared pause)" "$ewf"
                          triage_log "absorbed non-terminal stale (provably working): $w" ;;
@@ -1215,7 +1226,7 @@ EOF
       if ! afk_present && status_is_paused_or_captain_held "$(last_status_line "$STATE/$task.status")" && [ "$busy_now" -ne 0 ]; then
         case "$(pause_state_class "$w" "$task")" in
           paused) handle_paused_stale "$w" "$task" "$h" ;;
-          *)      clear_pause_tracking "$w" ;;
+          *)      clear_pause_tracking "$w" "$task" "$last" ;;
         esac
       fi
     fi
