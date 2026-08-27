@@ -168,10 +168,13 @@ fm_proc_root() {
 # (ppid, pgid, sid, exename) that stand in for the `ps -o` fields.
 # Probed against the pid being asked about, because a pid owned by another user
 # is unreadable even where the layout exists, and the `ps` path may still work.
+#
+# Reads the root inline rather than through fm_proc_root: this runs once per
+# fm_proc_field call, so `$(fm_proc_root)` forked a subshell on every
+# process-table read on exactly the platform that pays the highest fork price.
 fm_proc_msys_fields_readable() {  # <pid>
-  local pid=$1 root
-  root=$(fm_proc_root)
-  [ -r "$root/$pid/ppid" ]
+  local pid=$1
+  [ -r "${FM_PROC_ROOT_OVERRIDE:-/proc}/$pid/ppid" ]
 }
 
 # fm_proc_field <pid> <comm|args|ppid|pgid|sid>
@@ -186,16 +189,24 @@ fm_proc_msys_fields_readable() {  # <pid>
 #   ppid -> /proc/<pid>/ppid
 #   pgid -> /proc/<pid>/pgid
 #   sid  -> /proc/<pid>/sid
+#
+# The scalar reads use `{ value=$(< file); } 2>/dev/null` rather than
+# `$(cat file 2>/dev/null)`: bash reads a lone `< file` substitution itself, so
+# the read costs no subprocess, while `cat` cost a fork plus an exec on every
+# ancestry hop. The brace group is load-bearing, not decoration - `< file` sends
+# its own "No such file or directory" to the caller's stderr, which the redirect
+# inside the old substitution used to absorb, and a vanished pid must stay silent
+# for the contract above. Both forms return 1 on a vanished pid.
 fm_proc_field() {  # <pid> <field>
   local pid=$1 field=$2 root value
   case "$pid" in
     ''|*[!0-9]*) return 1 ;;
   esac
-  root=$(fm_proc_root)
+  root=${FM_PROC_ROOT_OVERRIDE:-/proc}
   if fm_proc_msys_fields_readable "$pid"; then
     case "$field" in
       comm)
-        value=$(cat "$root/$pid/exename" 2>/dev/null) || return 1
+        { value=$(< "$root/$pid/exename"); } 2>/dev/null || return 1
         ;;
       args)
         [ -r "$root/$pid/cmdline" ] || return 1
@@ -203,7 +214,7 @@ fm_proc_field() {  # <pid> <field>
         value=${value%"${value##*[![:space:]]}"}
         ;;
       ppid|pgid|sid)
-        value=$(cat "$root/$pid/$field" 2>/dev/null) || return 1
+        { value=$(< "$root/$pid/$field"); } 2>/dev/null || return 1
         ;;
       *)
         return 1
@@ -241,8 +252,7 @@ fm_pid_identity() {  # <pid>
   # Read inline rather than through fm_proc_root deliberately: this function runs
   # inside the 0.2s confirm and 0.5s attach polls, and a command substitution
   # would fork a subshell on every call on exactly the platform this file's header
-  # names as paying the highest fork price. fm_proc_root stays the spelling
-  # everywhere that is not in that hot loop.
+  # names as paying the highest fork price.
   proc_root=${FM_PROC_ROOT_OVERRIDE:-/proc}
   if [ -r "$proc_root/$pid/stat" ] && [ -r "$proc_root/$pid/cmdline" ]; then
     stat_line=$(cat "$proc_root/$pid/stat" 2>/dev/null) || return 1

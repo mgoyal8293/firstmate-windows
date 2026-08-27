@@ -41,6 +41,10 @@ Two measurement rules matter and were both violated by earlier attempts at this:
 
 An empty home is the floor: no tasks, no projects, an absent backlog, nothing to reconcile and nothing to sync.
 
+Both count tables in this section predate the change recorded in [`windows-session-lock-cost.md`](windows-session-lock-cost.md), dated 2026-08-27.
+That change removed the two `$(fm_proc_root)` command substitutions paid by every `fm_proc_field` call, including on the `ps` fallback path the attribution table below ranks at 69 reads per session start, so it lowers the blocking-path count on every platform and not only under MSYS.
+The path has not been re-counted since, so the tables here remain correct as of the commits they name and are no longer current.
+
 | Variant | Blocking-path forks | Detached network stage | Total |
 |---|---|---|---|
 | `main` at `6d7dc9a` | 1012 | 555 | 1567 |

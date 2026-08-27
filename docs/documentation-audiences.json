@@ -390,6 +390,10 @@
       "audience": "maintainer-verification"
     },
     {
+      "path": "docs/verification/windows-session-lock-cost.md",
+      "audience": "maintainer-verification"
+    },
+    {
       "path": "docs/watcher-continuity.md",
       "audience": "operator-current"
     },
