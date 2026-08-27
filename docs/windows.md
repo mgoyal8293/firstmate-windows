@@ -117,10 +117,14 @@ The remaining reductions replace exec'd helpers with the parameter expansions th
 
 Two counted facts shape how those are written, because both are easy to get backwards.
 A command substitution forks even around a shell builtin, so `$(...)` is never free and wrapping a helper in one gives the fork back.
-And `$(<f)` is free only without a redirection attached: `$(<f 2>/dev/null)` costs two forks per call rather than zero, because the redirection defeats bash's special case, and it does not even suppress the error - so an unreadable file is handled by testing `[ -r f ]` first.
+And `$(<f)` is free only without a redirection attached: `$(<f 2>/dev/null)` costs two forks per call rather than zero, because the redirection defeats bash's special case, and it does not even suppress the error.
+Which form a given read then takes - `[ -r f ]` first, or `{ x=$(<f); } 2>/dev/null` where the file can vanish between that test and the read, as a pid exiting mid-walk does - is measured and owned by [`verification/session-start-fork-profile.md`](verification/session-start-fork-profile.md).
 
 This is a Windows-motivated fix to portable code, so the count is measured on Linux and the platform only changes what a fork costs.
 A Linux timing run would show nothing.
+
+That was a session-start count, and the same class of fix later reached the path a turn pays: one `fm_proc_field` scalar read on the `/proc` path - the read every ancestry walk, reaper and lock check makes here - went from three child processes to none, and the session-lock ownership check stopped paying its ancestry walk more than once per process.
+[`verification/windows-session-lock-cost.md`](verification/windows-session-lock-cost.md) records those counts, the Windows timings taken beside them, and what was deliberately left on the table.
 
 ## Security note: the private-file mode assertion
 
@@ -236,6 +240,9 @@ path rather than replacing it.**
   that path; it pays where one process asks more than once, such as the
   stale-lock recovery branch in `bin/fm-claude-stop-autoarm.sh` or the repeated
   current-session checks in `bin/fm-turnend-guard-cursor.sh`.
+  [`verification/windows-session-lock-cost.md`](verification/windows-session-lock-cost.md)
+  is the evidence: the walk counts the memo removes, and the driven case that
+  rules out consulting the token first.
 
 A token proves identity, not liveness, so two things supply the rest:
 
