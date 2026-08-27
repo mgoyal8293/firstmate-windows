@@ -1,0 +1,22 @@
+Independent reproduction of the limitation the author discloses and deliberately
+leaves out of scope (fm_platform_symlink_probe, bin/fm-proc-lib.sh).
+
+Method: run tests/fm-windows-portability.test.sh with the MSYS-shaped readlink
+rewrite applied HOST-WIDE rather than scoped to the points-to-owner fixture, i.e.
+the configuration in which the points-to-owner case reddens.
+
+  $ PATH=<stub bin>:$PATH TMPDIR=<non-round-tripping temp> \
+      bash tests/fm-windows-portability.test.sh
+
+  ok - fm-proc-lib.sh: the source guard skips repeat sources without blinding FM_PLATFORM_UNAME_OVERRIDE
+  ok - fm_proc_field: reads comm/args/ppid/pgid/sid from the MSYS /proc layout
+  ok - fm_proc_field: falls back to ps -o where the /proc scalar files are absent
+  ok - fm_proc_field: refuses an empty or non-numeric pid
+  ok - fm_proc_field: refuses a field it has no /proc equivalent for
+  not ok - symlink-probe: a filesystem that supports symlinks must probe true
+
+Result: the probe fails FIRST and stops the suite, exactly as the author reports
+in point (g). It carries the same raw-string readlink compare and is fragile the
+same way. Confirmed as a genuine pre-existing condition, not introduced here, and
+consistent with the stated decision to report rather than grow the diff across
+the fm-path-lib.sh -> fm-proc-lib.sh library boundary.

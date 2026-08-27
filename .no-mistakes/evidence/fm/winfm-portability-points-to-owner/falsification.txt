@@ -1,0 +1,41 @@
+
+--------------------------------------------------------------
+SHIPPED - the fix and the guard as they land
+--------------------------------------------------------------
+$ bash tests/fm-windows-portability.test.sh
+ok - fm_lock_same_path: widens a mount-aliased and an 8.3 short-name spelling through cygpath and stays strict everywhere else
+  suite exit=0   cases passed=17
+
+[protection removed] fm_lock_same_path now resolves with: cygpath -m -- "$a"
+
+--------------------------------------------------------------
+FIX REMOVED - '-l' dropped from both cygpath calls
+--------------------------------------------------------------
+$ bash tests/fm-windows-portability.test.sh
+not ok - same-path: the short (8.3) and long spellings of one directory must resolve to the same location, or fm_lock_try_create never validates its own link and fm_lock_acquire_wait spins forever
+  suite exit=1   cases passed=12
+
+[protection removed] the compare now ignores the owner suffix - an OVER-WIDENING resolver
+
+--------------------------------------------------------------
+OVER-WIDENED - the resolver made sloppier instead of correct
+--------------------------------------------------------------
+$ bash tests/fm-windows-portability.test.sh
+not ok - same-path: SECURITY - two genuinely different owner directories must never resolve the same
+  suite exit=1   cases passed=12
+
+[protection removed] the 8.3 stub now expands with or without -l, so the case could pass for the wrong reason
+
+--------------------------------------------------------------
+FIXTURE MADE VACUOUS - the guard's own anti-vacuity assertion
+--------------------------------------------------------------
+$ bash tests/fm-windows-portability.test.sh
+not ok - same-path: fixture is vacuous - the stub must render the short and long spellings differently without -l
+  suite exit=1   cases passed=12
+
+--------------------------------------------------------------
+RESTORED - back to the shipped fix and guard
+--------------------------------------------------------------
+$ bash tests/fm-windows-portability.test.sh
+ok - fm_lock_same_path: widens a mount-aliased and an 8.3 short-name spelling through cygpath and stays strict everywhere else
+  suite exit=0   cases passed=17

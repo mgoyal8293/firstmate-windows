@@ -1,0 +1,35 @@
+The two spellings this host hands the lock layer:
+  short (what the caller has): /tmp/fm-hang-repro/FMLOCK~1/home/state
+  long  (what readlink says):  /tmp/fm-hang-repro/fmlockdemo-verylongdirname-1234/home/state
+
+$ readlink of a lock link stored at the short spelling
+  ln -s stored: /tmp/fm-hang-repro/FMLOCK~1/home/state/probe.owner
+  readlink    : /tmp/fm-hang-repro/fmlockdemo-verylongdirname-1234/home/state/probe.owner
+  -> the strict string compare in fm_lock_points_to_owner cannot match,
+     so the whole verdict falls to fm_lock_same_path.
+
+$ cygpath, both spellings:
+  -m    short: C:/tmp/fm-hang-repro/FMLOCK~1/home/state
+  -m    long : C:/tmp/fm-hang-repro/fmlockdemo-verylongdirname-1234/home/state
+  -m -l short: C:/tmp/fm-hang-repro/fmlockdemo-verylongdirname-1234/home/state
+  -m -l long : C:/tmp/fm-hang-repro/fmlockdemo-verylongdirname-1234/home/state
+
+fm_lock_same_path resolver in bin/fm-path-lib.sh: cygpath -m -- "$a"
+
+==============================================================
+BEFORE - resolved with 'cygpath -m', no -l (the pre-fix code)
+==============================================================
+$ timeout 25 fm-lock.sh      # FM_STATE_OVERRIDE=<short spelling>/state
+  *** NOTHING PRINTED. Still spinning after 25s; killed by timeout. ***
+  *** fm_lock_acquire_wait never returns - firstmate wedges, silently. ***
+  session lock on disk: <never created>
+
+fm_lock_same_path resolver in bin/fm-path-lib.sh: cygpath -m -l -- "$a"
+
+==============================================================
+AFTER - resolved with 'cygpath -m -l' (the shipped fix)
+==============================================================
+$ timeout 25 fm-lock.sh      # FM_STATE_OVERRIDE=<short spelling>/state
+lock acquired: harness pid 1231467
+  exit=0 after 0s
+  session lock on disk: present, records pid 1231467

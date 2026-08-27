@@ -1,0 +1,17 @@
+Simulated host, measured through the stubs themselves:
+  TMPDIR                 : /tmp/fm-pto-sim/c/Users/probe/AppData/Local/Temp
+  cygpath -m  of TMPDIR  : C:/Temp/fm-lock-points-to-owner.demo
+  cygpath -u  of that    : /tmp/fm-pto-sim/tmp/fm-lock-points-to-owner.demo
+  ln -s stored           : /tmp/fm-pto-sim/c/Users/probe/AppData/Local/Temp/fm-lock-points-to-owner.demo/owner
+  readlink answers       : /tmp/fm-pto-sim/tmp/fm-lock-points-to-owner.demo/owner
+  -> readlink's answer is cygpath's round-trip, NOT the built spelling.
+
+==============================================================
+BEFORE - fixture built at the TMPDIR spelling (the pre-change fixture)
+==============================================================
+not ok - points-to-owner: an exact readlink match must be accepted without any resolver
+
+==============================================================
+AFTER - fixture built at the spelling this host hands back (shipped)
+==============================================================
+ok - fm_lock_points_to_owner: the strict readlink compare remains the primary, unresolved verdict
