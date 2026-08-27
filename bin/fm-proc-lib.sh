@@ -169,10 +169,9 @@ fm_proc_root() {
 # Probed against the pid being asked about, because a pid owned by another user
 # is unreadable even where the layout exists, and the `ps` path may still work.
 #
-# Reads the root inline for the reason fm_pid_identity's note below gives: this
-# runs once per fm_proc_field call, so `$(fm_proc_root)` forked a subshell on
-# every process-table read on exactly the platform that pays the highest fork
-# price. fm_proc_root stays the spelling everywhere that is not in that hot loop.
+# Reads the root inline rather than through fm_proc_root: this runs once per
+# fm_proc_field call, so `$(fm_proc_root)` forked a subshell on every
+# process-table read on exactly the platform that pays the highest fork price.
 fm_proc_msys_fields_readable() {  # <pid>
   local pid=$1
   [ -r "${FM_PROC_ROOT_OVERRIDE:-/proc}/$pid/ppid" ]
@@ -253,8 +252,7 @@ fm_pid_identity() {  # <pid>
   # Read inline rather than through fm_proc_root deliberately: this function runs
   # inside the 0.2s confirm and 0.5s attach polls, and a command substitution
   # would fork a subshell on every call on exactly the platform this file's header
-  # names as paying the highest fork price. fm_proc_root stays the spelling
-  # everywhere that is not in that hot loop.
+  # names as paying the highest fork price.
   proc_root=${FM_PROC_ROOT_OVERRIDE:-/proc}
   if [ -r "$proc_root/$pid/stat" ] && [ -r "$proc_root/$pid/cmdline" ]; then
     stat_line=$(cat "$proc_root/$pid/stat" 2>/dev/null) || return 1

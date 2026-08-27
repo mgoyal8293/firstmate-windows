@@ -26,6 +26,75 @@ Two shapes, because they answer different questions and one of them flatters the
 
 The `.lock` fixture holds a pid that is not this process's ancestor, so the check runs to a verdict rather than short-circuiting.
 
+## The harnesses, so this page can be re-run
+
+The staging directory these runs used is gone, so both harnesses are reproduced here rather than referenced.
+Stage a copy of `bin/` from each revision being compared on a local NTFS volume, not under a `\\wsl.localhost` path, and invoke Git Bash by full path because this box sets `interop.appendWindowsPath=false`.
+Point `<state-dir>` at a fixture whose `.lock` holds a pid that is not the caller's ancestor.
+
+The in-process loop harness, which produces the component-costs table and the contract block:
+
+```sh
+#!/usr/bin/env bash
+# measure.sh <bin-dir> <state-dir>
+BIN=$1 STATE=$2
+. "$BIN/fm-proc-lib.sh"
+. "$BIN/fm-session-lock-lib.sh"
+
+time_loop() {  # <n> <label> <command...>
+  local n=$1 label=$2 start end i
+  shift 2
+  start=$(date +%s%N)
+  for ((i = 0; i < n; i++)); do "$@" >/dev/null 2>&1; done
+  end=$(date +%s%N)
+  awk -v ns="$((end - start))" -v n="$n" -v l="$label" \
+    'BEGIN { printf "%s %.2f ms\n", l, ns / n / 1000000 }'
+}
+
+field_through_subst() { local v; v=$(fm_proc_field $$ ppid); }
+
+time_loop 30 'fm_proc_field ppid direct'  fm_proc_field $$ ppid
+time_loop 30 'fm_proc_field ppid $( )'    field_through_subst
+time_loop 30 'fm_proc_field comm direct'  fm_proc_field $$ comm
+time_loop 15 'fm_harness_ancestry_pids'   fm_harness_ancestry_pids
+time_loop 15 'fm_session_ancestry_unavailable'  fm_session_ancestry_unavailable
+time_loop 15 'fm_session_lock_owned_by_self'    fm_session_lock_owned_by_self "$STATE"
+
+show()   { local l=$1 out rc; shift; out=$("$@" 2>&1); rc=$?; printf '%s=[%s] rc=%s\n' "$l" "$out" "$rc"; }
+refuse() { local l=$1 out rc; shift; out=$("$@" 2>&1); rc=$?; printf '%s rc=%s out=[%s]\n' "$l" "$rc" "$out"; }
+
+show ppid fm_proc_field $$ ppid
+show comm fm_proc_field $$ comm
+printf 'args=[%s]\n' "$(fm_proc_field $$ args 2>&1)"
+printf 'pgid=[%s] sid=[%s]\n' "$(fm_proc_field $$ pgid 2>&1)" "$(fm_proc_field $$ sid 2>&1)"
+refuse dead-pid   fm_proc_field 999999 ppid
+refuse empty-pid  fm_proc_field '' ppid
+refuse nonnum-pid fm_proc_field abc ppid
+refuse bad-field  fm_proc_field $$ nosuchfield
+refuse ancestry_unavailable fm_session_ancestry_unavailable
+```
+
+The fresh-process harness, which produces the two-check and source-only rows:
+
+```sh
+#!/usr/bin/env bash
+# perturn.sh <bin-dir> <state-dir> <checks: 0 or 2>
+BIN=$1 STATE=$2 CHECKS=$3
+start=$(date +%s%N)
+for i in $(seq 1 10); do
+  bash -c '
+    . "$1/fm-session-lock-lib.sh"
+    [ "$3" -eq 0 ] && exit 0
+    fm_session_lock_owned_by_self "$2" >/dev/null 2>&1
+    fm_session_lock_owned_by_self "$2" >/dev/null 2>&1
+  ' _ "$BIN" "$STATE" "$CHECKS"
+done
+end=$(date +%s%N)
+awk -v ns="$((end - start))" 'BEGIN { printf "%.1f ms per iteration\n", ns / 10 / 1000000 }'
+```
+
+Nothing is carried between iterations of the second harness, so each one pays a cold memo exactly as a fresh hook process does.
+
 ## Two-check cost, measured
 
 | Shape | As shipped | Fixed |
@@ -35,7 +104,9 @@ The `.lock` fixture holds a pid that is not this process's ancestor, so the chec
 
 Subtracting the sourcing cost, the two checks themselves fall from about 2,997 ms to about 1,129 ms, a 2.7x reduction.
 The sourcing line is quoted to keep that subtraction honest; the 36 ms difference between its two columns is run-to-run noise on this host, not an effect of the change.
-This is the two-check scenario, which is the autoarm stale-lock recovery branch, `bin/fm-lock.sh` where the predicate is asked again after token acquisition declines, and `current_session_still_ours` in `bin/fm-turnend-guard-cursor.sh`.
+This is the two-check scenario, which is the autoarm stale-lock recovery branch and `current_session_still_ours` in `bin/fm-turnend-guard-cursor.sh`.
+Those are the callers that ask `fm_session_lock_owned_by_self` more than once inside one process, which is the shape measured here.
+`bin/fm-lock.sh` is a repeat-PREDICATE path and not an instance of this shape: it never calls `fm_session_lock_owned_by_self`, it calls `fm_session_ancestry_unavailable` twice, and no measured figure on this page applies to it.
 It is NOT what a steady-state turn pays, and an earlier revision of this page quoted its 1.87 s difference as a per-turn saving.
 That claim is retracted here; the corrected per-turn figure is in the next section.
 
@@ -45,8 +116,13 @@ A steady-state turn makes exactly ONE ownership check, because the second check 
 No one-check run was performed, so the figures here are derived from the measured rows above rather than measured directly, and neither may be quoted as a measurement.
 
 As shipped there is no memo, so the two checks cost about 2,997 ms independently and one check is half of that: **about 1,498 ms**.
-Fixed, the memo reduces the second check to a variable read, so the measured 1,129 ms for two checks is essentially the cost of the one cold check: **about 1,129 ms**.
+Fixed, the memo reduces the second check's ancestry walk to a variable read, so the measured 1,129 ms for two checks is close to the cost of the one cold check: **about 1,129 ms**.
 The difference is **roughly 370 ms removed from a steady-state turn**, and all of it is the `fm_proc_field` fork removal, because on a one-check turn the memo has no second call to save.
+
+That 1,129 ms is an over-estimate of a single check rather than an exact one.
+`fm_session_lock_owned_by_self` reads `state/.lock` through a `cat` command substitution before it ever reaches the memoised predicate, so the second check still pays a fork of its own that the memo cannot remove.
+The residual pushes the true fixed one-check figure down, which makes roughly 370 ms a conservative floor on the steady-state saving rather than a midpoint.
+No more precise figure is given, because no one-check run was measured.
 The memo's own justification is call count on the multi-check paths, not this per-turn figure.
 
 ## Component costs, in-process loop
@@ -63,11 +139,15 @@ The memo's own justification is call count on the multi-check paths, not this pe
 Both amortised rows are loop artifacts and must not be quoted as per-turn savings; the derived per-turn figure above is the claim.
 
 The two `fm_proc_field` rows differ by about one MSYS fork, which is the caller's own command substitution and is outside this function's reach.
-That row is why the direct 87x is not the improvement a caller sees: **4.9x is**, and it is the figure that corroborates the 4.5x the audit predicted.
+That row is why the direct 87x is not the improvement a caller sees: **4.9x is**, and it is the figure that corroborates the 4.5x the audit measured on its own prototype.
 
 ## Contract preserved
 
-Both variants were driven through the same inputs in the same run and printed identical results, so the timing change carries no behaviour change:
+Both variants were driven through the same inputs in the same run, and the contract-bearing facts were identical between them, so the timing change carries no behaviour change.
+Identical across the two runs: `comm`, `ppid`, and all four return-code and silence cases.
+`pgid`, `sid` and the `args` line are per-invocation values and are quoted for output SHAPE only, never for equality.
+A different process necessarily has a different pgid and sid, and `args` carries the staging path of whichever variant was being measured, so those three lines differed between the runs by nature.
+The block below is the fixed run:
 
 ```console
 ppid=[1] rc=0

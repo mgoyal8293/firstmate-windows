@@ -160,7 +160,7 @@ test_ancestry_unavailable_requires_both_platform_and_empty_walk() {
 #
 # Both halves of the memo are pinned, because they fail for different reasons.
 # The first is the saving: the walk must be asked exactly once no matter how many
-# times the predicate is. Remove the memo and the counter reads 2.
+# times the predicate is. Remove the memo and the counter reads 3.
 test_ancestry_unavailable_is_memoised_and_the_verdict_is_unchanged() {
   local out
   out=$(

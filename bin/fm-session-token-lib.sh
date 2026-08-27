@@ -213,7 +213,8 @@ fm_session_token_held_by_other() {  # <state-dir>
 # that recovery branch, bin/fm-lock.sh where fm_session_token_acquire_eligible
 # declines and the predicate is asked again directly, and current_session_still_ours
 # in bin/fm-turnend-guard-cursor.sh, which re-checks on every park and rearm step.
-# One walk is most of a second on Windows, so each repeat call was that again
+# With the fork removal in place the recorded fixed fm_harness_ancestry_pids is
+# 392.73 ms, so each repeat call the memo saves is about 0.4 s on Windows
 # (docs/verification/windows-session-lock-cost.md).
 #
 # A memo is the safe fix and REORDERING the caller to try the token first is not:
