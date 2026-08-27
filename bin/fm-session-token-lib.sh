@@ -221,6 +221,8 @@ fm_session_token_held_by_other() {  # <state-dir>
 # a process's own ancestry is fixed for its lifetime, so a second answer cannot
 # honestly differ from the first, while consulting the token first would answer a
 # DIFFERENT question in the case where the walk does resolve on Windows.
+# That case is driven under "Decision preservation" in
+# docs/verification/windows-session-lock-cost.md.
 #
 # Keyed on the platform seam rather than a bare "computed" flag, the same rule
 # bin/fm-proc-lib.sh's source guard uses: a test that drives FM_PROC_UNAME_S to a
