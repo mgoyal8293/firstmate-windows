@@ -1465,6 +1465,598 @@ test_busy_pane_default_turn_age_bound_is_3600s() {
   pass "the production default busy-turn-age bound is 3600s (5min under does not wedge, 66min over does)"
 }
 
+# --- declared bounded wait on a BUSY pane -----------------------------------
+# 2026-08 firstmate-windows supervision-noise incident: the busy-pane triage
+# above consults only the completed-turn age, never the crew's OWN declaration,
+# so a worker that honestly declared a bounded external wait (paused:) or was
+# captain-held kept wedge-escalating every STALE_ESCALATE_SECS for as long as
+# the wait lasted - measured at a dozen false escalations across three hours of
+# one healthy task, each costing a supervisor turn. A bounded external wait
+# renders nothing to the pane while the harness still shows busy (a queued
+# upstream CI run, a rate-limit reset, an unpublished upstream release, a vendor
+# incident) and so is indistinguishable from a freeze by pane bytes alone; the
+# declaration is exactly the evidence the busy path was missing. A declared bounded wait PLUS a genuinely busy harness is the least
+# wedge-like state the watcher can observe, so it takes the same long
+# PAUSE_RESURFACE_SECS recheck a declared pause already gets when idle.
+# These cases pin BOTH halves - the noise is gone, and everything that must
+# still escalate still does.
+
+test_busy_declared_pause_does_not_wedge_escalate() {
+  local dir state fakebin out capture_file window key pane_hash sig pid
+  dir=$(make_case busy-declared-pause); state="$dir/state"; fakebin="$dir/fakebin"
+  out="$dir/watch.out"; capture_file="$dir/pane.txt"; window="test:fm-busy-paused"
+  printf 'Working...' > "$capture_file"
+  printf 'window=%s\nkind=ship\nharness=pi\n' "$window" > "$state/busy-paused.meta"
+  record_pi_busy "$state" busy-paused
+  printf 'paused: waiting on the upstream CI run to finish\n' > "$state/busy-paused.status"
+  sig=$(seen_sig "$state/busy-paused.status"); printf '%s' "$sig" > "$state/.seen-busy-paused_status"
+  key=$(printf '%s' "$window" | tr ':/.' '___')
+  pane_hash=$(hash_text "Working...")
+  printf '%s' "$pane_hash" > "$state/.hash-$key"
+  printf '1\n' > "$state/.count-$key"
+  # No completed turn ever recorded: age the spawn record past the bound, and
+  # hand the poll a wedge timer ALREADY past the escalation threshold. Pre-fix
+  # this is precisely the state that fired a wake every STALE_ESCALATE_SECS for
+  # the entire declared wait.
+  touch -t 200001010000 "$state/busy-paused.meta"
+  echo $(( $(date +%s) - 500 )) > "$state/.stale-since-$key"
+
+  PATH="$fakebin:$PATH" FM_FAKE_TMUX_WINDOW="$window" FM_FAKE_TMUX_CAPTURE="$capture_file" \
+    FM_STATE_OVERRIDE="$state" FM_BUSY_TURN_MAX_SECS=1 FM_STALE_ESCALATE_SECS=240 \
+    FM_PAUSE_RESURFACE_SECS=999999 FM_POLL=1 FM_SIGNAL_GRACE=1 \
+    FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=999999 "$WATCH" > "$out" &
+  pid=$!
+  if ! wait_live "$pid" 40; then
+    reap "$pid"; fail "a busy worker under a declared bounded wait wedge-escalated: $(cat "$out")"
+  fi
+  [ ! -s "$out" ] || fail "a busy declared pause printed a wake reason: $(cat "$out")"
+  [ ! -s "$state/.wake-queue" ] || fail "a busy declared pause enqueued a wake"
+  [ -e "$state/.paused-$key" ] || fail "a busy declared pause did not record the paused flag"
+  [ ! -e "$state/.stale-since-$key" ] || fail "a busy declared pause left the wedge timer running"
+  reap "$pid"
+  pass "a busy worker under a declared bounded wait takes the long recheck cadence, not the 240s wedge timer"
+}
+
+# The declared wait is ABSORBED, never silenced: past PAUSE_RESURFACE_SECS the
+# same recheck a declared idle pause gets still fires, labeled as a pause
+# recheck rather than a wedge, so a wait that quietly rots cannot hide forever.
+test_busy_declared_pause_still_rechecks_on_the_long_cadence() {
+  local dir state fakebin out capture_file window key pane_hash sig pid back statusf
+  dir=$(make_case busy-paused-recheck); state="$dir/state"; fakebin="$dir/fakebin"
+  out="$dir/watch.out"; capture_file="$dir/pane.txt"; window="test:fm-busy-paused-recheck"
+  printf 'Working...' > "$capture_file"
+  printf 'window=%s\nkind=ship\nharness=pi\n' "$window" > "$state/busy-recheck.meta"
+  record_pi_busy "$state" busy-recheck
+  statusf="$state/busy-recheck.status"
+  printf 'paused: waiting on an upstream release to be published\n' > "$statusf"
+  key=$(printf '%s' "$window" | tr ':/.' '___')
+  pane_hash=$(hash_text "Working...")
+  printf '%s' "$pane_hash" > "$state/.hash-$key"
+  printf '1\n' > "$state/.count-$key"
+  touch -t 200001010000 "$state/busy-recheck.meta"
+  # Age the declaration itself past the long recheck window.
+  back=$(( $(date +%s) - 500 ))
+  if [ "$(uname)" = Darwin ]; then touch -mt "$(date -r "$back" '+%Y%m%d%H%M.%S')" "$statusf"
+  else touch -m -d "@$back" "$statusf"; fi
+  sig=$(seen_sig "$statusf"); printf '%s' "$sig" > "$state/.seen-busy-recheck_status"
+
+  PATH="$fakebin:$PATH" FM_FAKE_TMUX_WINDOW="$window" FM_FAKE_TMUX_CAPTURE="$capture_file" \
+    FM_STATE_OVERRIDE="$state" FM_BUSY_TURN_MAX_SECS=1 FM_STALE_ESCALATE_SECS=240 \
+    FM_PAUSE_RESURFACE_SECS=240 FM_POLL=1 FM_SIGNAL_GRACE=1 \
+    FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=999999 "$WATCH" > "$out" &
+  pid=$!
+  wait_for_exit "$pid" 40 || fail "a busy declared pause past the recheck window never re-surfaced: $(cat "$out")"
+  grep -F "stale: $window" "$out" >/dev/null || fail "the busy paused recheck did not print a stale wake"
+  grep -F "awaiting external" "$out" >/dev/null || fail "the busy paused recheck was not labeled a paused/awaiting-external recheck"
+  grep -F "possible wedge" "$out" >/dev/null && fail "a busy declared pause was mislabeled a possible wedge"
+  [ -e "$state/.paused-resurfaced-$key" ] || fail "the busy paused recheck throttle marker was not recorded"
+  pass "a busy declared pause is absorbed but still re-surfaces for confirmation on the long cadence"
+}
+
+# The guard is scoped to the declaration and nothing else: the SAME busy fixture
+# with an ordinary working: line still wedge-escalates. This is the case whose
+# failure mode is silent supervision loss, so it is asserted directly rather
+# than inferred from the paused cases above.
+test_busy_without_declared_pause_still_wedge_escalates() {
+  local dir state fakebin out capture_file window key pane_hash sig pid
+  dir=$(make_case busy-undeclared-wedge); state="$dir/state"; fakebin="$dir/fakebin"
+  out="$dir/watch.out"; capture_file="$dir/pane.txt"; window="test:fm-busy-undeclared"
+  printf 'Working...' > "$capture_file"
+  printf 'window=%s\nkind=ship\nharness=pi\n' "$window" > "$state/busy-undeclared.meta"
+  record_pi_busy "$state" busy-undeclared
+  printf 'working: setup complete\n' > "$state/busy-undeclared.status"
+  sig=$(seen_sig "$state/busy-undeclared.status"); printf '%s' "$sig" > "$state/.seen-busy-undeclared_status"
+  key=$(printf '%s' "$window" | tr ':/.' '___')
+  pane_hash=$(hash_text "Working...")
+  printf '%s' "$pane_hash" > "$state/.hash-$key"
+  printf '1\n' > "$state/.count-$key"
+  touch -t 200001010000 "$state/busy-undeclared.meta"
+  echo $(( $(date +%s) - 500 )) > "$state/.stale-since-$key"
+
+  PATH="$fakebin:$PATH" FM_FAKE_TMUX_WINDOW="$window" FM_FAKE_TMUX_CAPTURE="$capture_file" \
+    FM_STATE_OVERRIDE="$state" FM_BUSY_TURN_MAX_SECS=1 FM_STALE_ESCALATE_SECS=240 \
+    FM_PAUSE_RESURFACE_SECS=999999 FM_POLL=1 FM_SIGNAL_GRACE=1 \
+    FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=999999 "$WATCH" > "$out" &
+  pid=$!
+  wait_for_exit "$pid" 40 || fail "a busy worker with no declared wait did not wedge-escalate: $(cat "$out")"
+  grep -F "stale: $window" "$out" >/dev/null || fail "the undeclared busy wedge did not print a stale wake"
+  grep -F "possible wedge" "$out" >/dev/null || fail "the undeclared busy wedge was not flagged a possible wedge"
+  pass "a busy worker with no declared wait still wedge-escalates exactly as before"
+}
+
+# A declaration cannot disable wedge detection for the rest of the task: once
+# the crew stops declaring the wait, the very next poll resumes the ordinary
+# wedge timer, and a genuinely frozen worker escalates from there.
+test_busy_wedge_escalation_resumes_when_the_declared_pause_is_lifted() {
+  local dir state fakebin out capture_file window key pane_hash sig pid statusf
+  dir=$(make_case busy-pause-lifted); state="$dir/state"; fakebin="$dir/fakebin"
+  out="$dir/watch.out"; capture_file="$dir/pane.txt"; window="test:fm-busy-lifted"
+  printf 'Working...' > "$capture_file"
+  printf 'window=%s\nkind=ship\nharness=pi\n' "$window" > "$state/busy-lifted.meta"
+  record_pi_busy "$state" busy-lifted
+  statusf="$state/busy-lifted.status"
+  printf 'paused: waiting on the provider rate limit to reset\n' > "$statusf"
+  sig=$(seen_sig "$statusf"); printf '%s' "$sig" > "$state/.seen-busy-lifted_status"
+  key=$(printf '%s' "$window" | tr ':/.' '___')
+  pane_hash=$(hash_text "Working...")
+  printf '%s' "$pane_hash" > "$state/.hash-$key"
+  printf '1\n' > "$state/.count-$key"
+  touch -t 200001010000 "$state/busy-lifted.meta"
+
+  # Phase A: while the wait stands, the busy pane is absorbed on the long cadence.
+  PATH="$fakebin:$PATH" FM_FAKE_TMUX_WINDOW="$window" FM_FAKE_TMUX_CAPTURE="$capture_file" \
+    FM_STATE_OVERRIDE="$state" FM_BUSY_TURN_MAX_SECS=1 FM_STALE_ESCALATE_SECS=240 \
+    FM_PAUSE_RESURFACE_SECS=999999 FM_POLL=1 FM_SIGNAL_GRACE=1 \
+    FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=999999 "$WATCH" > "$out" &
+  pid=$!
+  if ! wait_live "$pid" 30; then
+    reap "$pid"; fail "phase A: the standing declared wait wedge-escalated: $(cat "$out")"
+  fi
+  [ -e "$state/.paused-$key" ] || fail "phase A: the paused flag was not recorded"
+  reap "$pid"
+  ack_stopped_cycle "$state" || fail "could not acknowledge the intentional phase-A stop"
+
+  # Phase B: the wait clears - the crew's own log stops declaring it - so the
+  # ordinary busy wedge timer must start again.
+  printf 'working: rate limit cleared, back on the fix\n' >> "$statusf"
+  sig=$(seen_sig "$statusf"); printf '%s' "$sig" > "$state/.seen-busy-lifted_status"
+  : > "$out"
+  PATH="$fakebin:$PATH" FM_FAKE_TMUX_WINDOW="$window" FM_FAKE_TMUX_CAPTURE="$capture_file" \
+    FM_STATE_OVERRIDE="$state" FM_BUSY_TURN_MAX_SECS=1 FM_STALE_ESCALATE_SECS=999 \
+    FM_PAUSE_RESURFACE_SECS=999999 FM_POLL=1 FM_SIGNAL_GRACE=1 \
+    FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=999999 "$WATCH" > "$out" &
+  pid=$!
+  if ! wait_live "$pid" 30; then
+    reap "$pid"; fail "phase B: the lifted pause escalated before the wedge threshold: $(cat "$out")"
+  fi
+  [ -s "$state/.stale-since-$key" ] || fail "phase B: lifting the declared wait did not restart the wedge timer"
+  [ ! -e "$state/.paused-$key" ] || fail "phase B: the paused flag survived the lifted declaration"
+  reap "$pid"
+  ack_stopped_cycle "$state" || fail "could not acknowledge the intentional phase-B stop"
+
+  # Phase C: with the timer running and past the threshold, the frozen worker
+  # escalates exactly as an undeclared one would.
+  echo $(( $(date +%s) - 500 )) > "$state/.stale-since-$key"
+  : > "$out"
+  PATH="$fakebin:$PATH" FM_FAKE_TMUX_WINDOW="$window" FM_FAKE_TMUX_CAPTURE="$capture_file" \
+    FM_STATE_OVERRIDE="$state" FM_BUSY_TURN_MAX_SECS=1 FM_STALE_ESCALATE_SECS=240 \
+    FM_PAUSE_RESURFACE_SECS=999999 FM_POLL=1 FM_SIGNAL_GRACE=1 \
+    FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=999999 "$WATCH" > "$out" &
+  pid=$!
+  wait_for_exit "$pid" 40 || fail "phase C: a frozen worker whose declared wait was lifted never escalated: $(cat "$out")"
+  grep -F "possible wedge" "$out" >/dev/null || fail "phase C: the resumed escalation was not flagged a possible wedge"
+  pass "lifting the declared wait resumes the ordinary wedge timer, and a frozen worker escalates from there"
+}
+
+# The second busy call site: a harness whose footer ticks (Pi's elapsed timer)
+# never repeats a pane hash, so every poll takes the new-hash branch instead of
+# the stable-hash one. The declared wait must be honored there too.
+test_busy_declared_pause_changing_hash_does_not_wedge_escalate() {
+  local dir state fakebin out capture_file window key sig pid writer
+  dir=$(make_case busy-paused-ticking); state="$dir/state"; fakebin="$dir/fakebin"
+  out="$dir/watch.out"; capture_file="$dir/pane.txt"; window="test:fm-busy-paused-ticking"
+  printf 'Working... (0.0s)' > "$capture_file"
+  printf 'window=%s\nkind=ship\nharness=pi\n' "$window" > "$state/busy-tickpaused.meta"
+  record_pi_busy "$state" busy-tickpaused
+  printf 'paused: waiting on a queued upstream CI run\n' > "$state/busy-tickpaused.status"
+  sig=$(seen_sig "$state/busy-tickpaused.status"); printf '%s' "$sig" > "$state/.seen-busy-tickpaused_status"
+  key=$(printf '%s' "$window" | tr ':/.' '___')
+  touch -t 200001010000 "$state/busy-tickpaused.meta"
+  # Hand it a wedge timer already past the threshold, so a changed-hash poll that
+  # still reached wedge_timer_check would escalate at once.
+  echo $(( $(date +%s) - 500 )) > "$state/.stale-since-$key"
+
+  # No pre-seeded .hash-<key> AND a real ticking footer: the pane renders new
+  # bytes faster than the poll, so every poll - not just the first - lands on
+  # the changed-hash branch and reaches busy_bound_triage through that call
+  # site rather than falling through to the stable-hash one.
+  # Redirect the writer's own stdout: a forked subshell inherits this script's
+  # block-buffered stdout when the suite is run into a file, and would re-flush
+  # those pending bytes on exit, duplicating earlier ok lines in the report.
+  ( while :; do printf 'Working... (%s)' "$(date +%s%N)" > "$capture_file"; sleep 0.2; done ) >/dev/null 2>&1 &
+  writer=$!
+
+  PATH="$fakebin:$PATH" FM_FAKE_TMUX_WINDOW="$window" FM_FAKE_TMUX_CAPTURE="$capture_file" \
+    FM_STATE_OVERRIDE="$state" FM_BUSY_TURN_MAX_SECS=1 FM_STALE_ESCALATE_SECS=240 \
+    FM_PAUSE_RESURFACE_SECS=999999 FM_POLL=1 FM_SIGNAL_GRACE=1 \
+    FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=999999 "$WATCH" > "$out" &
+  pid=$!
+  if ! wait_live "$pid" 40; then
+    reap "$pid"; kill "$writer" 2>/dev/null; wait "$writer" 2>/dev/null
+    fail "a busy declared pane with a ticking footer wedge-escalated: $(cat "$out")"
+  fi
+  reap "$pid"
+  kill "$writer" 2>/dev/null; wait "$writer" 2>/dev/null
+  [ ! -s "$out" ] || fail "a busy declared pause with a ticking footer printed a wake reason: $(cat "$out")"
+  [ -e "$state/.paused-$key" ] || fail "a busy declared pause with a ticking footer did not record the paused flag"
+  [ ! -e "$state/.stale-since-$key" ] || fail "a busy declared pause with a ticking footer left the wedge timer running"
+  pass "a busy declared pause whose pane hash changes every poll also takes the long recheck cadence"
+}
+
+# The throttle that makes the long cadence long. A pane that renders a NEW hash
+# on literally every poll (Pi's ticking elapsed footer) takes the changed-hash
+# branch every time, so that branch must also keep the pause bookkeeping the
+# triage above just recorded. When it tore it down instead, it removed the
+# re-surface throttle marker with it, and the "once per PAUSE_RESURFACE_SECS"
+# recheck degraded into a wake on EVERY poll - strictly worse than the wedge
+# noise this change exists to remove. Asserted behaviorally: the recheck fires,
+# and then the very next watcher run over the same aged declaration stays quiet.
+test_busy_declared_pause_recheck_throttle_survives_a_ticking_pane() {
+  local dir state fakebin out capture_file window key sig pid writer back statusf
+  dir=$(make_case busy-paused-throttle); state="$dir/state"; fakebin="$dir/fakebin"
+  out="$dir/watch.out"; capture_file="$dir/pane.txt"; window="test:fm-busy-throttle"
+  printf 'Working... (0.0s)' > "$capture_file"
+  printf 'window=%s\nkind=ship\nharness=pi\n' "$window" > "$state/busy-throttle.meta"
+  record_pi_busy "$state" busy-throttle
+  statusf="$state/busy-throttle.status"
+  printf 'paused: waiting on a vendor incident to be resolved\n' > "$statusf"
+  key=$(printf '%s' "$window" | tr ':/.' '___')
+  touch -t 200001010000 "$state/busy-throttle.meta"
+  back=$(( $(date +%s) - 500 ))
+  if [ "$(uname)" = Darwin ]; then touch -mt "$(date -r "$back" '+%Y%m%d%H%M.%S')" "$statusf"
+  else touch -m -d "@$back" "$statusf"; fi
+  sig=$(seen_sig "$statusf"); printf '%s' "$sig" > "$state/.seen-busy-throttle_status"
+
+  # A real ticking footer: the pane hash is different on every single poll, so
+  # no poll can ever take the stable-hash branch.
+  # Redirect the writer's own stdout: a forked subshell inherits this script's
+  # block-buffered stdout when the suite is run into a file, and would re-flush
+  # those pending bytes on exit, duplicating earlier ok lines in the report.
+  ( while :; do printf 'Working... (%s)' "$(date +%s%N)" > "$capture_file"; sleep 0.2; done ) >/dev/null 2>&1 &
+  writer=$!
+
+  # Run 1: the declaration is past the recheck window, so it re-surfaces once.
+  PATH="$fakebin:$PATH" FM_FAKE_TMUX_WINDOW="$window" FM_FAKE_TMUX_CAPTURE="$capture_file" \
+    FM_STATE_OVERRIDE="$state" FM_BUSY_TURN_MAX_SECS=1 FM_STALE_ESCALATE_SECS=240 \
+    FM_PAUSE_RESURFACE_SECS=240 FM_POLL=1 FM_SIGNAL_GRACE=1 \
+    FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=999999 "$WATCH" > "$out" &
+  pid=$!
+  if ! wait_for_exit "$pid" 60; then
+    reap "$pid"; kill "$writer" 2>/dev/null; wait "$writer" 2>/dev/null
+    fail "a ticking declared pause past the recheck window never re-surfaced: $(cat "$out")"
+  fi
+  grep -F "awaiting external" "$out" >/dev/null || {
+    kill "$writer" 2>/dev/null; wait "$writer" 2>/dev/null
+    fail "the ticking paused recheck was not labeled awaiting-external: $(cat "$out")"; }
+  ack_stopped_cycle "$state" || { kill "$writer" 2>/dev/null; wait "$writer" 2>/dev/null
+    fail "could not acknowledge the ticking paused recheck"; }
+
+  # Run 2: the throttle was written moments ago, so the SAME still-aged
+  # declaration must now stay quiet for the whole recheck window.
+  : > "$out"
+  PATH="$fakebin:$PATH" FM_FAKE_TMUX_WINDOW="$window" FM_FAKE_TMUX_CAPTURE="$capture_file" \
+    FM_STATE_OVERRIDE="$state" FM_BUSY_TURN_MAX_SECS=1 FM_STALE_ESCALATE_SECS=240 \
+    FM_PAUSE_RESURFACE_SECS=240 FM_POLL=1 FM_SIGNAL_GRACE=1 \
+    FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=999999 "$WATCH" > "$out" &
+  pid=$!
+  if ! wait_live "$pid" 45; then
+    reap "$pid"; kill "$writer" 2>/dev/null; wait "$writer" 2>/dev/null
+    fail "a ticking declared pause re-surfaced again inside its own recheck window: $(cat "$out")"
+  fi
+  reap "$pid"
+  kill "$writer" 2>/dev/null; wait "$writer" 2>/dev/null
+  [ ! -s "$out" ] || fail "the throttled ticking pause printed a wake reason: $(cat "$out")"
+  [ -e "$state/.paused-resurfaced-$key" ] || fail "the re-surface throttle marker did not survive a ticking pane"
+  [ -e "$state/.paused-$key" ] || fail "the paused flag did not survive a ticking pane"
+  pass "the paused re-surface throttle survives a pane that renders a new hash every poll"
+}
+
+# Absorbing a busy poll must not spend the stale-hash suppressor. The
+# suppressor records which hash the stale triage has already classified, and a
+# busy pane has classified nothing - so if the busy absorb advances it, the
+# first genuinely stale sight of that same hash reads as already-triaged and
+# loses the immediate fail-open surface it is owed, waiting out
+# PAUSE_RESURFACE_SECS instead. The reachable failure is a hung harness: the
+# busy verdict comes from the event-sourced busy-state contract, not from pane
+# bytes, so a harness that hangs and stops refreshing its state goes busy ->
+# unknown with the pane frozen at byte-identical content. That worker is
+# exactly the wedge this change must never hide, so it is driven here through
+# the busy-state contract with the capture file held constant.
+test_busy_declared_pause_keeps_the_fail_open_surface_when_the_busy_verdict_lifts() {
+  local dir state fakebin out capture_file window key pane_hash sig pid statusf before wakes
+  dir=$(make_case busy-paused-failopen); state="$dir/state"; fakebin="$dir/fakebin"
+  out="$dir/watch.out"; capture_file="$dir/pane.txt"; window="test:fm-busy-failopen"
+  printf 'Working...' > "$capture_file"
+  printf 'window=%s\nkind=ship\nharness=pi\n' "$window" > "$state/busy-failopen.meta"
+  record_pi_busy "$state" busy-failopen
+  statusf="$state/busy-failopen.status"
+  printf 'paused: waiting on the upstream CI run to finish\n' > "$statusf"
+  sig=$(seen_sig "$statusf"); printf '%s' "$sig" > "$state/.seen-busy-failopen_status"
+  key=$(printf '%s' "$window" | tr ':/.' '___')
+  pane_hash=$(hash_text "Working...")
+  printf '%s' "$pane_hash" > "$state/.hash-$key"
+  printf '1\n' > "$state/.count-$key"
+  touch -t 200001010000 "$state/busy-failopen.meta"
+  echo $(( $(date +%s) - 500 )) > "$state/.stale-since-$key"
+
+  # Phase A: busy plus a standing declaration is absorbed on the long cadence.
+  PATH="$fakebin:$PATH" FM_FAKE_TMUX_WINDOW="$window" FM_FAKE_TMUX_CAPTURE="$capture_file" \
+    FM_STATE_OVERRIDE="$state" FM_CREW_STATE_BIN="$fakebin/fm-crew-state.sh" \
+    FM_BUSY_TURN_MAX_SECS=1 FM_STALE_ESCALATE_SECS=240 \
+    FM_PAUSE_RESURFACE_SECS=999999 FM_POLL=1 FM_SIGNAL_GRACE=1 \
+    FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=999999 "$WATCH" > "$out" &
+  pid=$!
+  if ! wait_live "$pid" 40; then
+    reap "$pid"; fail "phase A: the standing declared wait on a busy pane escalated: $(cat "$out")"
+  fi
+  [ -e "$state/.paused-$key" ] || { reap "$pid"; fail "phase A: the paused flag was not recorded"; }
+  reap "$pid"
+  ack_stopped_cycle "$state" || fail "could not acknowledge the intentional phase-A stop"
+
+  # Phase B: the harness hangs. Only the busy verdict moves - through the
+  # busy-state contract, never the capture file - and the pane stays frozen at
+  # byte-identical content, so this is a first stale sight that must surface at
+  # once rather than be absorbed on the 999999s pause cadence.
+  before=$(cat "$capture_file")
+  "$ROOT/bin/fm-busy-event.sh" apply "$state" busy-failopen unknown --current-gen \
+    --source pi-ext --event agent-stop >/dev/null \
+    || fail "phase B: could not lift the busy verdict through the busy-state contract"
+  [ "$(cat "$capture_file")" = "$before" ] || fail "phase B: the pane bytes changed, so this is not a frozen pane"
+  : > "$out"
+  PATH="$fakebin:$PATH" FM_FAKE_TMUX_WINDOW="$window" FM_FAKE_TMUX_CAPTURE="$capture_file" \
+    FM_STATE_OVERRIDE="$state" FM_CREW_STATE_BIN="$fakebin/fm-crew-state.sh" \
+    FM_BUSY_TURN_MAX_SECS=1 FM_STALE_ESCALATE_SECS=240 \
+    FM_PAUSE_RESURFACE_SECS=999999 FM_POLL=1 FM_SIGNAL_GRACE=1 \
+    FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=999999 "$WATCH" > "$out" &
+  pid=$!
+  if ! wait_for_exit "$pid" 40; then
+    reap "$pid"
+    fail "phase B: a hung harness under a stale declaration never surfaced: $(cat "$out")"
+  fi
+  grep -F "stale: $window" "$out" >/dev/null \
+    || fail "phase B: the hung harness did not print a stale wake: $(cat "$out")"
+  wakes=$(awk -F '\t' -v w="$window" '$3 == "stale" && $4 == w { n++ } END { print n + 0 }' "$state/.wake-queue")
+  [ "$wakes" -ge 1 ] || fail "phase B: the hung harness surface was not enqueued"
+  pass "absorbing a busy declared wait leaves the stale suppressor alone, so a hung harness still surfaces immediately"
+}
+
+# The busy path is a wake source now, so the throttle that makes its cadence
+# long has to outlive a busy verdict that flaps. .paused-resurfaced-<key> is
+# written by the paused absorb but deleted by the sibling not-busy arm, which
+# fires whenever a poll merely fails to RE-CONFIRM the pause - an inconclusive
+# liveness read - rather than because the declaration ended. A busy ->
+# not-busy -> busy alternation would therefore re-arm the recheck on each flap
+# and wake once per flap instead of once per PAUSE_RESURFACE_SECS, which the
+# task's own brief names as strictly worse than the wedge noise this change
+# removes. Driven through the busy-state contract with a genuinely ticking
+# pane, because the arm that deletes the throttle is the changed-hash one.
+test_busy_declared_pause_resurface_throttle_survives_a_busy_verdict_flap() {
+  local dir state fakebin out capture_file window key sig pid writer back statusf rechecks
+  dir=$(make_case busy-paused-flap); state="$dir/state"; fakebin="$dir/fakebin"
+  out="$dir/watch.out"; capture_file="$dir/pane.txt"; window="test:fm-busy-flap"
+  printf 'Working... (0.0s)' > "$capture_file"
+  printf 'window=%s\nkind=ship\nharness=pi\n' "$window" > "$state/busy-flap.meta"
+  record_pi_busy "$state" busy-flap
+  statusf="$state/busy-flap.status"
+  printf 'paused: waiting on the upstream CI run to finish\n' > "$statusf"
+  key=$(printf '%s' "$window" | tr ':/.' '___')
+  touch -t 200001010000 "$state/busy-flap.meta"
+  back=$(( $(date +%s) - 500 ))
+  if [ "$(uname)" = Darwin ]; then touch -mt "$(date -r "$back" '+%Y%m%d%H%M.%S')" "$statusf"
+  else touch -m -d "@$back" "$statusf"; fi
+  sig=$(seen_sig "$statusf"); printf '%s' "$sig" > "$state/.seen-busy-flap_status"
+
+  # Redirect the writer's own stdout: a forked subshell inherits this script's
+  # block-buffered stdout when the suite is run into a file, and would re-flush
+  # those pending bytes on exit, duplicating earlier ok lines in the report.
+  ( while :; do printf 'Working... (%s)' "$(date +%s%N)" > "$capture_file"; sleep 0.2; done ) >/dev/null 2>&1 &
+  writer=$!
+
+  # Flap 1, busy: the declaration is past the recheck window, so it re-surfaces.
+  PATH="$fakebin:$PATH" FM_FAKE_TMUX_WINDOW="$window" FM_FAKE_TMUX_CAPTURE="$capture_file" \
+    FM_STATE_OVERRIDE="$state" FM_CREW_STATE_BIN="$fakebin/fm-crew-state.sh" \
+    FM_BUSY_TURN_MAX_SECS=1 FM_STALE_ESCALATE_SECS=240 \
+    FM_PAUSE_RESURFACE_SECS=240 FM_POLL=1 FM_SIGNAL_GRACE=1 \
+    FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=999999 "$WATCH" >> "$out" &
+  pid=$!
+  if ! wait_for_exit "$pid" 60; then
+    reap "$pid"; kill "$writer" 2>/dev/null; wait "$writer" 2>/dev/null
+    fail "flap 1: a ticking declared pause past the recheck window never re-surfaced: $(cat "$out")"
+  fi
+  grep -F "awaiting external" "$out" >/dev/null || {
+    kill "$writer" 2>/dev/null; wait "$writer" 2>/dev/null
+    fail "flap 1: the busy paused recheck was not labeled awaiting-external: $(cat "$out")"; }
+  ack_stopped_cycle "$state" || { kill "$writer" 2>/dev/null; wait "$writer" 2>/dev/null
+    fail "flap 1: could not acknowledge the recheck"; }
+
+  # Flap 2, the busy verdict lifts while the declaration still stands. This is
+  # the poll that used to delete the throttle: it did not observe the wait end,
+  # it only failed to re-confirm it.
+  "$ROOT/bin/fm-busy-event.sh" apply "$state" busy-flap unknown --current-gen \
+    --source pi-ext --event agent-stop >/dev/null || { kill "$writer" 2>/dev/null
+    wait "$writer" 2>/dev/null; fail "flap 2: could not lift the busy verdict"; }
+  PATH="$fakebin:$PATH" FM_FAKE_TMUX_WINDOW="$window" FM_FAKE_TMUX_CAPTURE="$capture_file" \
+    FM_STATE_OVERRIDE="$state" FM_CREW_STATE_BIN="$fakebin/fm-crew-state.sh" \
+    FM_BUSY_TURN_MAX_SECS=1 FM_STALE_ESCALATE_SECS=240 \
+    FM_PAUSE_RESURFACE_SECS=240 FM_POLL=1 FM_SIGNAL_GRACE=1 \
+    FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=999999 "$WATCH" >> "$out" &
+  pid=$!
+  if ! wait_live "$pid" 30; then
+    reap "$pid"; kill "$writer" 2>/dev/null; wait "$writer" 2>/dev/null
+    fail "flap 2: lifting the busy verdict under a standing declaration surfaced a wake: $(cat "$out")"
+  fi
+  reap "$pid"
+  ack_stopped_cycle "$state" || { kill "$writer" 2>/dev/null; wait "$writer" 2>/dev/null
+    fail "flap 2: could not acknowledge the intentional stop"; }
+
+  # Flap 3, busy again inside the SAME recheck window: the throttle must still
+  # hold, so this must stay quiet rather than re-firing the recheck.
+  "$ROOT/bin/fm-busy-event.sh" apply "$state" busy-flap busy --current-gen \
+    --source pi-ext --event agent-start >/dev/null || { kill "$writer" 2>/dev/null
+    wait "$writer" 2>/dev/null; fail "flap 3: could not restore the busy verdict"; }
+  PATH="$fakebin:$PATH" FM_FAKE_TMUX_WINDOW="$window" FM_FAKE_TMUX_CAPTURE="$capture_file" \
+    FM_STATE_OVERRIDE="$state" FM_CREW_STATE_BIN="$fakebin/fm-crew-state.sh" \
+    FM_BUSY_TURN_MAX_SECS=1 FM_STALE_ESCALATE_SECS=240 \
+    FM_PAUSE_RESURFACE_SECS=240 FM_POLL=1 FM_SIGNAL_GRACE=1 \
+    FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=999999 "$WATCH" >> "$out" &
+  pid=$!
+  if ! wait_live "$pid" 45; then
+    reap "$pid"; kill "$writer" 2>/dev/null; wait "$writer" 2>/dev/null
+    fail "flap 3: the recheck re-fired on the next busy poll of the same window: $(cat "$out")"
+  fi
+  reap "$pid"
+  kill "$writer" 2>/dev/null; wait "$writer" 2>/dev/null
+  rechecks=$(grep -c -F "awaiting external" "$out" || true)
+  [ "$rechecks" -eq 1 ] || fail "a busy/not-busy/busy flap produced $rechecks paused rechecks in one window, expected 1"
+  [ -e "$state/.paused-resurfaced-$key" ] || fail "the re-surface throttle did not survive the busy verdict flap"
+  pass "the paused re-surface throttle survives a busy/not-busy flap, so one window still yields one recheck"
+}
+
+# The other half of that throttle's lifetime. Because it now outlives the
+# not-busy arm's teardown, the only thing left to drop it is the clear at the
+# head of the window loop - and that clear has to notice a key whose .paused-
+# flag the flap already removed, or the throttle outlives the declaration that
+# created it and is never collected. A marker that outlives its declaration is
+# not inert: it is the same file the NEXT declaration's first re-surface is
+# throttled against.
+test_lapsed_declaration_clears_every_pause_artifact_after_a_flap() {
+  local dir state fakebin out capture_file window key sig pid writer back statusf i
+  dir=$(make_case lapsed-after-flap); state="$dir/state"; fakebin="$dir/fakebin"
+  out="$dir/watch.out"; capture_file="$dir/pane.txt"; window="test:fm-lapsed-flap"
+  printf 'Working... (0.0s)' > "$capture_file"
+  printf 'window=%s\nkind=ship\nharness=pi\n' "$window" > "$state/lapsed-flap.meta"
+  record_pi_busy "$state" lapsed-flap
+  statusf="$state/lapsed-flap.status"
+  printf 'paused: waiting on a queued upstream CI run\n' > "$statusf"
+  key=$(printf '%s' "$window" | tr ':/.' '___')
+  touch -t 200001010000 "$state/lapsed-flap.meta"
+  back=$(( $(date +%s) - 500 ))
+  if [ "$(uname)" = Darwin ]; then touch -mt "$(date -r "$back" '+%Y%m%d%H%M.%S')" "$statusf"
+  else touch -m -d "@$back" "$statusf"; fi
+  sig=$(seen_sig "$statusf"); printf '%s' "$sig" > "$state/.seen-lapsed-flap_status"
+
+  # A ticking footer, so every poll lands on the changed-hash branch - the arm
+  # that drops .paused- while keeping the throttle.
+  # Redirect the writer's own stdout: a forked subshell inherits this script's
+  # block-buffered stdout when the suite is run into a file, and would re-flush
+  # those pending bytes on exit, duplicating earlier ok lines in the report.
+  ( while :; do printf 'Working... (%s)' "$(date +%s%N)" > "$capture_file"; sleep 0.2; done ) >/dev/null 2>&1 &
+  writer=$!
+
+  # Step 1, busy past the completed-turn bound: the declaration re-surfaces, so
+  # the throttle marker gets written.
+  PATH="$fakebin:$PATH" FM_FAKE_TMUX_WINDOW="$window" FM_FAKE_TMUX_CAPTURE="$capture_file" \
+    FM_STATE_OVERRIDE="$state" FM_CREW_STATE_BIN="$fakebin/fm-crew-state.sh" \
+    FM_BUSY_TURN_MAX_SECS=1 FM_STALE_ESCALATE_SECS=240 \
+    FM_PAUSE_RESURFACE_SECS=240 FM_POLL=1 FM_SIGNAL_GRACE=1 \
+    FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=999999 "$WATCH" >> "$out" &
+  pid=$!
+  if ! wait_for_exit "$pid" 60; then
+    reap "$pid"; kill "$writer" 2>/dev/null; wait "$writer" 2>/dev/null
+    fail "step 1: the declared pause past the recheck window never re-surfaced: $(cat "$out")"
+  fi
+  [ -e "$state/.paused-resurfaced-$key" ] || { kill "$writer" 2>/dev/null
+    wait "$writer" 2>/dev/null; fail "step 1: the throttle marker was not written"; }
+  ack_stopped_cycle "$state" || { kill "$writer" 2>/dev/null; wait "$writer" 2>/dev/null
+    fail "step 1: could not acknowledge the recheck"; }
+
+  # Step 2, the busy verdict lifts while the declaration still stands: this drops
+  # .paused- and deliberately keeps the throttle (the round-3 behavior).
+  "$ROOT/bin/fm-busy-event.sh" apply "$state" lapsed-flap unknown --current-gen \
+    --source pi-ext --event agent-stop >/dev/null || { kill "$writer" 2>/dev/null
+    wait "$writer" 2>/dev/null; fail "step 2: could not lift the busy verdict"; }
+  PATH="$fakebin:$PATH" FM_FAKE_TMUX_WINDOW="$window" FM_FAKE_TMUX_CAPTURE="$capture_file" \
+    FM_STATE_OVERRIDE="$state" FM_CREW_STATE_BIN="$fakebin/fm-crew-state.sh" \
+    FM_BUSY_TURN_MAX_SECS=1 FM_STALE_ESCALATE_SECS=240 \
+    FM_PAUSE_RESURFACE_SECS=240 FM_POLL=1 FM_SIGNAL_GRACE=1 \
+    FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=999999 "$WATCH" >> "$out" &
+  pid=$!
+  if ! wait_live "$pid" 30; then
+    reap "$pid"; kill "$writer" 2>/dev/null; wait "$writer" 2>/dev/null
+    fail "step 2: the lifted busy verdict under a standing declaration woke: $(cat "$out")"
+  fi
+  reap "$pid"
+  [ ! -e "$state/.paused-$key" ] || { kill "$writer" 2>/dev/null; wait "$writer" 2>/dev/null
+    fail "step 2: the flap did not drop the paused flag, so the leak path is not being exercised"; }
+  [ -e "$state/.paused-resurfaced-$key" ] || { kill "$writer" 2>/dev/null
+    wait "$writer" 2>/dev/null; fail "step 2: the throttle did not survive the flap"; }
+  ack_stopped_cycle "$state" || { kill "$writer" 2>/dev/null; wait "$writer" 2>/dev/null
+    fail "step 2: could not acknowledge the intentional stop"; }
+
+  # Step 3, the wait clears: the crew's own log stops declaring it, so every
+  # pause artifact for this key must go - including the orphaned throttle.
+  printf 'working: the upstream run finished, back on the fix\n' >> "$statusf"
+  sig=$(seen_sig "$statusf"); printf '%s' "$sig" > "$state/.seen-lapsed-flap_status"
+  PATH="$fakebin:$PATH" FM_FAKE_TMUX_WINDOW="$window" FM_FAKE_TMUX_CAPTURE="$capture_file" \
+    FM_STATE_OVERRIDE="$state" FM_CREW_STATE_BIN="$fakebin/fm-crew-state.sh" \
+    FM_BUSY_TURN_MAX_SECS=1 FM_STALE_ESCALATE_SECS=240 \
+    FM_PAUSE_RESURFACE_SECS=240 FM_POLL=1 FM_SIGNAL_GRACE=1 \
+    FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=999999 "$WATCH" >> "$out" &
+  pid=$!
+  i=0
+  while [ "$i" -lt 80 ] && [ -e "$state/.paused-resurfaced-$key" ]; do sleep 0.1; i=$((i + 1)); done
+  reap "$pid"
+  kill "$writer" 2>/dev/null; wait "$writer" 2>/dev/null
+  [ ! -e "$state/.paused-resurfaced-$key" ] \
+    || fail "the re-surface throttle outlived the declaration that created it"
+  [ ! -e "$state/.paused-$key" ] || fail "the paused flag outlived the lapsed declaration"
+  [ ! -e "$state/.paused-rechecked-$key" ] || fail "the pause recheck marker outlived the lapsed declaration"
+  pass "a lapsed declaration clears every pause artifact, even when a flap already removed its paused flag"
+}
+
+# Away mode is excluded from the declared-pause busy absorb on purpose: there
+# the supervise-daemon owns triage and wants the unmodified wake stream. That
+# exclusion is a single disjunct, so it gets its own guard - a busy pane under
+# a standing declaration, past the completed-turn bound, must still take the
+# ordinary wedge path when .afk is present.
+test_afk_busy_declared_pause_still_takes_the_away_mode_wedge_path() {
+  local dir state fakebin out capture_file window key pane_hash sig pid
+  dir=$(make_case afk-busy-declared); state="$dir/state"; fakebin="$dir/fakebin"
+  out="$dir/watch.out"; capture_file="$dir/pane.txt"; window="test:fm-afk-busy-paused"
+  printf 'Working...' > "$capture_file"
+  printf 'window=%s\nkind=ship\nharness=pi\n' "$window" > "$state/afk-busy.meta"
+  record_pi_busy "$state" afk-busy
+  printf 'paused: waiting on the provider rate limit to reset\n' > "$state/afk-busy.status"
+  sig=$(seen_sig "$state/afk-busy.status"); printf '%s' "$sig" > "$state/.seen-afk-busy_status"
+  key=$(printf '%s' "$window" | tr ':/.' '___')
+  pane_hash=$(hash_text "Working...")
+  printf '%s' "$pane_hash" > "$state/.hash-$key"
+  printf '1\n' > "$state/.count-$key"
+  touch -t 200001010000 "$state/afk-busy.meta"
+  echo $(( $(date +%s) - 500 )) > "$state/.stale-since-$key"
+  date '+%s' > "$state/.afk"   # away mode: the supervise-daemon owns triage
+
+  PATH="$fakebin:$PATH" FM_FAKE_TMUX_WINDOW="$window" FM_FAKE_TMUX_CAPTURE="$capture_file" \
+    FM_STATE_OVERRIDE="$state" FM_CREW_STATE_BIN="$fakebin/fm-crew-state.sh" \
+    FM_BUSY_TURN_MAX_SECS=1 FM_STALE_ESCALATE_SECS=240 \
+    FM_PAUSE_RESURFACE_SECS=999999 FM_POLL=1 FM_SIGNAL_GRACE=1 \
+    FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=999999 "$WATCH" > "$out" &
+  pid=$!
+  if ! wait_for_exit "$pid" 40; then
+    reap "$pid"
+    fail "away mode absorbed a busy declared pause instead of handing off the wedge: $(cat "$out")"
+  fi
+  grep -F "stale: $window" "$out" >/dev/null \
+    || fail "the away-mode busy declared pause did not print a stale wake: $(cat "$out")"
+  grep -F "possible wedge" "$out" >/dev/null \
+    || fail "the away-mode busy declared pause was not flagged a possible wedge: $(cat "$out")"
+  grep -F "awaiting external" "$out" >/dev/null \
+    && fail "the away-mode watcher ran the normal-mode paused recheck: $(cat "$out")"
+  [ ! -e "$state/.paused-$key" ] \
+    || fail "the away-mode watcher recorded normal-mode pause tracking instead of handing off"
+  pass "away mode keeps the ordinary wedge path for a busy declared pause, so its wake stream is unchanged"
+}
+
 test_nonterminal_stale_repairs_missing_or_corrupt_timer() {
   local dir state fakebin out capture_file window key pane_hash sig pid since
   dir=$(make_case nonterminal-stale-timer-repair); state="$dir/state"; fakebin="$dir/fakebin"
@@ -1976,6 +2568,16 @@ test_busy_pane_changing_hash_escalates_past_turn_age_bound
 test_busy_pane_turn_end_touch_resets_age
 test_busy_pane_repeated_escalation_reaches_demand_deep_inspection
 test_busy_pane_default_turn_age_bound_is_3600s
+test_busy_declared_pause_does_not_wedge_escalate
+test_busy_declared_pause_still_rechecks_on_the_long_cadence
+test_busy_without_declared_pause_still_wedge_escalates
+test_busy_wedge_escalation_resumes_when_the_declared_pause_is_lifted
+test_busy_declared_pause_changing_hash_does_not_wedge_escalate
+test_busy_declared_pause_recheck_throttle_survives_a_ticking_pane
+test_busy_declared_pause_keeps_the_fail_open_surface_when_the_busy_verdict_lifts
+test_busy_declared_pause_resurface_throttle_survives_a_busy_verdict_flap
+test_lapsed_declaration_clears_every_pause_artifact_after_a_flap
+test_afk_busy_declared_pause_still_takes_the_away_mode_wedge_path
 test_nonterminal_stale_not_working_surfaced
 test_nonterminal_stale_paused_absorbed_then_resurfaced
 test_exited_declared_pause_is_bounded_but_live_gate_surfaces
