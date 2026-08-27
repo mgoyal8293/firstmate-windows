@@ -1,0 +1,17 @@
+targeted suite results for fm/winfm-paused-busy-wedge-noise (test phase)
+date: 2026-08-27 21:12:34+0000   host: Linux 6.18.33.2-microsoft-standard-WSL2   bash: 5.2.21(1)-release
+
+tests/fm-watch-triage.test.sh (owner of the changed triage behavior)
+  exit 0; 60 ok lines, 0 not-ok, 60 distinct ok lines over 59 test invocations
+  0 duplicated ok lines (the extra line is test_busy_pane_repeated_escalation_reaches_demand_deep_inspection,
+  a pre-existing test that reports two passes), so the block-buffered-stdout duplication is not present
+
+adjacent suites owning the surfaces this change touches
+  tests/fm-brief.test.sh       exit 0, 20 ok, 0 not ok
+  tests/fm-daemon.test.sh      exit 0, 101 ok, 0 not ok
+  tests/fm-busy-state.test.sh  exit 0, 21 ok, 0 not ok
+  tests/fm-documentation-audiences.test.sh exit 0, 4 ok, 0 not ok
+
+  fm-brief covers the crewmate brief text this change corrected; fm-daemon covers the away-mode
+  wake stream the change deliberately excludes; fm-busy-state covers the busy verdict the new
+  triage consumes; fm-documentation-audiences covers the two docs owners that were patched.

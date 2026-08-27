@@ -1,0 +1,96 @@
+firstmate declared-pause vs wedge-escalation: end-to-end watcher transcript
+date: 2026-08-27 21:07:27+0000
+watcher under test: /home/johns/.no-mistakes/worktrees/72b1fa50e799/01M12772MGFHPXH7B25ENS9KCN/bin/fm-watch.sh
+fleet knobs: FM_STALE_ESCALATE_SECS=240 (wedge timer), FM_PAUSE_RESURFACE_SECS=3600 (pause recheck),
+             FM_BUSY_TURN_MAX_SECS=3600 (completed-turn bound)
+
+================================================================
+SCENARIO 1 - the measured defect: a worker that DECLARED a bounded external wait, harness busy
+================================================================
+worker fleet:ci-wait  harness=pi (busy: agent-start, no completed turn for >1h)
+pane (frozen, nothing rendered): Running the release suite (output redirected to build.log)
+last status line the worker declared: paused: waiting on the upstream CI run to finish (~40min)
+
+poll t+4min   -> absorbed, no wake (watcher still supervising; captain not interrupted)
+poll t+8min   -> absorbed, no wake (watcher still supervising; captain not interrupted)
+poll t+12min  -> absorbed, no wake (watcher still supervising; captain not interrupted)
+
+wedge escalation count for this worker: 0
+watcher triage log:
+    [2026-08-27T21:07:27+0000] absorbed stale (paused, awaiting external, age 0s): fleet:ci-wait
+    [2026-08-27T21:07:29+0000] absorbed stale (paused, awaiting external, age 2s): fleet:ci-wait
+    [2026-08-27T21:07:30+0000] absorbed stale (paused, awaiting external, age 3s): fleet:ci-wait
+    [2026-08-27T21:07:31+0000] absorbed stale (paused, awaiting external, age 4s): fleet:ci-wait
+    [2026-08-27T21:07:33+0000] absorbed stale (paused, awaiting external, age 6s): fleet:ci-wait
+    [2026-08-27T21:07:34+0000] absorbed stale (paused, awaiting external, age 7s): fleet:ci-wait
+    [2026-08-27T21:07:35+0000] absorbed stale (paused, awaiting external, age 8s): fleet:ci-wait
+    [2026-08-27T21:07:36+0000] absorbed stale (paused, awaiting external, age 9s): fleet:ci-wait
+    [2026-08-27T21:07:38+0000] absorbed stale (paused, awaiting external, age 11s): fleet:ci-wait
+    [2026-08-27T21:07:39+0000] absorbed stale (paused, awaiting external, age 12s): fleet:ci-wait
+    [2026-08-27T21:07:40+0000] absorbed stale (paused, awaiting external, age 13s): fleet:ci-wait
+    [2026-08-27T21:07:42+0000] absorbed stale (paused, awaiting external, age 15s): fleet:ci-wait
+
+================================================================
+SCENARIO 2 - must still escalate: same frozen busy pane, NO declared wait
+================================================================
+worker fleet:frozen  harness=pi (busy: agent-start, no completed turn for >1h)
+pane (frozen, nothing rendered): Running the release suite (output redirected to build.log)
+last status line the worker declared: working: running the release suite
+
+poll t+4min   -> SUPERVISOR WOKEN (watcher exited, costs a supervisor turn)
+              wake reason delivered: stale: fleet:frozen (idle 500s, possible wedge, escalation 1) 
+              queued for the captain: 1787864863 1 stale fleet:frozen stale: fleet:frozen (idle 500s, possible wedge, escalation 1)
+poll t+8min   -> SUPERVISOR WOKEN (watcher exited, costs a supervisor turn)
+              wake reason delivered: stale: fleet:frozen (idle 500s, possible wedge, escalation 2) 
+              queued for the captain: 1787864864 2 stale fleet:frozen stale: fleet:frozen (idle 500s, possible wedge, escalation 2)
+poll t+12min  -> SUPERVISOR WOKEN (watcher exited, costs a supervisor turn)
+              wake reason delivered: stale: fleet:frozen (idle 501s, possible wedge, escalation 3, demand-deep-inspection: same pane has wedge-escalated 3 times in a row - do not re-absorb on the run-step/pane state alone) 
+              queued for the captain: 1787864865 3 stale fleet:frozen stale: fleet:frozen (idle 501s, possible wedge, escalation 3, demand-deep-inspection: same pane has wedge-escalated 3 times in a row - do not re-absorb on the run-step/pane state alone)
+
+wedge escalation count for this worker: 3
+
+================================================================
+SCENARIO 3 - must still escalate: the declaration is LIFTED while the pane stays frozen
+================================================================
+worker fleet:lifted declared a wait, then the wait ended and the worker resumed logging work.
+
+poll paused   -> absorbed, no wake (watcher still supervising; captain not interrupted)
+
+... the wait ends: the worker resumes logging work, but its pane stays frozen ...
+
+poll lifted   -> absorbed, no wake (watcher still supervising; captain not interrupted)
+              (pause tracking dropped; the ordinary wedge timer restarts here: .stale-since=running)
+
+... 4 more minutes of a frozen pane, now with no declaration standing ...
+
+poll lifted+4min -> SUPERVISOR WOKEN (watcher exited, costs a supervisor turn)
+              wake reason delivered: stale: fleet:lifted (idle 500s, possible wedge, escalation 1) 
+              queued for the captain: 1787864876 1 stale fleet:lifted stale: fleet:lifted (idle 500s, possible wedge, escalation 1)
+
+wedge escalation count for this worker: 1
+watcher triage log:
+    [2026-08-27T21:07:45+0000] absorbed stale (paused, awaiting external, age 0s): fleet:lifted
+    [2026-08-27T21:07:47+0000] absorbed stale (paused, awaiting external, age 2s): fleet:lifted
+    [2026-08-27T21:07:48+0000] absorbed stale (paused, awaiting external, age 3s): fleet:lifted
+    [2026-08-27T21:07:49+0000] absorbed stale (paused, awaiting external, age 4s): fleet:lifted
+    [2026-08-27T21:07:51+0000] absorbed busy (no completed turn) timer reset: fleet:lifted
+
+================================================================
+SCENARIO 4 - absorbed, never silenced: the declared wait itself ages past the long recheck window
+================================================================
+worker fleet:ci-recheck has held the same declared wait for longer than the recheck window.
+
+poll recheck  -> SUPERVISOR WOKEN (watcher exited, costs a supervisor turn)
+              wake reason delivered: stale: fleet:ci-recheck (paused 501s, awaiting external - declared pause, rechecked on a long cadence not a wedge; confirm the wait still holds) 
+              queued for the captain: 1787864877 1 stale fleet:ci-recheck stale: fleet:ci-recheck (paused 501s, awaiting external - declared pause, rechecked on a long cadence not a wedge; confirm the wait still holds)
+
+... the captain confirms and re-arms; the wait is still standing ...
+
+poll recheck+1 -> absorbed, no wake (watcher still supervising; captain not interrupted)
+
+wedge escalation count for this worker: 0
+watcher triage log:
+    [2026-08-27T21:07:57+0000] absorbed stale (paused, awaiting external, age 501s): fleet:ci-recheck
+    [2026-08-27T21:07:59+0000] absorbed stale (paused, awaiting external, age 503s): fleet:ci-recheck
+    [2026-08-27T21:08:00+0000] absorbed stale (paused, awaiting external, age 504s): fleet:ci-recheck
+    [2026-08-27T21:08:01+0000] absorbed stale (paused, awaiting external, age 505s): fleet:ci-recheck

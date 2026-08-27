@@ -1,0 +1,73 @@
+what the captain actually receives: same four fleet situations, before vs after the fix
+(condensed from watcher-transcript-before-fix.txt / watcher-transcript-after-fix.txt,
+ each produced by driving the real bin/fm-watch.sh over a simulated firstmate home)
+
+====================================================================================================
+SCENARIO 1 - the measured defect: a worker that DECLARED a bounded external wait, harness busy
+====================================================================================================
+
+  BEFORE (base commit 4c5336cd)
+    poll t+4min   -> SUPERVISOR WOKEN (watcher exited, costs a supervisor turn)
+    wake reason delivered: stale: fleet:ci-wait (idle 500s, possible wedge, escalation 1)
+    poll t+8min   -> SUPERVISOR WOKEN (watcher exited, costs a supervisor turn)
+    wake reason delivered: stale: fleet:ci-wait (idle 501s, possible wedge, escalation 2)
+    poll t+12min  -> SUPERVISOR WOKEN (watcher exited, costs a supervisor turn)
+    wake reason delivered: stale: fleet:ci-wait (idle 500s, possible wedge, escalation 3, demand-deep-inspection: same pane has wedge-escalated 3 times in a row - do not re-absorb on the run-step/pane state alone)
+
+  AFTER (this change)
+    poll t+4min   -> absorbed, no wake (watcher still supervising; captain not interrupted)
+    poll t+8min   -> absorbed, no wake (watcher still supervising; captain not interrupted)
+    poll t+12min  -> absorbed, no wake (watcher still supervising; captain not interrupted)
+
+====================================================================================================
+SCENARIO 2 - must still escalate: same frozen busy pane, NO declared wait
+====================================================================================================
+
+  BEFORE (base commit 4c5336cd)
+    poll t+4min   -> SUPERVISOR WOKEN (watcher exited, costs a supervisor turn)
+    wake reason delivered: stale: fleet:frozen (idle 500s, possible wedge, escalation 1)
+    poll t+8min   -> SUPERVISOR WOKEN (watcher exited, costs a supervisor turn)
+    wake reason delivered: stale: fleet:frozen (idle 500s, possible wedge, escalation 2)
+    poll t+12min  -> SUPERVISOR WOKEN (watcher exited, costs a supervisor turn)
+    wake reason delivered: stale: fleet:frozen (idle 501s, possible wedge, escalation 3, demand-deep-inspection: same pane has wedge-escalated 3 times in a row - do not re-absorb on the run-step/pane state alone)
+
+  AFTER (this change)
+    poll t+4min   -> SUPERVISOR WOKEN (watcher exited, costs a supervisor turn)
+    wake reason delivered: stale: fleet:frozen (idle 500s, possible wedge, escalation 1)
+    poll t+8min   -> SUPERVISOR WOKEN (watcher exited, costs a supervisor turn)
+    wake reason delivered: stale: fleet:frozen (idle 500s, possible wedge, escalation 2)
+    poll t+12min  -> SUPERVISOR WOKEN (watcher exited, costs a supervisor turn)
+    wake reason delivered: stale: fleet:frozen (idle 501s, possible wedge, escalation 3, demand-deep-inspection: same pane has wedge-escalated 3 times in a row - do not re-absorb on the run-step/pane state alone)
+
+====================================================================================================
+SCENARIO 3 - must still escalate: the declaration is LIFTED while the pane stays frozen
+====================================================================================================
+
+  BEFORE (base commit 4c5336cd)
+    poll paused   -> SUPERVISOR WOKEN (watcher exited, costs a supervisor turn)
+    wake reason delivered: stale: fleet:lifted (idle 501s, possible wedge, escalation 1)
+    poll lifted   -> SUPERVISOR WOKEN (watcher exited, costs a supervisor turn)
+    wake reason delivered: stale: fleet:lifted (idle 500s, possible wedge, escalation 2)
+    poll lifted+4min -> SUPERVISOR WOKEN (watcher exited, costs a supervisor turn)
+    wake reason delivered: stale: fleet:lifted (idle 500s, possible wedge, escalation 3, demand-deep-inspection: same pane has wedge-escalated 3 times in a row - do not re-absorb on the run-step/pane state alone)
+
+  AFTER (this change)
+    poll paused   -> absorbed, no wake (watcher still supervising; captain not interrupted)
+    poll lifted   -> absorbed, no wake (watcher still supervising; captain not interrupted)
+    poll lifted+4min -> SUPERVISOR WOKEN (watcher exited, costs a supervisor turn)
+    wake reason delivered: stale: fleet:lifted (idle 500s, possible wedge, escalation 1)
+
+====================================================================================================
+SCENARIO 4 - absorbed, never silenced: the declared wait itself ages past the long recheck window
+====================================================================================================
+
+  BEFORE (base commit 4c5336cd)
+    poll recheck  -> SUPERVISOR WOKEN (watcher exited, costs a supervisor turn)
+    wake reason delivered: stale: fleet:ci-recheck (idle 500s, possible wedge, escalation 1)
+    poll recheck+1 -> SUPERVISOR WOKEN (watcher exited, costs a supervisor turn)
+    wake reason delivered: stale: fleet:ci-recheck (idle 501s, possible wedge, escalation 2)
+
+  AFTER (this change)
+    poll recheck  -> SUPERVISOR WOKEN (watcher exited, costs a supervisor turn)
+    wake reason delivered: stale: fleet:ci-recheck (paused 501s, awaiting external - declared pause, rechecked on a long cadence not a wedge; confirm the wait still holds)
+    poll recheck+1 -> absorbed, no wake (watcher still supervising; captain not interrupted)

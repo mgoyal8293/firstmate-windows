@@ -1,0 +1,56 @@
+firstmate declared-pause guards: independent falsifiability matrix (test phase)
+date: 2026-08-27 21:12:03+0000
+method: bin/fm-watch.sh was NEVER edited in the worktree. A sandbox (/tmp/nm-sub) holds
+symlinks to every repo file except bin/fm-watch.sh, which is swapped for either the
+verified file, the pre-fix file (git show 4c5336cd:bin/fm-watch.sh), or a single-defect
+ablated copy. The ten new guards from tests/fm-watch-triage.test.sh are then run against
+it, each in its own subshell so one failure does not hide the verdicts after it.
+The worktree tree stayed clean throughout (git status --porcelain empty; bin/fm-watch.sh
+byte-identical to HEAD, verified with diff).
+
+ablations (each removes exactly ONE protection from the verified file):
+  PRE-FIX  the whole change absent (base commit 4c5336cd)
+  B        the paused arm removed from busy_bound_triage (always wedge_timer_check)
+  C        busy_bound_triage made OVER-BROAD: every busy pane absorbed as if declared
+  D        stable-hash branch pause-clear restored to the pre-fix disjunct
+  E        changed-hash branch pause-clear else-arm restored
+  F        the busy absorb burns the stale suppressor again (advance flag dropped)
+  G        clear_pause_state drops .paused-resurfaced- unconditionally
+  H        top-of-loop clear narrowed back to the .paused- flag alone
+  I        the away-mode exclusion (! afk_present) removed from busy_bound_triage
+
+results (F = guard FAILED, . = guard passed)
+
+guard                                                                             PRE B  C  D  E  F  G  H  I  RESTORED
+test_busy_declared_pause_does_not_wedge_escalate                                  F  F  .  F  .  .  .  .  .  .
+test_busy_declared_pause_still_rechecks_on_the_long_cadence                       F  F  .  .  .  .  .  .  .  .
+test_busy_without_declared_pause_still_wedge_escalates                            .  .  F  .  .  .  .  .  .  .
+test_busy_wedge_escalation_resumes_when_the_declared_pause_is_lifted              F  F  F  F  .  .  .  .  .  .
+test_busy_declared_pause_changing_hash_does_not_wedge_escalate                    F  F  .  .  F  .  .  .  .  .
+test_busy_declared_pause_recheck_throttle_survives_a_ticking_pane                 F  F  .  .  F  .  .  .  .  .
+test_busy_declared_pause_keeps_the_fail_open_surface_when_the_busy_verdict_lifts  F  F  .  F  .  F  .  .  .  .
+test_busy_declared_pause_resurface_throttle_survives_a_busy_verdict_flap          F  F  .  .  .  .  F  .  .  .
+test_lapsed_declaration_clears_every_pause_artifact_after_a_flap                  F  F  .  .  .  .  F  F  .  .
+test_afk_busy_declared_pause_still_takes_the_away_mode_wedge_path                 .  .  .  .  .  .  .  .  F  .
+
+totals per column:
+  A-prefix  SUBSET RESULT: 2/10 guards passed, 8 failed
+  B         SUBSET RESULT: 2/10 guards passed, 8 failed
+  C         SUBSET RESULT: 8/10 guards passed, 2 failed
+  D         SUBSET RESULT: 7/10 guards passed, 3 failed
+  E         SUBSET RESULT: 8/10 guards passed, 2 failed
+  F         SUBSET RESULT: 9/10 guards passed, 1 failed
+  G         SUBSET RESULT: 8/10 guards passed, 2 failed
+  H         SUBSET RESULT: 9/10 guards passed, 1 failed
+  I         SUBSET RESULT: 9/10 guards passed, 1 failed
+  RESTORED  SUBSET RESULT: 10/10 guards passed, 0 failed
+
+reading of the two columns that matter most:
+  PRE-FIX: 8 of the 10 guards fail. The two that pass are exactly the ones that pin
+  behavior which MUST survive the change - an undeclared busy worker still wedge-escalates,
+  and away mode still hands off untouched - so they pass before and after by design.
+  C (over-broad): "a busy worker with no declared wait still wedge-escalates" and
+  "lifting the declared wait resumes the ordinary wedge timer" both FAIL. That is the
+  supervision-loss proof: the guards detect a version of this change that buys quiet by
+  weakening wedge detection, so the shipped narrowness is enforced, not merely asserted.
+  Every one of the ten guards fails under at least one ablation, so none is unfalsifiable.

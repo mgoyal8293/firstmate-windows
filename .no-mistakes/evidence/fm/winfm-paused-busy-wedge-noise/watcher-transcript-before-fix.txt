@@ -1,0 +1,84 @@
+firstmate declared-pause vs wedge-escalation: end-to-end watcher transcript
+date: 2026-08-27 21:08:02+0000
+watcher under test: /tmp/nm-sub/bin/fm-watch.sh
+fleet knobs: FM_STALE_ESCALATE_SECS=240 (wedge timer), FM_PAUSE_RESURFACE_SECS=3600 (pause recheck),
+             FM_BUSY_TURN_MAX_SECS=3600 (completed-turn bound)
+
+================================================================
+SCENARIO 1 - the measured defect: a worker that DECLARED a bounded external wait, harness busy
+================================================================
+worker fleet:ci-wait  harness=pi (busy: agent-start, no completed turn for >1h)
+pane (frozen, nothing rendered): Running the release suite (output redirected to build.log)
+last status line the worker declared: paused: waiting on the upstream CI run to finish (~40min)
+
+poll t+4min   -> SUPERVISOR WOKEN (watcher exited, costs a supervisor turn)
+              wake reason delivered: stale: fleet:ci-wait (idle 500s, possible wedge, escalation 1) 
+              queued for the captain: 1787864883 1 stale fleet:ci-wait stale: fleet:ci-wait (idle 500s, possible wedge, escalation 1)
+poll t+8min   -> SUPERVISOR WOKEN (watcher exited, costs a supervisor turn)
+              wake reason delivered: stale: fleet:ci-wait (idle 501s, possible wedge, escalation 2) 
+              queued for the captain: 1787864884 2 stale fleet:ci-wait stale: fleet:ci-wait (idle 501s, possible wedge, escalation 2)
+poll t+12min  -> SUPERVISOR WOKEN (watcher exited, costs a supervisor turn)
+              wake reason delivered: stale: fleet:ci-wait (idle 500s, possible wedge, escalation 3, demand-deep-inspection: same pane has wedge-escalated 3 times in a row - do not re-absorb on the run-step/pane state alone) 
+              queued for the captain: 1787864884 3 stale fleet:ci-wait stale: fleet:ci-wait (idle 500s, possible wedge, escalation 3, demand-deep-inspection: same pane has wedge-escalated 3 times in a row - do not re-absorb on the run-step/pane state alone)
+
+wedge escalation count for this worker: 3
+
+================================================================
+SCENARIO 2 - must still escalate: same frozen busy pane, NO declared wait
+================================================================
+worker fleet:frozen  harness=pi (busy: agent-start, no completed turn for >1h)
+pane (frozen, nothing rendered): Running the release suite (output redirected to build.log)
+last status line the worker declared: working: running the release suite
+
+poll t+4min   -> SUPERVISOR WOKEN (watcher exited, costs a supervisor turn)
+              wake reason delivered: stale: fleet:frozen (idle 500s, possible wedge, escalation 1) 
+              queued for the captain: 1787864885 1 stale fleet:frozen stale: fleet:frozen (idle 500s, possible wedge, escalation 1)
+poll t+8min   -> SUPERVISOR WOKEN (watcher exited, costs a supervisor turn)
+              wake reason delivered: stale: fleet:frozen (idle 500s, possible wedge, escalation 2) 
+              queued for the captain: 1787864886 2 stale fleet:frozen stale: fleet:frozen (idle 500s, possible wedge, escalation 2)
+poll t+12min  -> SUPERVISOR WOKEN (watcher exited, costs a supervisor turn)
+              wake reason delivered: stale: fleet:frozen (idle 501s, possible wedge, escalation 3, demand-deep-inspection: same pane has wedge-escalated 3 times in a row - do not re-absorb on the run-step/pane state alone) 
+              queued for the captain: 1787864887 3 stale fleet:frozen stale: fleet:frozen (idle 501s, possible wedge, escalation 3, demand-deep-inspection: same pane has wedge-escalated 3 times in a row - do not re-absorb on the run-step/pane state alone)
+
+wedge escalation count for this worker: 3
+
+================================================================
+SCENARIO 3 - must still escalate: the declaration is LIFTED while the pane stays frozen
+================================================================
+worker fleet:lifted declared a wait, then the wait ended and the worker resumed logging work.
+
+poll paused   -> SUPERVISOR WOKEN (watcher exited, costs a supervisor turn)
+              wake reason delivered: stale: fleet:lifted (idle 501s, possible wedge, escalation 1) 
+              queued for the captain: 1787864888 1 stale fleet:lifted stale: fleet:lifted (idle 501s, possible wedge, escalation 1)
+
+... the wait ends: the worker resumes logging work, but its pane stays frozen ...
+
+poll lifted   -> SUPERVISOR WOKEN (watcher exited, costs a supervisor turn)
+              wake reason delivered: stale: fleet:lifted (idle 500s, possible wedge, escalation 2) 
+              queued for the captain: 1787864888 2 stale fleet:lifted stale: fleet:lifted (idle 500s, possible wedge, escalation 2)
+              (pause tracking dropped; the ordinary wedge timer restarts here: .stale-since=missing)
+
+... 4 more minutes of a frozen pane, now with no declaration standing ...
+
+poll lifted+4min -> SUPERVISOR WOKEN (watcher exited, costs a supervisor turn)
+              wake reason delivered: stale: fleet:lifted (idle 500s, possible wedge, escalation 3, demand-deep-inspection: same pane has wedge-escalated 3 times in a row - do not re-absorb on the run-step/pane state alone) 
+              queued for the captain: 1787864889 3 stale fleet:lifted stale: fleet:lifted (idle 500s, possible wedge, escalation 3, demand-deep-inspection: same pane has wedge-escalated 3 times in a row - do not re-absorb on the run-step/pane state alone)
+
+wedge escalation count for this worker: 3
+
+================================================================
+SCENARIO 4 - absorbed, never silenced: the declared wait itself ages past the long recheck window
+================================================================
+worker fleet:ci-recheck has held the same declared wait for longer than the recheck window.
+
+poll recheck  -> SUPERVISOR WOKEN (watcher exited, costs a supervisor turn)
+              wake reason delivered: stale: fleet:ci-recheck (idle 500s, possible wedge, escalation 1) 
+              queued for the captain: 1787864890 1 stale fleet:ci-recheck stale: fleet:ci-recheck (idle 500s, possible wedge, escalation 1)
+
+... the captain confirms and re-arms; the wait is still standing ...
+
+poll recheck+1 -> SUPERVISOR WOKEN (watcher exited, costs a supervisor turn)
+              wake reason delivered: stale: fleet:ci-recheck (idle 501s, possible wedge, escalation 2) 
+              queued for the captain: 1787864891 2 stale fleet:ci-recheck stale: fleet:ci-recheck (idle 501s, possible wedge, escalation 2)
+
+wedge escalation count for this worker: 2
