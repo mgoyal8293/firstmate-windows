@@ -327,6 +327,31 @@ busy_turn_over_age() {  # <task>
   [ "$(age_of "$f")" -ge "$BUSY_TURN_MAX_SECS" ]
 }
 
+# Triage for a busy pane that has crossed the completed-turn bound above.
+# Normally wedge_timer_check takes over. Exactly one state must not: a crew
+# whose own last status line DECLARES a bounded external wait (paused:) or a
+# captain hold. A busy pane proves the harness is alive but says nothing about
+# what it is doing, and any long command that renders nothing - a suite whose
+# output is redirected to a file, a background runner, a quiet tool, a long
+# model turn - is indistinguishable from a freeze by pane bytes alone. So the
+# wedge timer fired against an honestly declared wait every STALE_ESCALATE_SECS
+# for as long as that wait lasted, each escalation costing a supervisor turn.
+# A declared bounded wait PLUS a genuinely busy harness is the least wedge-like
+# state this watcher can observe, so it takes the same long PAUSE_RESURFACE_SECS
+# recheck a declared pause already gets when idle. Absorbed, never silenced:
+# handle_paused_stale still re-surfaces the wait for confirmation, and the moment
+# the crew's log stops declaring it the ordinary wedge timer resumes on the very
+# next poll. Away mode is excluded because the daemon owns triage there and wants
+# the unmodified wake stream.
+busy_bound_triage() {  # <window> <task> <hash> <last-status> <since-file> <escalation-file>
+  local win=$1 task=$2 h=$3 last=$4 ssf=$5 ewf=$6
+  if ! afk_present && status_is_paused_or_captain_held "$last"; then
+    handle_paused_stale "$win" "$task" "$h"
+  else
+    wedge_timer_check "$win" "$ssf" "busy (no completed turn)" "$ewf"
+  fi
+}
+
 # Absorb a stale pane under a declared external-wait pause (paused:) or a
 # dead-agent captain-held transfer, and re-surface it once every
 # PAUSE_RESURFACE_SECS for a recheck so it cannot rot invisibly. Called on any
@@ -1144,11 +1169,16 @@ EOF
         # unless a genuinely busy pane has gone too long with no completed turn -
         # then route it through the same wedge timer instead of erasing it.
         if [ "$busy_now" -eq 0 ] && busy_turn_over_age "$task"; then
-          wedge_timer_check "$w" "$ssf" "busy (no completed turn)" "$ewf"
+          busy_bound_triage "$w" "$task" "$h" "$last" "$ssf" "$ewf"
         else
           rm -f "$ssf" "$ewf"
         fi
-        if [ -e "$pf" ] && { [ "$n" -ge 2 ] || ! status_is_paused_or_captain_held "$(last_status_line "$STATE/$(window_to_task "$w" "$STATE").status")"; }; then
+        # Pause tracking survives exactly as long as the crew keeps declaring the
+        # wait. The old "$n" -ge 2 disjunct here meant busy (this branch can only
+        # reach n>=2 when the pane IS busy), so a busy pane tore down the pause
+        # bookkeeping busy_bound_triage just recorded - which also dropped the
+        # re-surface throttle and turned the long recheck into a per-poll wake.
+        if [ -e "$pf" ] && ! status_is_paused_or_captain_held "$last"; then
           clear_pause_tracking "$w"
         fi
       fi
@@ -1156,7 +1186,7 @@ EOF
       printf '%s' "$h" > "$hf"
       echo 0 > "$cf"
       if [ "$busy_now" -eq 0 ] && busy_turn_over_age "$task"; then
-        wedge_timer_check "$w" "$ssf" "busy (no completed turn)" "$ewf"
+        busy_bound_triage "$w" "$task" "$h" "$last" "$ssf" "$ewf"
       else
         rm -f "$ssf" "$ewf"
       fi
@@ -1166,8 +1196,10 @@ EOF
           paused) handle_paused_stale "$w" "$task" "$h" ;;
           *)      clear_pause_tracking "$w" ;;
         esac
-      else
-        [ -e "$pf" ] && clear_pause_tracking "$w"
+      elif [ -e "$pf" ] && ! status_is_paused_or_captain_held "$last"; then
+        # Same rule as the stable-hash branch: a busy pane no longer discards a
+        # standing declaration (this arm is reached whenever the pane is busy).
+        clear_pause_tracking "$w"
       fi
     fi
   done < <(recorded_windows)
