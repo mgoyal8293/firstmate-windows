@@ -342,7 +342,9 @@ busy_turn_over_age() {  # <task>
 # handle_paused_stale still re-surfaces the wait for confirmation, and the moment
 # the crew's log stops declaring it the ordinary wedge timer resumes on the very
 # next poll. Away mode is excluded because the daemon owns triage there and wants
-# the unmodified wake stream.
+# the unmodified wake stream. While the declaration stands the escalation count
+# and demand-deep-inspection marker do not accumulate; docs/architecture.md owns
+# that tradeoff.
 busy_bound_triage() {  # <window> <task> <hash> <last-status> <since-file> <escalation-file>
   local win=$1 task=$2 h=$3 last=$4 ssf=$5 ewf=$6
   if ! afk_present && status_is_paused_or_captain_held "$last"; then
@@ -1173,14 +1175,10 @@ EOF
         else
           rm -f "$ssf" "$ewf"
         fi
-        # Pause tracking survives exactly as long as the crew keeps declaring the
-        # wait. The old "$n" -ge 2 disjunct here meant busy (this branch can only
-        # reach n>=2 when the pane IS busy), so a busy pane tore down the pause
-        # bookkeeping busy_bound_triage just recorded - which also dropped the
-        # re-surface throttle and turned the long recheck into a per-poll wake.
-        if [ -e "$pf" ] && ! status_is_paused_or_captain_held "$last"; then
-          clear_pause_tracking "$w"
-        fi
+        # No pause-clear here or in the changed-hash branch below: the clear at
+        # the head of this window loop is the single owner of clearing pause
+        # tracking, so a busy poll neither clears nor needs to re-clear a
+        # standing declaration.
       fi
     else
       printf '%s' "$h" > "$hf"
@@ -1196,10 +1194,6 @@ EOF
           paused) handle_paused_stale "$w" "$task" "$h" ;;
           *)      clear_pause_tracking "$w" ;;
         esac
-      elif [ -e "$pf" ] && ! status_is_paused_or_captain_held "$last"; then
-        # Same rule as the stable-hash branch: a busy pane no longer discards a
-        # standing declaration (this arm is reached whenever the pane is busy).
-        clear_pause_tracking "$w"
       fi
     fi
   done < <(recorded_windows)
