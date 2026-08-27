@@ -366,11 +366,16 @@ busy_bound_triage() {  # <window> <task> <hash> <last-status> <since-file> <esca
 # re-surface epoch so, once past the window, it fires once per window rather than
 # every poll. Flags the key paused, and advances the stale suppressor to <hash>
 # unless <advance-suppressor> is 0. The suppressor records which hash the stale
-# triage has already classified, so only a caller that actually observed a stale
-# pane may advance it: a busy pane is by definition not stale and has classified
-# nothing, and burning the suppressor there would mark the hash already-triaged
-# and swallow the immediate fail-open surface the first genuinely stale sight of
-# it is owed.
+# triage has already classified, and the rule is narrower than "only a stale
+# caller advances it". The caller that must NOT advance it is a BUSY poll: it has
+# classified nothing, so burning the suppressor there would mark the hash
+# already-triaged and swallow the immediate fail-open surface the first genuinely
+# stale sight of it is owed. That is the whole reason the parameter exists. Every
+# other caller advances, and all but one of them observed a stably stale pane.
+# The exception is the changed-hash declared-pause arm, which advances on a poll
+# where the pane demonstrably just changed; it is reachable only for a crew whose
+# backend confidently reports its agent dead, and a dead agent's pane cannot
+# change again, so there is no later first sight for the suppressor to swallow.
 handle_paused_stale() {  # <window> <task> <hash> [advance-suppressor: 1 default, 0 from a busy poll]
   local win=$1 task=$2 h=$3 advance=${4:-1} key statusf mtime age rf rf_age reason
   key=$(printf '%s' "$win" | tr ':/.' '___')
@@ -1132,7 +1137,7 @@ EOF
           # authoritative source fm-crew-state.sh itself already prioritizes
           # over the log) a chance to override before trusting the log.
           if [ "$(cat "$sf" 2>/dev/null || true)" != "$h" ]; then
-            if crew_is_provably_working "$(window_to_task "$w" "$STATE")"; then
+            if crew_is_provably_working "$task"; then
               printf '%s' "$h" > "$sf"
               date +%s > "$ssf"
               triage_log "absorbed stale (provably working, overriding a stale captain-relevant status): $w"
@@ -1140,7 +1145,7 @@ EOF
               fm_wake_append stale "$w" "stale: $w" || exit 1
               printf '%s' "$h" > "$sf"
               rm -f "$ssf"
-              mark_surfaced "$STATE/$(window_to_task "$w" "$STATE").status"
+              mark_surfaced "$STATE/$task.status"
               wake "stale: $w"
             fi
           elif [ -e "$ssf" ]; then
@@ -1169,7 +1174,6 @@ EOF
           #     waiting on a decision, or wedged) instead of leaving the finish to
           #     wait out the timer.
           if [ "$(cat "$sf" 2>/dev/null || true)" != "$h" ]; then
-            task=$(window_to_task "$w" "$STATE")
             case "$(pause_state_class "$w" "$task")" in
               working)
                 clear_pause_tracking "$w" "$task" "$last"
@@ -1185,8 +1189,7 @@ EOF
                 ;;
             esac
           else
-            task=$(window_to_task "$w" "$STATE")
-            if [ -e "$pf" ] || status_is_paused_or_captain_held "$(last_status_line "$STATE/$task.status")"; then
+            if [ -e "$pf" ] || status_is_paused_or_captain_held "$last"; then
               case "$(pause_state_class "$w" "$task")" in
                 paused)  handle_paused_stale "$w" "$task" "$h" ;;
                 working) clear_pause_state "$w" "$task" "$last"
@@ -1222,8 +1225,7 @@ EOF
       else
         rm -f "$ssf" "$ewf"
       fi
-      task=$(window_to_task "$w" "$STATE")
-      if ! afk_present && status_is_paused_or_captain_held "$(last_status_line "$STATE/$task.status")" && [ "$busy_now" -ne 0 ]; then
+      if ! afk_present && status_is_paused_or_captain_held "$last" && [ "$busy_now" -ne 0 ]; then
         case "$(pause_state_class "$w" "$task")" in
           paused) handle_paused_stale "$w" "$task" "$h" ;;
           *)      clear_pause_tracking "$w" "$task" "$last" ;;

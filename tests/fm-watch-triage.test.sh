@@ -1652,19 +1652,29 @@ test_busy_wedge_escalation_resumes_when_the_declared_pause_is_lifted() {
 # never repeats a pane hash, so every poll takes the new-hash branch instead of
 # the stable-hash one. The declared wait must be honored there too.
 test_busy_declared_pause_changing_hash_does_not_wedge_escalate() {
-  local dir state fakebin out capture_file window key sig pid
+  local dir state fakebin out capture_file window key sig pid writer
   dir=$(make_case busy-paused-ticking); state="$dir/state"; fakebin="$dir/fakebin"
   out="$dir/watch.out"; capture_file="$dir/pane.txt"; window="test:fm-busy-paused-ticking"
-  printf 'Working... (3600.1s)' > "$capture_file"
+  printf 'Working... (0.0s)' > "$capture_file"
   printf 'window=%s\nkind=ship\nharness=pi\n' "$window" > "$state/busy-tickpaused.meta"
   record_pi_busy "$state" busy-tickpaused
   printf 'paused: waiting on a queued upstream CI run\n' > "$state/busy-tickpaused.status"
   sig=$(seen_sig "$state/busy-tickpaused.status"); printf '%s' "$sig" > "$state/.seen-busy-tickpaused_status"
   key=$(printf '%s' "$window" | tr ':/.' '___')
   touch -t 200001010000 "$state/busy-tickpaused.meta"
-  # No pre-seeded .hash-<key>: with a ticking footer every poll lands on the
-  # new-hash branch. Hand it a wedge timer already past the threshold.
+  # Hand it a wedge timer already past the threshold, so a changed-hash poll that
+  # still reached wedge_timer_check would escalate at once.
   echo $(( $(date +%s) - 500 )) > "$state/.stale-since-$key"
+
+  # No pre-seeded .hash-<key> AND a real ticking footer: the pane renders new
+  # bytes faster than the poll, so every poll - not just the first - lands on
+  # the changed-hash branch and reaches busy_bound_triage through that call
+  # site rather than falling through to the stable-hash one.
+  # Redirect the writer's own stdout: a forked subshell inherits this script's
+  # block-buffered stdout when the suite is run into a file, and would re-flush
+  # those pending bytes on exit, duplicating earlier ok lines in the report.
+  ( while :; do printf 'Working... (%s)' "$(date +%s%N)" > "$capture_file"; sleep 0.2; done ) >/dev/null 2>&1 &
+  writer=$!
 
   PATH="$fakebin:$PATH" FM_FAKE_TMUX_WINDOW="$window" FM_FAKE_TMUX_CAPTURE="$capture_file" \
     FM_STATE_OVERRIDE="$state" FM_BUSY_TURN_MAX_SECS=1 FM_STALE_ESCALATE_SECS=240 \
@@ -1672,12 +1682,14 @@ test_busy_declared_pause_changing_hash_does_not_wedge_escalate() {
     FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=999999 "$WATCH" > "$out" &
   pid=$!
   if ! wait_live "$pid" 40; then
-    reap "$pid"; fail "a busy declared pane with a ticking footer wedge-escalated: $(cat "$out")"
+    reap "$pid"; kill "$writer" 2>/dev/null; wait "$writer" 2>/dev/null
+    fail "a busy declared pane with a ticking footer wedge-escalated: $(cat "$out")"
   fi
+  reap "$pid"
+  kill "$writer" 2>/dev/null; wait "$writer" 2>/dev/null
   [ ! -s "$out" ] || fail "a busy declared pause with a ticking footer printed a wake reason: $(cat "$out")"
   [ -e "$state/.paused-$key" ] || fail "a busy declared pause with a ticking footer did not record the paused flag"
   [ ! -e "$state/.stale-since-$key" ] || fail "a busy declared pause with a ticking footer left the wedge timer running"
-  reap "$pid"
   pass "a busy declared pause whose pane hash changes every poll also takes the long recheck cadence"
 }
 
