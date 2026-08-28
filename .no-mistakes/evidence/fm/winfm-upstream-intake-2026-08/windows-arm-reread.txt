@@ -1,0 +1,74 @@
+=== WINDOWS-ARM RE-READ: behavioral re-verification of the platform arms in shared files the merge touched ===
+
+17 of the files changed between the base (3903bec) and the tip (feae6da) carry a Windows arm
+(MINGW/MSYS/CYGWIN case, OSTYPE case, fm_platform_is_windows, or FM_PLATFORM_UNAME_OVERRIDE):
+  .github/workflows/windows-ci.yml
+  .opencode/plugins/fm-primary-watch-arm.js
+  .pi/extensions/fm-primary-pi-watch.ts
+  bin/fm-pending-reply-lib.sh
+  bin/fm-session-start.sh
+  bin/fm-spawn.sh
+  bin/fm-teardown.sh
+  bin/fm-wake-lib.sh
+  bin/fm-watch-arm.sh
+  tests/fm-bootstrap.test.sh
+  tests/fm-crew-state.test.sh
+  tests/fm-kimi-harness.test.sh
+  tests/fm-lint-workflows.test.sh
+  tests/fm-lint.test.sh
+  tests/fm-pending-reply.test.sh
+  tests/fm-pr-check-security.test.sh
+  tests/fm-test-run.test.sh
+
+--- Where the merge's hunks landed relative to those arms (12-line proximity map) ---
+Only one changed hunk sits within 12 lines of an arm marker, in tests/fm-pending-reply.test.sh:
+  new lines 27..29, adjacent to the header index line naming 'the MSYS case' - the hunk adds
+  upstream's item 13 to that index and a new remote-repost case; the MSYS ps arm itself is untouched.
+
+--- Arms re-verified by executing them (Windows arms are driven on Linux through the port's platform seam) ---
+  ok - fm_proc_field: reads comm/args/ppid/pgid/sid from the MSYS /proc layout
+  ok - fm_platform_enable_native_symlinks: sets nativestrict on Windows, inert elsewhere, never overrides an explicit choice
+  ok - fm_path_gotmpdir_export_line: translates and quotes on Windows, and falls back to the POSIX literal rather than an empty export when the caller has no quoter
+  ok - bootstrap: Windows install hints name winget/scoop, not brew
+  ok - bootstrap: a conpty home is reported healthy only when its backend dependencies actually load
+  ok - bootstrap: the conpty dependency check is gated on the resolved backend
+  ok - bootstrap: install conpty-backend-deps runs the documented npm install in the backend directory
+  ok - bootstrap: install conpty-backend-deps runs npm in a backend directory whose path needs quoting
+  ok - bootstrap: a damaged checkout still gets a runnable MISSING: install command for the conpty dependency
+  ok - fm_session_start_default_budget: MINGW/MSYS/CYGWIN raise the default bound above the portable 120s
+  ok - fm_session_start_default_budget: non-Windows platforms keep the portable 120s default
+  ok - window_for_task: the no-metadata fallback matches the inventory's fm-<id> label and returns the backend's own target plus the id it matched, on conpty and herdr as well as tmux
+  ok - fm-spawn.sh: on Windows backend= is written even for tmux, so no Windows metadata depends on the absent-value default
+  ok - fm-spawn: GOTMPDIR is exported in the quoted Windows form on Windows, tasktmp= stays POSIX
+  ok - on Windows a missing lsof reaps from the /proc cwd scan instead of leaving an undeletable worktree
+
+--- Targeted scripts run for this re-read ---
+  FM_TEST_END 2026-08-28T03:30:18Z tests/fm-windows-portability.test.sh exit=0 duration_ms=1510 gate_skip=false
+  FM_TEST_END 2026-08-28T03:30:19Z tests/fm-upstream-sync.test.sh exit=0 duration_ms=589 gate_skip=false
+  FM_TEST_END 2026-08-28T03:30:34Z tests/fm-pending-reply.test.sh exit=0 duration_ms=14816 gate_skip=false
+  FM_TEST_END 2026-08-28T03:30:54Z tests/fm-bootstrap.test.sh exit=1 duration_ms=19975 gate_skip=false
+  FM_TEST_END 2026-08-28T03:30:59Z tests/fm-session-start-bound.test.sh exit=0 duration_ms=4996 gate_skip=false
+  FM_TEST_END 2026-08-28T03:31:22Z tests/fm-wake-queue.test.sh exit=0 duration_ms=22962 gate_skip=false
+  FM_TEST_END 2026-08-28T03:34:03Z tests/fm-test-run.test.sh exit=0 duration_ms=33126 gate_skip=false
+  FM_TEST_END 2026-08-28T03:34:50Z tests/fm-captain-hold-lifecycle.test.sh exit=0 duration_ms=46482 gate_skip=false
+  FM_TEST_END 2026-08-28T03:34:50Z tests/fm-classify-decision-key.test.sh exit=0 duration_ms=687 gate_skip=false
+  FM_TEST_END 2026-08-28T03:35:07Z tests/fm-crew-state.test.sh exit=0 duration_ms=16992 gate_skip=false
+  FM_TEST_END 2026-08-28T03:30:40Z tests/fm-pr-merge.test.sh exit=0 duration_ms=12297 gate_skip=false
+  FM_TEST_END 2026-08-28T03:28:40Z tests/fm-daemon.test.sh exit=0 duration_ms=15467 gate_skip=false
+  FM_TEST_END 2026-08-28T03:36:45Z tests/fm-backend.test.sh exit=0 duration_ms=17200 gate_skip=false
+  FM_TEST_END 2026-08-28T03:37:01Z tests/fm-kimi-harness.test.sh exit=0 duration_ms=16216 gate_skip=false
+  FM_TEST_END 2026-08-28T03:37:56Z tests/fm-teardown.test.sh exit=0 duration_ms=54884 gate_skip=false
+  FM_TEST_END 2026-08-28T03:26:09Z tests/fm-pi-watch-extension.test.sh exit=0 duration_ms=18361 gate_skip=false
+
+--- The one red script, classified on evidence as PRE-EXISTING and environmental, not merge fallout ---
+tests/fm-bootstrap.test.sh: 'the unsplit run lost its local diagnostic (missing: MISSING: node (install:)'
+  * the case is byte-identical at the base commit, and fails there too:
+      $ git archive 3903bec | tar -x -C /tmp/fm-base-tree && /tmp/fm-base-tree/tests/fm-bootstrap.test.sh
+      not ok - the unsplit run lost its local diagnostic (missing: 'MISSING: node (install:')
+      BASE 3903bec exit=1
+  * cause: the fixture deletes node from its fakebin, but this sandbox has node at /usr/bin/node,
+    which is inside the test's default BASE_PATH (/usr/bin:/bin:/usr/sbin:/sbin), so bootstrap still finds one.
+  * with a system PATH mirror that omits node, the whole script passes on the merged tree:
+      $ FM_TEST_BASE_PATH=<mirror of /usr/bin:/bin minus node> tests/fm-bootstrap.test.sh
+      ok assertions: 38
+      exit=0, 0 failures

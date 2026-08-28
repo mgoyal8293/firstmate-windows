@@ -1,0 +1,37 @@
+=== RISK 1: tests/fm-pi-watch-extension.test.sh - upstream's armRows[1] + confirmed-generation assertions AND our measured budget ===
+
+--- A. As landed: full script green, budget MEASURED (upstream shipped a literal ARM_READY_TIMEOUT_MS=2000) ---
+$ bin/fm-test-run.sh tests/fm-pi-watch-extension.test.sh
+FM_TEST_BEGIN 2026-08-28T03:25:51Z tests/fm-pi-watch-extension.test.sh family=watcher-wake-lock expected_gate_skip=none
+# arm child start 13ms measured, readiness budget 500ms
+# observation slack 1000ms derived, poll cadence window/64
+... 36 assertions ...
+FM_TEST_END 2026-08-28T03:26:09Z tests/fm-pi-watch-extension.test.sh exit=0 duration_ms=18361 gate_skip=false
+FM_TEST_SUMMARY total=1 failed=0 skipped_gate=0 duration_ms=18409
+FM_TEST_SUMMARY_FAMILY family=watcher-wake-lock count=1 duration_ms=18361 failed=0
+FM_TEST_SLOWEST rank=1 script=tests/fm-pi-watch-extension.test.sh duration_ms=18361
+exit=0
+
+--- B. "Take our side wholesale" (pre-merge test file, merged plugin): breaks, because rows now contains a non-arm row ---
+$ tests/fm-pi-watch-extension.test.sh   # file from base 3903bec, rest of tree merged
+ok - Pi redundant tool call returns ownership guidance and spawns no second child
+ok - Pi scheduled retry remains extension-owned after another tool call
+not ok - Pi actionable close must start one successor before wake delivery settles: expected exit 0, got 1 - file:///tmp/fm-covguard-wdVG/repo/[eval1]:41
+if (rows.length !== 2) throw new Error(`expected one successor arm, got ${rows.length}: ${rows.join(" | ")}`);
+                             ^
+
+Error: expected one successor arm, got 3: arm=3081721 predecessor=none | arm=3081728 predecessor=3081721 | confirmed generation=fixture-generation watcher=3081728
+    at file:///tmp/fm-covguard-wdVG/repo/[eval1]:41:30
+
+
+--- C. Signal check: plugin mutant that confirms the handling handshake AFTER the follow-up ---
+$ FM_MUTATE_LATE_CONFIRM=1 tests/fm-pi-watch-extension.test.sh   # MERGED test file
+not ok - Pi actionable close must start one successor before wake delivery settles: expected exit 0, got 1 - file:///tmp/fm-covguard-wdVG/repo/[eval1]:47
+  throw new Error(`handling delivery was not confirmed before the follow-up: ${rows.join(" | ")}`);
+        ^
+
+Error: handling delivery was not confirmed before the follow-up: arm=3084539 predecessor=none | arm=3084546 predecessor=3084539
+    at file:///tmp/fm-covguard-wdVG/repo/[eval1]:47:9
+$ FM_MUTATE_LATE_CONFIRM=1 tests/fm-pi-watch-extension.test.sh   # PRE-MERGE (our-side) test file
+ok - Pi actionable close starts one successor before wake delivery settles
+=> the pre-merge assertions do not notice the ordering regression; upstream's confirmed-generation assertion does.

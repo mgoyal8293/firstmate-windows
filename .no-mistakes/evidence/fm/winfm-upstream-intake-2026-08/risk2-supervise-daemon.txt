@@ -1,0 +1,29 @@
+=== RISK 2: bin/fm-supervise-daemon.sh - upstream's status_is_paused_or_captain_held (#2748) AND our optional task argument ===
+
+--- As landed ---
+$ bin/fm-test-run.sh tests/fm-daemon.test.sh
+FM_TEST_END 2026-08-28T03:28:40Z tests/fm-daemon.test.sh exit=0 duration_ms=15467 gate_skip=false
+FM_TEST_SUMMARY total=1 failed=0 skipped_gate=0 duration_ms=15507
+(105 assertions, including the four captain-hold cases)
+ok - a captain-held transfer classifies as pause, not as a wedge candidate
+ok - housekeeping re-surfaces a forgotten captain hold on the long cadence and resets its window
+ok - housekeeping clears the pause marker once a captain hold is answered
+ok - housekeeping moves a captain hold's existing stale marker to pause before wedge escalation
+
+--- Mutant A: take OUR side wholesale (status_is_paused_or_captain_held -> status_is_paused) ---
+$ sed -i s/status_is_paused_or_captain_held/status_is_paused/g bin/fm-supervise-daemon.sh && tests/fm-daemon.test.sh
+12:not ok - captain-held transfer did not classify as pause: self|transient stale (sess:fm-held-w9h): captain-held [key=route]: tracked by task-decision-route
+=> a captain-held pane is aged as a wedge candidate again: upstream's pause-cadence fix is live and load-bearing.
+
+--- Mutant B: take UPSTREAM's side wholesale (drop our optional [task] argument on the marker helpers) ---
+$ (helpers re-resolve window_to_task instead of accepting the caller task) && tests/fm-daemon.test.sh
+94:not ok - housekeeping did not read the discovered conpty task's own status file, so its declared pause never became a pause marker
+=> the conpty (Windows) discovery path loses the pause marker: our port-side argument is live and load-bearing.
+
+--- Merged helper signature (both sides present) ---
+pause_marker_record() {  # <window> <state> [task] - create if absent
+  local win=$1 state=$2 task=${3:-} marker
+  [ -n "$task" ] || task=$(window_to_task "$win" "$state")
+  marker="$state/.subsuper-paused-$(_stale_key "$task")"
+  [ -e "$marker" ] || _now > "$marker"
+}

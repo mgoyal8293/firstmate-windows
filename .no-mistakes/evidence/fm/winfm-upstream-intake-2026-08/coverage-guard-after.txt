@@ -1,0 +1,8 @@
+$ bin/fm-test-run.sh --check-coverage        # as landed on fm/winfm-upstream-intake-2026-08
+FM_TEST_COVERAGE ok total=164 parallel=24 serial=128 serial_shards=4 herdr=12 unmeasured_serial=3
+fm-test-run: coverage guard: portable serial scripts with no measured duration, packed at 20000ms (docs/fm-test-portable-shards.md owns the refresh):
+tests/fm-conpty-liveness-live-e2e.test.sh
+tests/fm-python-lib.test.sh
+tests/fm-voice-relay.test.sh
+FM_TEST_COVERAGE_WINDOWS ok windows=42 windows_shards=4 unmeasured_windows=0
+exit=0

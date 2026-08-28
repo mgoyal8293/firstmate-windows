@@ -1,0 +1,66 @@
+=== Required PR check + CONTRIBUTING.md floor: the gate executed as a contributor experiences it ===
+
+The step was taken from .github/workflows/no-mistakes-required.yml by parsing the workflow YAML
+(jobs.check.steps[0].run) and run under bash with the same env the runner supplies.
+
+### 1. no-mistakes signature + complete attestation
+Found no-mistakes signature in PR #20 body.
+Pipeline step attestation is valid: review, test, and document are completed.
+exit=0
+
+### 2. signature present, attestation comment absent (what a pre-1.46.0 no-mistakes produces)
+Found no-mistakes signature in PR #20 body.
+::error::This repository requires no-mistakes >= 1.46.0; structured pipeline step attestation is missing or unparseable.
+
+The no-mistakes signature was found, but this check also requires one
+HTML comment in the PR body:
+
+    <!-- no-mistakes-pipeline-attestation:v1 {"head_sha":"...","steps":[...]} -->
+
+That comment is emitted by no-mistakes >= 1.46.0 (the release that started
+emitting structured step attestation; see https://github.com/kunchenguid/no-mistakes/pull/670).
+An older no-mistakes that writes only the signature line is not enough.
+
+Re-run the pipeline with 'git push no-mistakes' using no-mistakes >= 1.46.0.
+See CONTRIBUTING.md for setup and the full workflow.
+
+PR author: contributor
+exit=1
+
+### 3. signature present, a required step skipped instead of completed
+Found no-mistakes signature in PR #20 body.
+::error::Required no-mistakes pipeline steps are not completed: test=skipped.
+
+This repository requires review, test, and document to each have status
+exactly 'completed'. Quota skips and agent skips are not compliant.
+
+Re-run the pipeline with 'git push no-mistakes' using no-mistakes >= 1.46.0
+so those required steps complete rather than skip.
+See CONTRIBUTING.md for setup and the full workflow.
+
+PR author: contributor
+exit=1
+
+### 4. PR not raised through no-mistakes
+::error::This PR was not raised through no-mistakes.
+
+Contributions to this repository must be submitted via 'git push no-mistakes'.
+That pipeline runs the required review/test/lint/CI steps and writes a
+deterministic '## Pipeline' section into the PR body containing:
+
+    Updates from [git push no-mistakes](https://github.com/kunchenguid/no-mistakes)
+
+See CONTRIBUTING.md for setup and the full workflow.
+
+PR author: contributor
+exit=1
+
+--- The file that error text sends contributors to now states the floor the gate enforces ---
+32:3. Initialize the gate with your fork as the push target: `no-mistakes init --fork-url git@github.com:<you>/firstmate.git` (firstmate expects **no-mistakes v1.46.0+**; without a fork, plain `no-mistakes init` still works for maintainers with push access).
+  (was: 'firstmate expects no-mistakes v1.31.2+' before this branch)
+
+--- The deliberately deferred second enforcement point is unchanged in behaviour ---
+845:NO_MISTAKES_MIN=1.31.2
+  bootstrap still accepts 1.31.2, proven by its own behaviour test:
+ok - bootstrap enforces no-mistakes minimum version
+  (cases: v1.31.2 accepted, v1.32.0 accepted, v2.0.0 accepted, v1.31.1 reports an upgrade)

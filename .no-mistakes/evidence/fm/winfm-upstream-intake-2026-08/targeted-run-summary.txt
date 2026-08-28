@@ -1,0 +1,41 @@
+=== Targeted validation run summary (fm/winfm-upstream-intake-2026-08, 3903bec -> feae6da) ===
+
+Counts are taken from the runner's own FM_TEST_SUMMARY markers, not from step colour.
+
+--- FM_TEST_SUMMARY, one line per invocation of bin/fm-test-run.sh ---
+piwatch: FM_TEST_SUMMARY total=1 failed=0 skipped_gate=0 duration_ms=18409
+daemon: FM_TEST_SUMMARY total=1 failed=0 skipped_gate=0 duration_ms=15507
+prmerge: FM_TEST_SUMMARY total=1 failed=0 skipped_gate=0 duration_ms=12333
+winarms: FM_TEST_SUMMARY total=6 failed=1 skipped_gate=0 duration_ms=65089
+batch2: FM_TEST_SUMMARY total=4 failed=0 skipped_gate=0 duration_ms=97391
+batch3: FM_TEST_SUMMARY total=3 failed=0 skipped_gate=0 duration_ms=88384
+
+--- Scripts exercised (16) ---
+  tests/fm-backend.test.sh exit=0 duration_ms=17200
+  tests/fm-bootstrap.test.sh exit=1 duration_ms=19975
+  tests/fm-captain-hold-lifecycle.test.sh exit=0 duration_ms=46482
+  tests/fm-classify-decision-key.test.sh exit=0 duration_ms=687
+  tests/fm-crew-state.test.sh exit=0 duration_ms=16992
+  tests/fm-daemon.test.sh exit=0 duration_ms=15467
+  tests/fm-kimi-harness.test.sh exit=0 duration_ms=16216
+  tests/fm-pending-reply.test.sh exit=0 duration_ms=14816
+  tests/fm-pi-watch-extension.test.sh exit=0 duration_ms=18361
+  tests/fm-pr-merge.test.sh exit=0 duration_ms=12297
+  tests/fm-session-start-bound.test.sh exit=0 duration_ms=4996
+  tests/fm-teardown.test.sh exit=0 duration_ms=54884
+  tests/fm-test-run.test.sh exit=0 duration_ms=33126
+  tests/fm-upstream-sync.test.sh exit=0 duration_ms=589
+  tests/fm-wake-queue.test.sh exit=0 duration_ms=22962
+  tests/fm-windows-portability.test.sh exit=0 duration_ms=1510
+
+--- Assertions ---
+  ok lines across the targeted runs: 570
+  not ok lines: 1  (the single bootstrap node-PATH artifact, pre-existing at the base commit)
+
+--- Guards and gates driven directly ---
+  bin/fm-test-run.sh --check-coverage                    -> FM_TEST_COVERAGE ok / FM_TEST_COVERAGE_WINDOWS ok windows=42 unmeasured_windows=0
+  .github/workflows/no-mistakes-required.yml gate script -> exercised with 4 PR bodies (pass, missing attestation, skipped step, no signature)
+  tests/fm-bearings-snapshot.test.sh                     -> 42 ok, matching the -eq 42 the macos-stock-bash CI step enforces
+
+NOT run here: the complete 164-script suite. This phase is targeted validation of the stated intent;
+broad regression across all four portable-serial shards and the Windows lane is CI's job.

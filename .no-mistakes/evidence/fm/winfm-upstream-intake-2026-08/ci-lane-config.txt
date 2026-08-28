@@ -1,0 +1,20 @@
+=== CI lane configuration, parsed from the workflow YAML the runner consumes ===
+
+--- base 3903bec: job tests-portable-serial ---
+  name: Behavior portable serial ${{ matrix.shard }}
+  timeout-minutes: 15
+  matrix shard: [1, 2, 3, 4]
+  lane command: set -eu mkdir -p "$RUNNER_TEMP/fm-test" bin/fm-test-run.sh --lane "$FM_SERIAL_LANE" \ --json "$RUNNER_TEMP/fm-test/fm-test-timing-portable-serial-${FM_SERIAL_SH
+
+--- tip  feae6da: job tests-portable-serial ---
+  name: Behavior portable serial ${{ matrix.shard }}
+  timeout-minutes: 20
+  matrix shard: [1, 2, 3, 4]
+  lane command: set -eu mkdir -p "$RUNNER_TEMP/fm-test" bin/fm-test-run.sh --lane "$FM_SERIAL_LANE" \ --json "$RUNNER_TEMP/fm-test/fm-test-timing-portable-serial-${FM_SERIAL_SH
+
+--- Windows lane job(s) in .github/workflows/windows-ci.yml ---
+  windows-lint: timeout-minutes=18 matrix={}
+  windows-behavior: timeout-minutes=40 matrix={'shard': [1, 2, 3, 4]}
+
+--- Bearings count the ci.yml step enforces at the tip ---
+   macos-stock-bash : [ "$bearings_count" -eq 42 ] || {

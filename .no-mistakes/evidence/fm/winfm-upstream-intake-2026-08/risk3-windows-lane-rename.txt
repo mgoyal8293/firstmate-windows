@@ -1,0 +1,40 @@
+=== RISK 3: bin/fm-test-run.sh - the two hard-listed Windows-lane entries renamed to fm-captain-hold-lifecycle ===
+
+--- As landed: the repository's own coverage guard is green ---
+$ bin/fm-test-run.sh --check-coverage        # as landed on fm/winfm-upstream-intake-2026-08
+FM_TEST_COVERAGE ok total=164 parallel=24 serial=128 serial_shards=4 herdr=12 unmeasured_serial=3
+fm-test-run: coverage guard: portable serial scripts with no measured duration, packed at 20000ms (docs/fm-test-portable-shards.md owns the refresh):
+tests/fm-conpty-liveness-live-e2e.test.sh
+tests/fm-python-lib.test.sh
+tests/fm-voice-relay.test.sh
+FM_TEST_COVERAGE_WINDOWS ok windows=42 windows_shards=4 unmeasured_windows=0
+exit=0
+
+--- Counterfactual: the same tree with ONLY those two Windows-lane lines left at the old name ---
+   (list_windows entry + windows_weight_hints entry reverted to tests/fm-decision-hold-lifecycle.test.sh)
+$ bin/fm-test-run.sh --check-coverage
+fm-test-run: coverage guard: windows lane lists scripts that are not in tests/*.test.sh:
+tests/fm-decision-hold-lifecycle.test.sh
+exit=1
+
+=> a clean textual merge with no conflict marker, but the guard is red; renaming both lines is what keeps it green,
+   and unmeasured_windows stays 0 because the inherited 860000 ms hint moved with the name instead of being deleted.
+
+--- The runner's own behavior tests, exercising lane composition and the guard ---
+FM_TEST_END 2026-08-28T03:34:03Z tests/fm-test-run.test.sh exit=0 duration_ms=33126 gate_skip=false
+ok - exact suite coverage: --all lists every tests/*.test.sh once
+ok - coverage guard pins every comm to a C collation (14 calls)
+ok - portable shard union, disjointness, and coverage guard hold
+ok - portable serial shards are a deterministic disjoint cover of the serial lane
+ok - coverage guard counts and names serial scripts with no measured duration
+ok - portable serial shard lanes refuse mismatched, out-of-range, and countless names
+ok - windows shard lanes refuse mismatched, out-of-range, and countless names
+ok - coverage guard reports the windows lane size, shard count, and unmeasured members
+ok - coverage guard counts and names windows lane members with no measured duration
+ok - coverage guard refuses windows shards that do not cover the windows lane
+ok - windows-ci LF guard detects CRLF at any scale and refuses to certify an unfinished scan
+ok - windows-ci LF steps refuse a CR detector that cannot tell CRLF from LF
+ok - windows-ci harness PATH step fails, and names the tools, when the built PATH cannot reach them
+
+--- The renamed upstream test itself runs green here ---
+FM_TEST_END 2026-08-28T03:34:50Z tests/fm-captain-hold-lifecycle.test.sh exit=0 duration_ms=46482 gate_skip=false
