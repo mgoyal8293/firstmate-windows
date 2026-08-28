@@ -130,7 +130,14 @@ esac
 exit 0
 SH
   chmod +x "$case_dir/fakebin/glab"
-  ln -sf "$JQ_BIN" "$case_dir/fakebin/jq"
+  # jq is re-exposed by a wrapper that execs the real binary, not by a symlink to
+  # it. On Windows the host jq is a Chocolatey shim, and a shim mirrored out of its
+  # own directory is executable but non-functional, so the sandbox answered for jq
+  # and then could not parse glab's JSON. A wrapper needs no platform arm: the
+  # shebang behaves identically on Linux and Git Bash, and the sandbox still owns
+  # the name, so this test's design is unchanged.
+  printf '#!/usr/bin/env bash\nexec "%s" "$@"\n' "$JQ_BIN" > "$case_dir/fakebin/jq"
+  chmod +x "$case_dir/fakebin/jq"
 }
 
 # write_mr_json <file> [<field>=<value> ...]
