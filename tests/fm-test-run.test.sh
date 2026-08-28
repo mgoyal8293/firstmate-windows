@@ -672,7 +672,6 @@ test_windows_coverage_report_counts_the_shipped_lane() {
 test_unmeasured_windows_report_names_the_unhinted_member() {
   local sandbox runner out err rc baseline count expected probe hinted block
   probe=tests/fm-zzz-windows-probe.test.sh
-  hinted=tests/fm-decision-hold-lifecycle.test.sh
   sandbox=$(coverage_guard_sandbox fm-test-run-unmeasured-windows) \
     || fail "could not create sandbox root"
   runner="$sandbox/bin/fm-test-run.sh"
@@ -689,6 +688,19 @@ test_unmeasured_windows_report_names_the_unhinted_member() {
   case $baseline in
     ''|*[!0-9]*) fail "sandbox guard did not report an unmeasured windows count: $out" ;;
   esac
+
+  # The measured member to assert against comes from the lane's own baseline
+  # report, not from a third hand-written copy of a script name: a name spelled
+  # here rots the moment upstream renames the script, and the negative assertion
+  # below then passes for a name that is simply absent everywhere. Anything the
+  # lane lists and the baseline listing does not call unhinted is measured.
+  windows_unhinted_block "$(cat "$sandbox/baseline-err.txt")" \
+    > "$sandbox/baseline-unhinted.txt"
+  hinted=$("$runner" --list --lane windows \
+    | grep -Fxv -f "$sandbox/baseline-unhinted.txt" | head -n 1)
+  [ -n "$hinted" ] \
+    || fail "the windows lane must carry a measured member for this assertion to mean anything"
+  assert_present "$ROOT/$hinted" "derived measured windows member $hinted is not in the tree"
 
   # Admit a member to the hand-written lane list without measuring it - the exact
   # drift between the two parallel lists that this counter exists to see - and
@@ -726,9 +738,11 @@ test_unmeasured_windows_report_names_the_unhinted_member() {
   block=$(windows_unhinted_block "$err")
   printf '%s\n' "$block" | grep -Fqx "$probe" \
     || fail "the windows listing must name the unhinted member, got '$block': $err"
-  # And a measured member must not be swept in with it.
-  printf '%s\n' "$err" | grep -Fq "$hinted" \
-    && fail "guard named a measured windows member as unmeasured: $err"
+  # And a measured member must not be swept in with it. Scoped to the windows
+  # reporter's own block, because the serial reporter legitimately names a
+  # windows-measured script in its unmeasured listing on the same stderr.
+  printf '%s\n' "$block" | grep -Fqx "$hinted" \
+    && fail "guard named the measured windows member $hinted as unmeasured: $err"
   rm -rf "$sandbox"
   pass "coverage guard counts and names windows lane members with no measured duration"
 }

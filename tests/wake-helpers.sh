@@ -53,8 +53,27 @@ append_wake() {
   ' _ "$lib" "$kind" "$key" "$payload"
 }
 
+# make_case <name>: a fresh case world (state dir, fakebin, fake tmux, fake
+# crew-state) under $TMP_ROOT/<name>, echoed for the caller.
+#
+# The name is the whole identity of that world, so two cases sharing one name
+# share every marker, queue file and fakebin the first one left behind - the
+# second silently starts inside the first's state and its failure (or its pass)
+# means nothing. That is exactly the collision this merge exposed, so refuse a
+# repeated name loudly and name it, rather than clearing the directory: a clear
+# would erase a deliberate re-entry just as silently as the reuse it fixes.
+# The claim is on disk because every call runs in its own command-substitution
+# subshell, where an in-memory set would not survive.
 make_case() {
-  local name=$1 dir fakebin
+  local name=${1:-} dir fakebin claims
+  [ -n "$name" ] || fail_now "make_case: a case name is required"
+  claims="$TMP_ROOT/.make-case-names"
+  mkdir -p "$claims" || fail_now "make_case: could not claim the case name '$name'"
+  if ! mkdir "$claims/$name" 2>/dev/null; then
+    [ -d "$claims/$name" ] \
+      && fail_now "make_case: duplicate case name '$name' - the second case would inherit the first's state, fakebin and markers; give it its own name"
+    fail_now "make_case: could not claim the case name '$name'"
+  fi
   dir="$TMP_ROOT/$name"
   fakebin="$dir/fakebin"
   mkdir -p "$dir/state" "$fakebin"
@@ -128,6 +147,11 @@ prime_status_seen() {  # <state> <file>
     [ -n "$sig" ] || exit 1
     printf "%s" "$sig" > "$(fm_wake_signal_seen_path "$2" "$3")"
   ' _ "$ROOT/bin/fm-wake-lib.sh" "$1" "$2"
+}
+
+# Print the generation from a recovery marker token of any status/kind.
+recovery_marker_generation() {  # <marker-file>
+  sed -n 's/^[^:]*:[^:]*:\(.*\)$/\1/p' "$1"
 }
 
 # Acknowledge a drain from its captured stderr (the WAKE_ACK_REQUIRED line).

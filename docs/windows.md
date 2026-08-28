@@ -428,3 +428,6 @@ A Windows operator meets them in this order.
 - Relay's artifact writes (`x_mode_write_if_changed` in `bin/fm-bootstrap.sh`) still assert exact modes directly. Relay is off unless the home opts in.
 - Away mode's daemon launch (`bin/fm-afk-launch.sh`) is unexamined on Windows.
 - The macOS-only surfaces (`bin/backends/herdr.sh`, `bin/fm-remote-job-*.sh`, muse) are deliberately out of scope.
+- The voice and inbox stack that arrived with the 2026-08 upstream intake (`bin/fm-inbox.sh`, `bin/fm-voice-*.py`, `bin/fm_voice_records.py`) is unported.
+  `bin/fm-inbox.sh` calls bare `python3` in six places, which is the Microsoft Store execution-alias trap [`../bin/fm-python-lib.sh`](../bin/fm-python-lib.sh) exists to answer, and the stack additionally needs PortAudio and an AWS Bedrock region.
+  It is optional and inert until invoked, so the intake took it rather than carrying a divergence; `winfm-inbox-python-capability` is the filed follow-up that routes it through the capability owner.

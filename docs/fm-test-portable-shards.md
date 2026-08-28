@@ -5,35 +5,35 @@
 
 ## Verification inputs
 
-The current candidate timings came from the 2026-07-29 concurrent proof recorded in [fm-test-isolation-proof.md](fm-test-isolation-proof.md).
+The current candidate timings came from the 2026-08-21 concurrent proof recorded in [fm-test-isolation-proof.md](fm-test-isolation-proof.md).
 The proof ran 24 candidates with four workers and no failures.
 
 | duration_ms | script |
 |---:|---|
-| 52939 | `tests/fm-x-mode.test.sh` |
-| 48294 | `tests/fm-backend-herdr.test.sh` |
-| 46788 | `tests/fm-arm-pretool-check.test.sh` |
-| 34207 | `tests/fm-cd-pretool-check.test.sh` |
-| 30771 | `tests/fm-decision-hold-lifecycle.test.sh` |
-| 25365 | `tests/fm-crew-state.test.sh` |
-| 15674 | `tests/fm-test-run.test.sh` |
-| 15422 | `tests/fm-herdr-lab.test.sh` |
-| 9065 | `tests/fm-composer-ghost.test.sh` |
-| 8564 | `tests/fm-pr-merge.test.sh` |
-| 6251 | `tests/fm-grok-harness.test.sh` |
-| 5644 | `tests/fm-send-popup-settle.test.sh` |
-| 5237 | `tests/fm-lint.test.sh` |
-| 4816 | `tests/fm-tmux-submit-busy.test.sh` |
-| 2945 | `tests/fm-pi-primary-types.test.sh` |
-| 2911 | `tests/fm-send-settle.test.sh` |
-| 2875 | `tests/fm-review-diff.test.sh` |
-| 2747 | `tests/fm-send-strict.test.sh` |
-| 2224 | `tests/fm-brief.test.sh` |
-| 855 | `tests/fm-spawn-batch.test.sh` |
-| 703 | `tests/fm-supervision-instructions.test.sh` |
-| 581 | `tests/fm-ensure-agents-md.test.sh` |
-| 248 | `tests/fm-transition-lib.test.sh` |
-| 64 | `tests/fm-composer-lib.test.sh` |
+| 45356 | `tests/fm-backend-herdr.test.sh` |
+| 35415 | `tests/fm-x-mode.test.sh` |
+| 35095 | `tests/fm-captain-hold-lifecycle.test.sh` |
+| 27529 | `tests/fm-arm-pretool-check.test.sh` |
+| 20922 | `tests/fm-test-run.test.sh` |
+| 17558 | `tests/fm-crew-state.test.sh` |
+| 16582 | `tests/fm-cd-pretool-check.test.sh` |
+| 9766 | `tests/fm-lint.test.sh` |
+| 9562 | `tests/fm-herdr-lab.test.sh` |
+| 6768 | `tests/fm-grok-harness.test.sh` |
+| 6290 | `tests/fm-pr-merge.test.sh` |
+| 5569 | `tests/fm-composer-ghost.test.sh` |
+| 4563 | `tests/fm-send-popup-settle.test.sh` |
+| 4021 | `tests/fm-tmux-submit-busy.test.sh` |
+| 3544 | `tests/fm-composer-lib.test.sh` |
+| 3025 | `tests/fm-send-strict.test.sh` |
+| 2753 | `tests/fm-send-settle.test.sh` |
+| 2166 | `tests/fm-review-diff.test.sh` |
+| 1315 | `tests/fm-brief.test.sh` |
+| 975 | `tests/fm-spawn-batch.test.sh` |
+| 598 | `tests/fm-pi-primary-types.test.sh` |
+| 513 | `tests/fm-ensure-agents-md.test.sh` |
+| 331 | `tests/fm-supervision-instructions.test.sh` |
+| 99 | `tests/fm-transition-lib.test.sh` |
 
 ## Parallel lanes
 
@@ -41,9 +41,9 @@ The two parallel lanes use longest-processing-time assignment from those measure
 
 | Lane | Script count | Estimated duration |
 |---|---:|---:|
-| `portable-parallel-1` | 11 | 162436 ms (~162.4 s) |
-| `portable-parallel-2` | 13 | 162754 ms (~162.8 s) |
-| imbalance | | 318 ms |
+| `portable-parallel-1` | 11 | 134295 ms (~134.3 s) |
+| `portable-parallel-2` | 13 | 126020 ms (~126.0 s) |
+| imbalance | | 8275 ms |
 
 `bin/fm-test-run.sh` contains the exact ordered memberships in `list_portable_parallel_1` and `list_portable_parallel_2`.
 
@@ -65,6 +65,9 @@ Each shard is still strictly serial in itself, and separate runners mean no two 
 
 Assignment is longest-processing-time bin packing over per-script duration hints embedded in `bin/fm-test-run.sh`.
 The hints came from the `fm-test-timing-portable-serial` artifacts of green run [32159215212](https://github.com/mgoyal8293/firstmate-windows/actions/runs/32159215212) on 2026-08-18, where the lane ran 116 scripts in 2539694 ms of serial work.
+Six entries instead keep upstream's own measured values, adopted with the 2026-08 upstream intake because they measure scripts this fork had never run: `tests/fm-bearings-board.test.sh`, `tests/fm-herdr-submit-confirm-live-e2e.test.sh`, `tests/fm-peek-remote.test.sh`, `tests/fm-send-remote-delivery.test.sh`, `tests/fm-tool-update-check.test.sh` and `tests/fm-watch-recovery-loop.test.sh`.
+Those come from upstream's green run [32491999845](https://github.com/kunchenguid/firstmate/actions/runs/32491999845) on 2026-08-21, except `tests/fm-tool-update-check.test.sh`, whose 12846 ms comes from the shard 3 artifact of upstream run [32461816719](https://github.com/kunchenguid/firstmate/actions/runs/32461816719), the first run that measured it.
+Every entry both sides measured keeps this fork's value, because a hint is only as good as the machine it was taken on.
 A script with no hint gets the conservative `PORTABLE_SERIAL_DEFAULT_WEIGHT_MS` default.
 
 Hints affect balance, not coverage: the coverage guard keeps the partition complete and disjoint whatever they say.
@@ -90,18 +93,19 @@ Read that counter for exactly what it says.
 It reports whether any selected serial script is packed at the default, so `unmeasured_serial=0` means no script is packed at the default - it does **not** mean the hints are current.
 An already-hinted script can quadruple while the count stays at zero, which is what happened here: the lane's script count was stable, the count was zero throughout, and most of the hidden time was in values the guard never looks at.
 Nothing currently detects a stale value on a script that already has a hint; `fm-test-weight-drift-detector` is the filed follow-up that will compare measured durations against the table.
+So refresh the hints whenever the serial lane gains scripts, rather than waiting for a shard to approach the cap.
 
 | Lane | Script count | Estimated duration |
 |---|---:|---:|
-| `portable-serial-1of4` | 30 | 647596 ms (~10.79 min) |
-| `portable-serial-2of4` | 31 | 647598 ms (~10.79 min) |
-| `portable-serial-3of4` | 31 | 647596 ms (~10.79 min) |
-| `portable-serial-4of4` | 29 | 647582 ms (~10.79 min) |
-| imbalance | | 16 ms |
+| `portable-serial-1of4` | 32 | 672775 ms (~11.21 min) |
+| `portable-serial-2of4` | 32 | 672766 ms (~11.21 min) |
+| `portable-serial-3of4` | 33 | 672770 ms (~11.21 min) |
+| `portable-serial-4of4` | 31 | 672773 ms (~11.21 min) |
+| imbalance | | 9 ms |
 
 Those four numbers are the packer's own arithmetic over the table above, not a measurement.
-The lane is now 121 scripts.
-Two of the additions landed in the derived remainder after those hints were refreshed - `tests/fm-python-lib.test.sh` and `tests/fm-conpty-liveness-live-e2e.test.sh`, the opt-in real-Windows ConPTY liveness guard - and neither has a measured Linux duration yet, so both are packed at the flat default and `--check-coverage` reports `unmeasured_serial=2` and names them.
+The lane is now 128 scripts, and the table 125 entries, after the 2026-08 upstream intake.
+Three of the additions landed in the derived remainder after those hints were refreshed - `tests/fm-python-lib.test.sh`, `tests/fm-conpty-liveness-live-e2e.test.sh`, the opt-in real-Windows ConPTY liveness guard, and upstream's `tests/fm-voice-relay.test.sh` - and none has a measured Linux duration yet, so all three are packed at the flat default and `--check-coverage` reports `unmeasured_serial=3` and names them.
 The other three arrived with the Windows session-start bound work and were measured on admission rather than left at the default: `tests/fm-session-start-bound.test.sh` at 5537 ms, `tests/fm-session-start-hook-nesting.test.sh` at 4812 ms and `tests/fm-pi-sessionstart-deadline.test.sh` at 329 ms, each the lower of two green local runs.
 Those are developer-box floors on the same terms as every other hint here, not runner figures.
 Admitting a member re-packs all four shards, which is why every count above moved and not only the shard it landed in.
@@ -114,7 +118,7 @@ Script time alone does not reach the cap, which is why the weights are only most
 The job wall clock adds runner setup and checkout on top of it.
 On run 32142691561, `Behavior portable serial 4` ran 13:29:51Z to 13:44:41Z - 14m50s of wall clock against 14m41s of script time, about 9s of overhead.
 The job that was actually cancelled is run [32222210223](https://github.com/mgoyal8293/firstmate-windows/actions/runs/32222210223) on `fm/winfm-tmux-leakage`, where the same shard ran 06:09:14Z to 06:24:29Z - 15m15s of wall clock, conclusion `cancelled`, no verdict at all.
-Script time was already within roughly 20 seconds of the cap and ordinary job overhead tipped it over, so judge the remaining margin against script-time weights with that overhead included.
+Script time was already within roughly 20 seconds of the 15-minute cap in force when that run was cancelled, and ordinary job overhead tipped it over, so judge the remaining margin against script-time weights with that overhead included.
 
 The single longest script in the lane, `tests/fm-pr-check-security.test.sh` at 236511 ms, is the floor for any shard count.
 It was already hinted before the 2026-08-19 refresh, so it was never part of the unhinted set above.
@@ -158,7 +162,7 @@ Portable shards, each portable serial shard, and the Herdr lane upload runner-ge
 | Lane | Bound | Rationale |
 |---|---|---|
 | portable parallel 1/2 | job `timeout-minutes: 10` | The measured shard sums are about three minutes and the timeout is a hang tripwire. |
-| portable serial 1-4 | job `timeout-minutes: 15` | The measured worst shard on run [32259417831](https://github.com/mgoyal8293/firstmate-windows/actions/runs/32259417831) was 11.67 minutes of script time, so the cap is a hang tripwire with about 1.3x margin - and the job wall clock adds runner setup and checkout on top of that, which is what tipped the cancelled job over. Refresh the weights, or split the lane further, before that margin is spent. |
+| portable serial 1-4 | job `timeout-minutes: 20` | The measured worst shard on run [32259417831](https://github.com/mgoyal8293/firstmate-windows/actions/runs/32259417831) was 11.67 minutes of script time, which is what supported the earlier 15-minute cap - and the job wall clock adds runner setup and checkout on top of that, which is what tipped the cancelled job over. The 2026-08 upstream intake took the lane to 128 scripts and the packer's worst-shard estimate to ~11.21 min, so this margin is due a fresh measurement on the first green run after that intake, tracked as `winfm-reverify-serial-shard-cap`. That estimate rests on hints the intake left stale, which is not headroom: on one developer box `tests/fm-watch-triage.test.sh` measured 109303 ms before this branch's catch-up merge and 166844 ms after, while its hint stayed at 152024 ms, and upstream's `tests/fm-voice-relay.test.sh`, packed at the 20000 ms flat default, measures 27977 ms there. Those are developer-box measurements on one machine, on the same terms as the hints above, never runner figures. So this bound is upstream's sizing for upstream's content, adopted pending that re-measurement rather than measured for this lane; the asymmetry decides it, because a shard that overruns is cancelled with no verdict a required check can ever turn green, while a cap set too high only costs CI minutes. Refresh the weights, or split the lane further, before the margin is spent. |
 | Herdr | family-run step `timeout-minutes: 20`; job `timeout-minutes: 75` backstop | Healthy runs finish around 7 minutes, so the step bound is the hang tripwire (cleanup and timing artifacts still upload) while the job cap stays a last-resort backstop. |
 
 Timeouts are hang tripwires rather than expected healthy durations.

@@ -6,8 +6,8 @@ This file records the measurements those two are built on.
 
 Every number here was measured under Git for Windows MINGW64 bash (`MINGW64_NT-10.0-26200`, bash 5.2.37, git 2.50.1.windows.1, ShellCheck 0.11.0), from a frozen checkout, with `MSYS=winsymlinks:nativestrict`.
 
-The repository has grown since: `portable-serial` is now 117 scripts and the canonical lint set 308 shell files.
-Every figure below is deliberately left as measured rather than restated to the live count; a one-script difference changes neither the lane arithmetic nor any conclusion drawn from it.
+The repository has grown since, and the 2026-08 upstream intake grew it by more than a script or two: `portable-serial` is larger than the count these figures were measured at - [fm-test-portable-shards.md](fm-test-portable-shards.md) owns the live lane size - and the canonical lint set is now 331 shell files, counted with `CI=true bin/fm-lint.sh --list-files` at this head.
+Every figure below is deliberately left as measured rather than restated to the live count; the lane has only gained scripts, so the growth widens the arithmetic below rather than undercutting any conclusion drawn from it.
 
 ## Why this lane is not the Linux lane with more shards
 
@@ -222,7 +222,7 @@ Confirmed on the box above. The fork count stays a Linux measurement; adding the
 **Admitting `fm-session-start-bound` also required fixing two real Windows-only failures in it**, both in the end-to-end case that asserts each stage prints its header before its own output:
 
 - On MSYS the session lock is owned by a per-session token rather than by process ancestry (see [`windows.md`](windows.md#how-the-session-lock-is-owned) "How the session lock is owned"), and this suite's fixture strips every harness marker on purpose - so the `LOCK` stage legitimately prints its read-only banner instead of an `acquired`/`held` line. The body pattern covered only the POSIX shapes. That is product behaviour, not a fixture defect, so the pattern now covers the read-only shape too.
-- `skipped (read-only session)` is printed by **two** stages, `WAKE QUEUE` and `NETWORK CHECKS` (`bin/fm-session-start.sh:755` and `:916`), and the helper's contract is that a body pattern matches a line only its *own* stage emits. Searching globally, the network-checks pattern matched the wake-queue's line and reported the header as arriving 70 lines late. Both patterns are now qualified past the shared prefix. Only these two stages share it, so the collision class is closed rather than patched at the one call site that happened to fail.
+- `skipped (read-only session)` is printed by **two** stages, `WAKE QUEUE` and `NETWORK CHECKS` (`bin/fm-session-start.sh:755` and `:917`), and the helper's contract is that a body pattern matches a line only its *own* stage emits. Searching globally, the network-checks pattern matched the wake-queue's line and reported the header as arriving 70 lines late. Both patterns are now qualified past the shared prefix. Only these two stages share it, so the collision class is closed rather than patched at the one call site that happened to fail.
 
 Neither failure is reachable on Linux, because there the fixture acquires the lock and no stage prints a read-only line at all - which is the second half of why these two suites are worth the lane's budget.
 
@@ -244,8 +244,23 @@ That is the same principle behind the Linux serial lane's "Require tmux for e2e 
 The Windows lane reaches it from the other direction: no tool, no member.
 
 Total lane cost: **62.9 min** of serial Git Bash work (3,772,746 ms of hints across 42 members).
-The longest single script is `tests/fm-decision-hold-lifecycle.test.sh` at 860s, which is the floor no shard count can lower - so 4 shards is the useful maximum here, not 8 or 16.
+The longest single script is `tests/fm-captain-hold-lifecycle.test.sh` at 860s, which is the floor no shard count can lower - so 4 shards is the useful maximum here, not 8 or 16.
 Beyond 4 the floor binds and extra runners buy nothing.
+
+That 860s is inherited rather than freshly measured, and it is provisional until the lane runs again.
+It was measured on `tests/fm-decision-hold-lifecycle.test.sh`, the script upstream replaced with `tests/fm-captain-hold-lifecycle.test.sh` in the 2026-08 intake, and the hint in `bin/fm-test-run.sh` was carried across the rename rather than re-measured.
+It is kept because it is a real measurement of a real predecessor and remains the best available packing basis: dropping it would move `unmeasured_windows` off zero and degrade shard balance without making anything more true.
+`winfm-remeasure-captain-hold-windows` is the filed follow-up that will replace it with a Git Bash measurement of the current file.
+
+The replacement is not a pure rename, and its size reads differently depending on how it is measured, so all three readings are recorded here with their methods rather than one being chosen:
+
+- Blob to blob, diffing the two files' contents directly: 765 insertions, 714 deletions - about 65% of the new file's 1184 lines.
+- Path to path across the intake, `git diff 3903bec..HEAD` over the two paths: 1184 insertions and 1133 deletions, which are exactly the new and old files' line counts, because git does not pair the paths as a rename at its default 50% similarity threshold. At `-M10%` it does pair them, reporting `similarity index 32%` and the same 765 / 714.
+- Test functions: 16 to 17 counting `test_*()` definitions, or 32 to 34 counting definitions plus their invocations. Same file, two denominators.
+
+The run recorded further down reports 16 ok, which is the predecessor's definition count rather than the current file's 17 - the clearest single sign that the figure predates the file it is now filed under.
+The defect worth carrying forward is not the carried hint but how it stayed invisible: `--check-coverage` reports `unmeasured_windows=0` by checking that every listed name has a row in `windows_weight_hints`, so a name-keyed record survives a content change that invalidates it and a measured claim outlives its measurement with the guard still green.
+For the same reason, read the totals above as pre-intake for part of the lane: 13 of the 42 members changed content in `3903bec..HEAD`, counted per member with `git diff --quiet`, so the 62.9 min total and this 860s floor describe the content those members carried before the intake.
 
 | shard | scripts | predicted |
 |---|---:|---:|
@@ -292,13 +307,15 @@ The two columns come from different machines, so read the ratios as the size of 
 
 | script | Linux | Git Bash | ratio |
 |---|---:|---:|---:|
-| `fm-decision-hold-lifecycle` | 82.6s | 860s | 10.4x |
+| `fm-captain-hold-lifecycle` | 82.6s | 860s | 10.4x |
 | `fm-crew-state` | 9.7s | 171s | 17.6x |
 | `fm-brief` | 1.2s | 21s | 17.1x |
 | `fm-composer-lib` | 5.0s | 119s | 23.8x |
 
+The `fm-captain-hold-lifecycle` row carries the inherited figures described above: both of its columns were measured on the pre-rename `fm-decision-hold-lifecycle.test.sh`, and both are provisional pending `winfm-remeasure-captain-hold-windows`.
+
 Note what this does **not** show: the ratio does not simply grow with a script's process work.
-The longest member here, `fm-decision-hold-lifecycle` at 860s, has the *lowest* ratio of the four, and the shortest, `fm-brief`, sits mid-range.
+The longest member here, `fm-captain-hold-lifecycle` at 860s, has the *lowest* ratio of the four, and the shortest, `fm-brief`, sits mid-range.
 An earlier revision of this table asserted the opposite on the strength of a 0.064s Linux figure for `fm-composer-lib`; that figure cannot be right, because the script runs 30 passing assertions and measures 5.0s, so the 1860x ratio it implied has been withdrawn.
 
 This is why the lane's balance uses measured Windows durations rather than Linux hints scaled by a constant: the spread is real and it is not predictable from Linux duration, so a constant multiplier mis-sizes members in both directions.
@@ -391,11 +408,12 @@ id -u == stat -c %u   -> the owner check passes; only the mode fails
 The fix is a capability probe in that one function, plus a note that the mode assertion is not a security property on a `noacl` mount.
 That file is outside the files this work owns, so it is flagged rather than changed.
 
-### `fm-decision-hold-lifecycle.test.sh` - confirmed fork cost
+### `fm-captain-hold-lifecycle.test.sh` - confirmed fork cost
 
 Not a failure.
 Given a bound longer than the scout's 400s it passes: **rc=0, 16 ok, 0 failed, in 860s** against 82.6s on Linux - a 10.4x multiplier.
 It is in the lane, and it is the script that sets the shard floor.
+That run measured the script under its pre-rename name, `tests/fm-decision-hold-lifecycle.test.sh`, whose 16 test definitions are the 16 ok above, so both figures are inherited by the current file rather than measured on it and are provisional pending `winfm-remeasure-captain-hold-windows`.
 
 ### Failing on Windows (worklist, not addressed here)
 
@@ -461,7 +479,8 @@ tests/fm-wake-drain-unread-status.test.sh            ok=6   failed=0
 ```
 
 Each of these was still passing assertions when the bound cut it, so none is known-broken.
-`fm-decision-hold-lifecycle` started in this group and turned out to be pure fork cost once given 860s, so the others deserve the same treatment before anyone calls them failures.
+`fm-captain-hold-lifecycle` started in this group and turned out to be pure fork cost once given 860s, so the others deserve the same treatment before anyone calls them failures.
+That 860s is the inherited pre-rename measurement noted above, provisional pending `winfm-remeasure-captain-hold-windows`.
 
 ## Two things that stopped the runner itself on Windows
 
@@ -562,10 +581,15 @@ That is correct on every platform rather than a Windows arm, and `tests/fm-lint.
 `PATH=$dir readlink` exits 127 there, because an MSYS binary finds `msys-2.0.dll` through PATH, and a directory carrying only the link is Windows' last-resort DLL search location with none of those DLLs in it.
 The fix is the same everywhere: an exec wrapper, which keeps the real binary running from its own directory where its DLLs sit, so no fixture ever has to know which DLLs a tool needs.
 
+A second mechanism reaches the same failure from the same mirroring, and the 2026-08 intake hit it: the runner's own PATH step prints `jq /c/ProgramData/Chocolatey/bin/jq`, and a Chocolatey shim resolves a sibling file beside itself, so a shim mirrored out of its own directory is executable but non-functional.
+A fixture that re-exposes a host tool that way owns the name and then cannot do the tool's job, which reads as a product failure rather than a fixture one.
+So the rule the two share is that mirroring a host binary by symlink is unsafe on Windows whatever the reason, and the wrapper is the one fix for both: it needs no platform arm, because the shebang behaves identically on Linux and Git Bash, and the fixture still owns the name.
+
 The wrapper is spelled out per file, enumerated here so a site added later has to join a visible list rather than rot against a bare total:
 
 - `tests/fm-crew-state.test.sh` - 1 site, `make_no_timeout_toolbin`, the worked example for the excluded scripts that still carry the symlink form.
 - `tests/fm-windows-portability.test.sh` - 1 site, `stage_tool_for_restricted_path`.
 - `tests/fm-test-run.test.sh` - 1 site, the coreutils staging inside `lfharness_bin`, added by this change's own review rounds.
+- `tests/fm-pr-merge.test.sh` - 1 site, the `jq` re-exposure inside `add_glab_mock`, which arrived with upstream's GitLab merge support and failed only on this lane. It is the shim case above rather than a DLL case, and the file's own comment owns that reasoning.
 
-Hoisting the three copies into one shared helper is deliberately deferred, not forgotten: `tests/fm-lint.test.sh` and `tests/fm-subagent-pretool-check.test.sh` still carry the unfixed symlink form, so the consolidation waits until every call site exists and can move at once instead of half-migrating.
+Hoisting the four copies into one shared helper is deliberately deferred, not forgotten: `tests/fm-lint.test.sh` and `tests/fm-subagent-pretool-check.test.sh` still carry the unfixed symlink form, so the consolidation waits until every call site exists and can move at once instead of half-migrating.
