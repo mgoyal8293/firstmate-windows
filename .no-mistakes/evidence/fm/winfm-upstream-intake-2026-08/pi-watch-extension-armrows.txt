@@ -1,0 +1,30 @@
+# Resolution 1 evidence - tests/fm-pi-watch-extension.test.sh keeps BOTH upstream's #2733 assertions AND our measured budget
+
+## A. Upstream's side that had to survive: the arm log genuinely contains a non-arm row
+Captured live from the running fixture ($FM_ARM_LOG of
+test_pi_actionable_close_starts_single_successor_before_delivery), copied out before
+the tmproot trap removed it:
+
+     1	arm=2502057 predecessor=none
+     2	arm=2502064 predecessor=2502057
+     3	confirmed generation=fixture-generation watcher=2502064
+
+Evaluating the pre-merge and merged predicates against that exact log:
+  pre-merge  rows.length !== 2                 -> THROWS: expected one successor arm, got 3
+  merged     armRows.length !== 2              -> passes
+  pre-merge  /predecessor=/.test(rows[1])      -> passes on this ordering only (rows[1] is not pinned to an arm row)
+  merged     /predecessor=/.test(armRows[1])   -> passes (armRows[1] is always the successor arm row)
+  merged     confirmed-generation row present  -> true
+
+## B. Our side that had to survive: the budget is measured, not upstream's literal
+upstream 8714c9a:tests/fm-pi-watch-extension.test.sh:25   ARM_READY_TIMEOUT_MS=2000
+merged   tests/fm-pi-watch-extension.test.sh:39-68        fm_measure_arm_child_start_ms(), 5x worst of 5 cold starts, 500ms floor
+run-time line printed by the merged file on this machine:
+  1:# arm child start 9ms measured, readiness budget 500ms
+
+## C. Both upstream cases green in the merged file
+  ok - Pi actionable close starts one successor before wake delivery settles
+  ok - Pi refused handling handshake is classified and not swallowed
+  ok - OpenCode watcher plugin starts one successor before wake prompt delivery settles
+
+  FM_TEST_END tests/fm-pi-watch-extension.test.sh exit=0 duration_ms=18382 gate_skip=false

@@ -1,0 +1,14 @@
+# Resolution 3 evidence - bin/fm-test-run.sh Windows-lane rename
+
+## A. Guard with the two Windows-lane entries left at the pre-rename name (simulated skip of resolution 3)
+$ sed -i "685s/captain/decision/; 741s/captain/decision/" bin/fm-test-run.sh
+$ bash bin/fm-test-run.sh --check-coverage
+fm-test-run: coverage guard: windows lane lists scripts that are not in tests/*.test.sh:
+tests/fm-decision-hold-lifecycle.test.sh
+exit=1
+
+## B. Guard as merged (rename applied)
+$ bash bin/fm-test-run.sh --check-coverage
+FM_TEST_COVERAGE ok total=164 parallel=24 serial=128 serial_shards=4 herdr=12 unmeasured_serial=3
+FM_TEST_COVERAGE_WINDOWS ok windows=42 windows_shards=4 unmeasured_windows=0
+exit=0

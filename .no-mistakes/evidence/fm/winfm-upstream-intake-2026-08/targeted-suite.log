@@ -1,0 +1,219 @@
+FM_TEST_BEGIN 2026-08-28T01:53:57Z tests/fm-test-run.test.sh family=pure-contract-unit expected_gate_skip=none
+ok - exact suite coverage: --all lists every tests/*.test.sh once
+ok - family selection returns a proper subset of the suite
+ok - single-script selection lists exactly that path
+ok - changed-file selection stays conservative (never silent full suite)
+ok - changed selection covers dependents and fails closed for unmapped source
+ok - a change to the shared Python library selects every test-library dependent
+ok - empty changed selection emits deterministic text and JSON summaries
+ok - timing markers and JSON artifact are valid
+ok - python3 probe rejects a resolvable but broken interpreter
+ok - coverage guard pins every comm to a C collation (14 calls)
+ok - aggregate exit reflects any script failure
+ok - gate-skip accounting is honest and non-failing
+ok - fail-on-gate-skip converts herdr-not-found into a hard failure
+ok - exclude-family drops the named primary family after selection
+fm-test-run: coverage guard: portable serial scripts with no measured duration, packed at 20000ms (docs/fm-test-portable-shards.md owns the refresh):
+tests/fm-conpty-liveness-live-e2e.test.sh
+tests/fm-python-lib.test.sh
+tests/fm-voice-relay.test.sh
+ok - portable shard union, disjointness, and coverage guard hold
+ok - portable serial shards are a deterministic disjoint cover of the serial lane
+ok - coverage guard counts and names serial scripts with no measured duration
+ok - portable serial shard lanes refuse mismatched, out-of-range, and countless names
+ok - windows shard lanes refuse mismatched, out-of-range, and countless names
+ok - coverage guard reports the windows lane size, shard count, and unmeasured members
+ok - coverage guard counts and names windows lane members with no measured duration
+ok - coverage guard refuses windows shards that do not cover the windows lane
+ok - --jobs refuses non-proven / stateful selections
+ok - jobs scheduler runs proven scripts; failure propagates; non-proven refused
+ok - Herdr CI family-run step times out at 20 min under a 75 min job backstop
+ok - windows-ci LF guard detects CRLF at any scale and refuses to certify an unfinished scan
+ok - windows-ci LF steps refuse a CR detector that cannot tell CRLF from LF
+ok - windows-ci harness PATH step fails, and names the tools, when the built PATH cannot reach them
+ok - aggregate-json merges lane timing artifacts
+FM_TEST_END 2026-08-28T01:54:30Z tests/fm-test-run.test.sh exit=0 duration_ms=32801 gate_skip=false
+FM_TEST_BEGIN 2026-08-28T01:54:30Z tests/fm-captain-hold-lifecycle.test.sh family=pure-contract-unit expected_gate_skip=none
+ok - report-only unresolved captain call is reproduced and completion refuses before loss
+ok - the completion gate attests captain-held inventory and transfers open status decisions
+ok - answer records the captain's words, closes idempotently, and releases routed work
+ok - release frees held work with the captain's words recorded and the body preserved
+ok - a deferred captain call leaves the live Captain's Call until its date and stays answerable
+ok - an out-of-band close is recordable with the captain's word and nothing else
+ok - ended visual review follows the same captain-hold completion owner
+ok - resolved findings and decision-like prose do not create captain-held tasks
+ok - terminal single-owner stale status decisions do not block empty inventory
+ok - main-home and secondmate-home captain calls remain correctly routed
+ok - a bound channel's captured answers close their captain-held tasks at answer time
+ok - a channel source with no decision binding closes nothing
+ok - legacy identities, metadata, bindings, and the shim keep working
+ok - the chat channel feeds the same keyed-answer intake a captured review does
+ok - completion and verification validate origins before constructing paths
+ok - a status resolution over a still-open captain-held task is signalled, not closed
+ok - a captain call with no routed work, a verified transfer, an open decision, and an answered call all stay silent
+FM_TEST_END 2026-08-28T01:55:17Z tests/fm-captain-hold-lifecycle.test.sh exit=0 duration_ms=47058 gate_skip=false
+FM_TEST_BEGIN 2026-08-28T01:55:17Z tests/fm-daemon.test.sh family=watcher-wake-lock expected_gate_skip=none
+ok - fm-afk-start.sh fails before daemon startup when the afk flag cannot be written
+ok - fm-afk-start.sh ignores stale pidfile-only live pids
+ok - fm-afk-start.sh reclaims stale daemon locks whose live pid identity no longer matches
+ok - supervise daemon state root is scoped by FM_HOME
+ok - routine signal self-handles
+ok - captain-relevant status verbs escalate
+ok - check + unknown escalate; heartbeat self-handles
+ok - transient stale self-handles and records a persistence marker
+ok - enriched stale wedges bypass status absorption without disturbing busy workers
+ok - stale + terminal status escalates immediately
+ok - paused reasons with captain phrases remain pause-classified
+ok - a captain-held transfer classifies as pause, not as a wedge candidate
+ok - handle_wake on a paused stale records a pause marker, drops the wedge marker, and does not escalate
+ok - handle_wake records a declared pause from a routine signal for long-cadence rechecks
+ok - a terminal signal clears pause and stale tracking across both supervisors
+ok - housekeeping migrates a normal-watcher's declared pause into daemon tracking
+ok - housekeeping clears an already-resumed watcher pause across both supervisors
+ok - housekeeping seeds pause tracking from status without a watcher marker
+ok - persistent stale escalates after threshold and clears its marker
+ok - resumed (busy) stale clears its marker without escalating
+ok - housekeeping re-surfaces a stale declared pause on the long cadence and resets its window
+ok - housekeeping re-surfaces a forgotten captain hold on the long cadence and resets its window
+ok - housekeeping clears a paused marker whose pane became busy again, without escalating
+ok - housekeeping clears a paused marker once the crew is no longer declaring the pause
+ok - housekeeping clears the pause marker once a captain hold is answered
+ok - housekeeping moves an existing stale marker to pause before wedge escalation
+ok - housekeeping moves a captain hold's existing stale marker to pause before wedge escalation
+ok - housekeeping clears tracking when a crew leaves pause
+ok - persistent herdr stale resolves the target from metadata and escalates
+ok - herdr idle busy-footer stale clears through capture corroboration
+ok - resumed herdr stale clears through backend-aware busy state
+ok - persistent Orca stale resolves the terminal from metadata
+ok - multiple escalations flush as a single batched digest
+ok - batch flush measures max-delay from the first append, not the last
+ok - catch-all scan escalates a missed terminal once, not twice
+ok - handle_wake routes routine->self and captain->escalate
+ok - INJECT_SKIP forces self-handle, bypassing captain-relevant classification
+ok - is_wake_reason distinguishes watcher wake reasons from singleton-status stdout
+ok - terminal-stale escalate removes its marker so housekeeping does not re-escalate
+ok - captain signal escalate marks seen so the catch-all scan does not re-fire
+ok - _collapse_newlines replaces newlines with literal separator
+ok - afk flag absent: daemon does not inject, buffer preserved
+ok - busy-guard defers injection when supervisor pane is busy
+ok - marker detection: marker -> stay afk, no marker -> exit afk
+ok - /afk invocation is exempt from afk exit (no self-cancel)
+ok - should_exit_afk returns false when afk is not active
+ok - strip_injection_marker removes the sentinel marker cleanly
+ok - pane_input_pending detects partial input on the cursor line
+ok - pane_input_pending: a blank unidentified cursor row defers (strict container-proof rule)
+ok - pane_input_pending: only proven empty agent prompts pass
+ok - fm_tmux_composer_state: a bare shell prompt ($/%/#/>) reads unknown, never empty (dead-shell injection safety)
+ok - fm_tmux_composer_state: a bordered composer box and bare agent glyphs (❯/›) still read empty
+ok - fm_tmux_composer_state: only matching edge borders form a composer box
+ok - pane_input_pending preserves bright placeholder-like drafts in styled captures
+ok - classify_signal dedupes against the catch-all scan seen marker
+ok - classify_stale dedupes against the signal path seen marker
+ok - AFK nonterminal working:+merged keeps wedge aging and re-escalates at bound
+ok - genuine done: and merge-check events still escalate
+ok - pane_input_pending: an idle bordered composer is NOT pending (afk-invx-i5)
+ok - pane_input_pending: text inside a bordered composer is still pending
+ok - submit-ACK confirms a submit when the composer returns to a bordered-empty box
+ok - submit-ACK reports pending on a persistently swallowed Enter (type-once)
+ok - max-defer on an empty stuck pane types once, alarms, and preserves the buffer
+ok - max-defer flushes and clears the buffer on an empty bordered pane
+ok - max-defer on a pending composer alarms without typing
+ok - normal flush clears a stale wedge marker
+ok - below MAX_DEFER: no inject, no alarm, buffer preserved
+ok - max-defer does not flush or alarm while afk is inactive
+ok - library mode: sourcing the daemon defaults FM_WEDGE_ALARM_EXEC to discard (no test can fire a real notification)
+ok - wake helpers replace inherited notifier overrides with the safe recorder
+ok - the discard seam suppresses every notifier, including command: (fires nothing)
+ok - direct notifier helpers honor the discard seam, including command:
+ok - osascript channel routes through the notifier seam with the summary (never a real notification)
+ok - herdr channel routes through the notifier seam with the summary (never a real notification)
+ok - command channel runs the captain command with the summary on $1 and on stdin
+ok - command channel failures redact configured commands while logging their exit status
+ok - unknown channel directives are redacted while the alarm keeps running
+ok - off disables every active alert regardless of directive position (marker and tmux flash are unaffected)
+ok - auto resolves to the macOS osascript notifier on Darwin (default-on)
+ok - auto on a non-macOS platform selects no built-in OS channel (the marker or a configured command carries it)
+ok - config/wedge-alarm selects every configured channel and skips comment and blank lines
+ok - a failing channel logs and falls back to the next channel, never crashing the alarm
+ok - a hung notifier is bounded, logged, and falls through to the next channel
+ok - a backgrounded command notifier remains bounded until its process group is reaped
+ok - a hung notifier override is bounded, logged, and proceeds to the next channel
+[1]+  Terminated              sh -c 'sleep 30 & printf "%s" "$!" > "$1"; wait' sh "$child_file"
+ok - daemon shutdown stops and reaps the active notifier process group
+ok - inject_wedge_alarm writes the marker AND emits the active alert even with no tmux status-line (herdr backend)
+ok - in-process wedge throttle prevents alert spam when the marker cannot persist
+ok - fm-send returns 3 with a non-error no-resend warning when confirmation stays pending
+ok - fm-send exits non-zero when initial text send fails
+ok - fm-send exits non-zero unless delivery is proven empty
+ok - window_for_task: the no-metadata fallback matches the inventory's fm-<id> label and returns the backend's own target plus the id it matched, on conpty and herdr as well as tmux
+ok - housekeeping: a discovered non-tmux endpoint is identified by the id window_for_task matched, so its status file, pause marker and stale marker all use the task's own key
+ok - discover_supervisor_backend: override > TMUX_PANE > HERDR_ENV+HERDR_PANE_ID > the home's own backend as the bare fallback
+ok - discover_supervisor_target: override > TMUX_PANE > herdr '<session>:<pane-id>' composition > firstmate:0 fallback
+ok - pane_is_busy: herdr native busy_state='busy' short-circuits without a capture fallback
+ok - primary busy guard isolates rendered signatures by detected harness
+ok - pane_is_busy: omitted backend defaults to tmux for Grok's isolated fallback
+ok - pane_input_pending: dispatches through fm_backend_composer_state for backend=herdr
+ok - inject_msg: herdr busy-guard defers before ever attempting a submit
+ok - inject_msg: herdr composer-guard defers before ever attempting a submit
+ok - inject_msg: herdr pane-gone check defers before any busy/composer/submit call
+ok - inject_msg: dispatches busy-guard/composer-guard/submit through the herdr backend and succeeds on a confirmed empty composer
+ok - inject_msg: defers on a dead-shell/unreadable composer (unknown), never typing the escalation into a shell
+ok - inject_msg: unrecognized composer states defer by default
+FM_TEST_END 2026-08-28T01:55:33Z tests/fm-daemon.test.sh exit=0 duration_ms=15311 gate_skip=false
+FM_TEST_BEGIN 2026-08-28T01:55:33Z tests/fm-supervision-events.test.sh family=watcher-wake-lock expected_gate_skip=none
+ok - handle_push_transition: a blocked crew enqueues a stale wake naming its window and wakes the supervisor
+ok - handle_push_transition: enqueue failure cannot commit the Herdr dedupe marker
+ok - handle_push_transition: a declared-pause crew is absorbed (no fast wake), left to the poll loop's long cadence
+ok - handle_push_transition: a captain-held crew is absorbed (no fast wake), left to the poll loop's long cadence
+ok - event_wait_or_sleep: herdr windows go on the event pane list, but kind=secondmate endpoints are excluded
+ok - event_wait_or_sleep: one cached capability probe owns validation across bounded waits
+ok - event_wait_or_sleep: a home with no push-capable window is inert (sleeps POLL, never touches the event path)
+ok - event_wait_or_sleep: consecutive event-path failures disable the fast-path and revert to pure polling (fail-closed)
+# fm-supervision-events.test.sh: all assertions passed
+FM_TEST_END 2026-08-28T01:55:33Z tests/fm-supervision-events.test.sh exit=0 duration_ms=432 gate_skip=false
+FM_TEST_BEGIN 2026-08-28T01:55:33Z tests/fm-pi-watch-extension.test.sh family=watcher-wake-lock expected_gate_skip=none
+# arm child start 7ms measured, readiness budget 500ms
+# observation slack 1000ms derived, poll cadence window/64
+ok - Pi extension reports external healthy watcher output
+ok - Pi custom tool exposes repair-only metadata and returns automatic-continuation guidance
+ok - Pi redundant tool call returns ownership guidance and spawns no second child
+ok - Pi scheduled retry remains extension-owned after another tool call
+ok - Pi actionable close starts one successor before wake delivery settles
+ok - Pi refused handling handshake is classified and not swallowed
+ok - Pi hung successor falls back to one typed actionable wake
+ok - Pi unretired successor falls back without an overlapping retry
+ok - Pi late unretired closes resume classified supervision
+ok - Pi clean empty close triggers a bounded continuity retry
+ok - Pi established clean closes stop at the configured retry limit
+ok - Pi close handler verifies session-lock ownership before successor launch
+ok - Pi watcher arm distinguishes all session lock ownership states
+ok - Pi session transitions use a generation owner across /new /resume /fork, stale callbacks, and quit
+ok - Pi process-exit cleanup listener remains singular across session replacement
+ok - Pi process-exit cleanup stops the attached arm child
+ok - OpenCode plugins have an explicit ESM boundary even under a typeless parent package
+ok - OpenCode watcher plugin uses the effective FM_HOME state
+ok - OpenCode watcher plugin sources the effective config
+ok - OpenCode watcher plugin requires session lock ownership
+ok - OpenCode watcher coordinator respects primary scope
+ok - OpenCode watcher plugin starts one successor before wake prompt delivery settles
+ok - OpenCode pre-ready actionable close preserves its successor
+ok - OpenCode hung successor falls back to one typed actionable wake
+ok - OpenCode unretired successor falls back without an overlapping retry
+ok - OpenCode late unretired closes resume classified supervision
+ok - OpenCode clean empty close triggers a bounded continuity retry
+ok - OpenCode established clean closes stop at the configured retry limit
+ok - OpenCode close handler verifies session-lock ownership before successor launch
+ok - OpenCode watcher plugin coordinates with the turn-end guard
+ok - OpenCode healthy arm output does not suppress the turn-end guard
+ok - OpenCode turn-end guard reports its verdict when the stdin write is refused
+ok - Pi turn-end guard reports its verdict when the stdin write is refused
+FM_TEST_END 2026-08-28T01:55:52Z tests/fm-pi-watch-extension.test.sh exit=0 duration_ms=18382 gate_skip=false
+FM_TEST_SUMMARY total=5 failed=0 skipped_gate=0 duration_ms=114104
+FM_TEST_SUMMARY_FAMILY family=pure-contract-unit count=2 duration_ms=79859 failed=0
+FM_TEST_SUMMARY_FAMILY family=watcher-wake-lock count=3 duration_ms=34125 failed=0
+FM_TEST_SLOWEST rank=1 script=tests/fm-captain-hold-lifecycle.test.sh duration_ms=47058
+FM_TEST_SLOWEST rank=2 script=tests/fm-test-run.test.sh duration_ms=32801
+FM_TEST_SLOWEST rank=3 script=tests/fm-pi-watch-extension.test.sh duration_ms=18382
+FM_TEST_SLOWEST rank=4 script=tests/fm-daemon.test.sh duration_ms=15311
+FM_TEST_SLOWEST rank=5 script=tests/fm-supervision-events.test.sh duration_ms=432
+fm-test-run: wrote timing artifact: /tmp/fm-intake-targeted.json

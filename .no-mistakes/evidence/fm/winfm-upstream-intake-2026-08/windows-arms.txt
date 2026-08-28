@@ -1,0 +1,43 @@
+# Windows-arm evidence - shared files the merge touched, exercised by simulating the platform
+
+## Shared files changed by 3903bec..8d5d42d that carry a Windows arm
+  .opencode/plugins/fm-primary-watch-arm.js
+  .pi/extensions/fm-primary-pi-watch.ts
+  bin/fm-pending-reply-lib.sh
+  bin/fm-session-start.sh
+  bin/fm-spawn.sh
+  bin/fm-teardown.sh
+  bin/fm-wake-lib.sh
+  bin/fm-watch-arm.sh
+
+## tests/fm-windows-portability.test.sh - the capability substitutions, tested by SIMULATING
+## the missing capability rather than by needing Windows (fake MSYS /proc, forced FM_PLATFORM_UNAME_OVERRIDE,
+## mount-aliased and 8.3 short-name spellings, autocrlf=true clone)
+  ok - fm-proc-lib.sh: the source guard skips repeat sources without blinding FM_PLATFORM_UNAME_OVERRIDE
+  ok - fm_proc_field: reads comm/args/ppid/pgid/sid from the MSYS /proc layout
+  ok - fm_proc_field: falls back to ps -o where the /proc scalar files are absent
+  ok - fm_proc_field: refuses an empty or non-numeric pid
+  ok - fm_proc_field: refuses a field it has no /proc equivalent for
+  ok - fm_proc_field: a scalar file that vanished mid-walk returns 1 in silence
+  ok - fm_platform_symlink_probe: proves symlink creation and leaves no residue
+  ok - symlink preflight: reports the lock-layer and skills-checkout failures, and stays silent otherwise
+  ok - fm_platform_enable_native_symlinks: sets nativestrict on Windows, inert elsewhere, never overrides an explicit choice
+  ok - fm_proc_pids_with_cwd_under: finds live processes rooted under a directory and forgets dead ones
+  ok - fm_proc_pids_with_cwd_under: an unusable /proc returns failure, not an empty result
+  ok - fm_proc_pids_with_cwd_under: a mount-aliased /proc cwd spelling still matches the caller's directory
+  ok - fm_proc_pids_holding_path: a mount-aliased /proc fd target still matches the caller's path
+  ok - fm_lock_same_path: widens a mount-aliased and an 8.3 short-name spelling through cygpath and stays strict everywhere else
+  ok - fm_lock_points_to_owner: the strict readlink compare remains the primary, unresolved verdict
+  ok - fm_pid_identity: bin/fm-proc-lib.sh answers from /proc where ps rejects -o, and detects pid reuse
+  ok - root .gitattributes: a core.autocrlf=true clone still lands LF, and the one binary blob survives
+  ok - fm_path_gotmpdir_export_line: translates and quotes on Windows, and falls back to the POSIX literal rather than an empty export when the caller has no quoter
+  FM_TEST_END tests/fm-windows-portability.test.sh exit=0 duration_ms=1505 gate_skip=false
+
+## Windows arms in the changed shared files, exercised through their owning suites
+  tests/fm-gotmp.test.sh              exit=0  (fm_path_gotmpdir_export_line / GOTMPDIR translation arm)
+  tests/fm-pending-reply.test.sh      exit=0  (bin/fm-pending-reply-lib.sh)
+  tests/fm-session-start-bound.test.sh exit=0 (bin/fm-session-start.sh bound arm)
+  tests/fm-watch-arm.test.sh          exit=0  (bin/fm-watch-arm.sh, .pi/.opencode watcher arms)
+  tests/fm-teardown.test.sh           exit=0  (bin/fm-teardown.sh + fm-spawn.sh, FM_PLATFORM-forced arms)
+
+  FM_TEST_SUMMARY total=5 failed=0 skipped_gate=0 duration_ms=135645

@@ -1,0 +1,29 @@
+# FM_TEST_SUMMARY counts for the targeted intake validation (3903bec..8d5d42d)
+# Counts are taken from FM_TEST_SUMMARY, not from step exit colour.
+
+## Batch 1 - the three silent-loss resolutions
+tests/fm-test-run.test.sh, fm-captain-hold-lifecycle, fm-daemon, fm-supervision-events, fm-pi-watch-extension
+FM_TEST_SUMMARY total=5 failed=0 skipped_gate=0 duration_ms=114104
+FM_TEST_SUMMARY_FAMILY family=pure-contract-unit count=2 duration_ms=79859 failed=0
+FM_TEST_SUMMARY_FAMILY family=watcher-wake-lock count=3 duration_ms=34125 failed=0
+
+## Batch 2 - other conflicted paths + the platform-substitution guard
+tests/fm-watch-triage, fm-crew-state, fm-classify-decision-key, fm-inactive-reconcile, fm-windows-portability
+FM_TEST_SUMMARY total=5 failed=0 skipped_gate=0 duration_ms=228564
+FM_TEST_SUMMARY_FAMILY family=pure-contract-unit count=3 duration_ms=19854 failed=0
+FM_TEST_SUMMARY_FAMILY family=watcher-wake-lock count=2 duration_ms=208565 failed=0
+
+## Batch 3 - changed shared files that carry a Windows arm
+tests/fm-gotmp, fm-pending-reply, fm-session-start-bound, fm-watch-arm, fm-teardown
+FM_TEST_SUMMARY total=5 failed=0 skipped_gate=0 duration_ms=135645
+FM_TEST_SUMMARY_FAMILY family=pr-forge count=1 duration_ms=55356 failed=0
+FM_TEST_SUMMARY_FAMILY family=session-bootstrap count=2 duration_ms=5941 failed=0
+FM_TEST_SUMMARY_FAMILY family=unclassified count=1 duration_ms=14039 failed=0
+FM_TEST_SUMMARY_FAMILY family=watcher-wake-lock count=1 duration_ms=60184 failed=0
+
+## Coverage guard (the check resolution 3 keeps green)
+FM_TEST_COVERAGE ok total=164 parallel=24 serial=128 serial_shards=4 herdr=12 unmeasured_serial=3
+FM_TEST_COVERAGE_WINDOWS ok windows=42 windows_shards=4 unmeasured_windows=0
+
+Totals: 15 behavior scripts, failed=0, skipped_gate=0.
+NOT the full behavior suite - the whole --all run is CI's, not this targeted local step's.

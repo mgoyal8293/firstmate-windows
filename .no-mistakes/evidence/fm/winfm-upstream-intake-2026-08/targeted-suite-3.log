@@ -1,0 +1,166 @@
+FM_TEST_BEGIN 2026-08-28T02:03:04Z tests/fm-gotmp.test.sh family=session-bootstrap expected_gate_skip=none
+ok - fm-teardown removes the dir pointed to by tasktmp= in meta
+ok - fm-teardown skips gracefully when tasktmp= is absent (backward compat)
+ok - fm-teardown skips gracefully when tasktmp= points to a nonexistent dir
+FM_TEST_END 2026-08-28T02:03:04Z tests/fm-gotmp.test.sh exit=0 duration_ms=585 gate_skip=false
+FM_TEST_BEGIN 2026-08-28T02:03:04Z tests/fm-pending-reply.test.sh family=unclassified expected_gate_skip=none
+ok - normal correlated reply resolves once (idempotent)
+ok - completed turn with no report triggers exactly one recovery
+ok - recovery attempts reconcile without reinjection
+ok - recovery reply resolves the original expectation
+ok - second missed turn escalates once and remains durable
+ok - escalations and replies wake; the home's own escalation close stays quiet
+ok - failed escalation publication remains retryable and publishes once
+ok - legacy escalation closes under the shared default key
+ok - legacy escalation cannot close an unrelated default-key decision
+ok - foreign correlated blocker cannot impersonate a pending-reply escalation
+ok - concurrent resolution closes one keyed escalation exactly once
+ok - concurrent escalation yields to a late correlated reply
+ok - transport success cannot masquerade as reply success
+ok - undelivered records remain immutable across scan paths
+ok - delivery confirmation fallback reconciles durably
+ok - unrelated events and stale correlation ids cannot resolve
+ok - restart preserves expectation and exact parent destination
+ok - wrong-home reports are detected but do not silently acknowledge
+ok - direct unmarked captain input creates no expectation
+ok - fm-send marked secondmate path creates pending and embeds corr
+ok - status-pointed document resolves the expectation
+ok - optional helper report resolves without being required for correctness
+ok - backend busy/idle observation covers Pi/Claude paths without conversation scrape
+ok - tmux and zellij unknown states use bounded capture fallback
+ok - pending replies scope Kimi capture fallback by recorded harness
+ok - tick skips terminal records and reuses target observations
+ok - correlations are reused only for matching open task records
+ok - tick end-to-end: miss -> one recovery -> escalate -> durable
+ok - failed transport discards undelivered expectation only
+ok - sender liveness works where ps rejects -o, so the one recovery is sent and reconciled
+ok - a record in the previous identity format is verified against that format without being rewritten
+ok - an unverifiable previous-format record defers on a live pid and concludes on a gone one
+ok - an unverifiable previous-format record defers only within its bound, then escalates once
+ok - a remote repost waits for the reply channel and still fires on a real miss
+ok - a mirrored correlated remote reply resolves without any repost
+ok - all pending-reply tests passed
+FM_TEST_END 2026-08-28T02:03:18Z tests/fm-pending-reply.test.sh exit=0 duration_ms=14039 gate_skip=false
+FM_TEST_BEGIN 2026-08-28T02:03:18Z tests/fm-session-start-bound.test.sh family=session-bootstrap expected_gate_skip=none
+ok - fm_session_start_default_budget: MINGW/MSYS/CYGWIN raise the default bound above the portable 120s
+ok - fm_session_start_default_budget: non-Windows platforms keep the portable 120s default
+ok - fm_session_start_resolve_budget: an explicit FM_SESSION_START_TIMEOUT wins on every platform, including below the raised default
+ok - fm_session_start_resolve_budget: an unusable bound - including every zero-padded spelling of zero - falls back to the PLATFORM default, never to a portable constant
+ok - fm_session_start_budget_advisory: an unusable bound is discarded OUT LOUD, naming the rejected value and this platform's default, and stays silent when nothing was asked for
+ok - fm_session_start_resolve_budget: a zero-padded bound resolves to a value timeout enforces (120s), not to the absent deadline the raw value produces
+ok - fm_session_start_resolve_budget: clamps under a hook AND when hook context is undetermined, and honours a positively established direct run in full
+ok - fm_session_start_resolve_budget: a transport declaring no kill deadline keeps its full 718s bound and is never pointed at another harness's registrations
+ok - fm_session_start_bound_remedy: names the harness kill second only where a deadline was established, and describes the cap as the largest safe assumption otherwise
+ok - fm_session_start_budget_advisory: names the harness kill second only where a deadline was established, and never points an unestablished run at another harness's registrations
+ok - fm_session_start_hook_ceiling: a registration smaller than the margin still bounds the clamp at 1s rather than reporting as unreadable and releasing to the 300s default
+ok - fm_session_start_bind_ceiling: monotonic in the deadline and strictly under it on both arms, with 1s the one documented floor
+ok - the truncation banners name the 20s deadline the registration declared, not the ceiling plus the margin, on the sub-margin branch where those two differ
+ok - fm_session_start_resolve_budget: an unreadable registration set falls back to the 300s platform default instead of releasing the bound, and the advisory invents no harness deadline
+ok - fm_session_start_delivery_bound: a detached worker uses the 718s bound the digest resolved rather than the 359s its own context would clamp to
+ok - fm_session_start_bind_budget: every path defines all three return values, so a 'set -u' caller never aborts on one it did not set
+ok - fm_session_stage_mark: records a real stamp using shell builtins alone, spawning nothing on the path it measures
+ok - fm_session_stage_mark: appends every stage, and an unwritable or unset target never fails the digest
+ok - fm_session_stage_render: attributes elapsed time per stage and bounds the unfinished one by the budget
+ok - fm_session_stage_render: stays silent on an empty, missing, or unstamped record rather than inventing timings
+ok - fm-session-start.sh: a truncated startup names the stage it died in, attributes its elapsed time per stage, and caps its own remedy at the 359s harness ceiling
+ok - fm-session-start.sh: a failed breadcrumb mktemp leaves the /dev/null sentinel alone instead of handing it to rm
+ok - fm-session-start.sh: the bound the parent resolved is handed to the bounded child, which is what the detached network worker inherits it through
+ok - fm_session_start_bound_remedy: names the cap below the 359s ceiling and stops advising the knob entirely at or above it
+ok - fm-session-start.sh: each of the nine printed stages emits its header BEFORE its own output, so a long stage is attributable rather than silent
+FM_TEST_END 2026-08-28T02:03:24Z tests/fm-session-start-bound.test.sh exit=0 duration_ms=5356 gate_skip=false
+FM_TEST_BEGIN 2026-08-28T02:03:24Z tests/fm-watch-arm.test.sh family=watcher-wake-lock expected_gate_skip=none
+ok - watch-arm: an attached arm reports the wake its cycle delivered instead of a false failure
+ok - watch-arm: a delivered wake consumed by the handling turn still closes the attached arm cleanly
+ok - watch-arm: a cycle that delivered no wake of its own still fails loudly
+/home/johns/.no-mistakes/worktrees/72b1fa50e799/01M12TP5V047C43FAJ0J7MF42D/bin/fm-watch-arm.sh: line 566: 2543013 Killed                  "$WATCH" > "$child_out"
+WAKE_ACK_REQUIRED: after handling completes run bin/fm-wake-drain.sh --ack-through 2 --recovery-generation 2543503.1787882631.v2YVYu
+ok - watch-arm: re-arm surfaces every queued wake and an open remote decision after downtime
+watcher: recovery state could not be persisted; retaining stale lock evidence
+ok - watch-arm: marker publication failure retains stale-lock recovery evidence
+WAKE_ACK_REQUIRED: after handling completes run bin/fm-wake-drain.sh --ack-through 2 --recovery-generation 2548662.1787882641.fvgai0
+WAKE_ACK_REQUIRED: after handling completes run bin/fm-wake-drain.sh --ack-through 3 --recovery-generation 2549511.1787882641.8zNbdv
+ok - watch-arm: a wake queued after handling drain is recovered once at successor arm
+ok - watch-arm: interrupted handling leaves its wake durable for successor re-drain
+WAKE_ACK_REQUIRED: after handling completes run bin/fm-wake-drain.sh --ack-through 0 --recovery-generation 2554507.1787882648.1KoAzf
+ok - watch-arm: malformed recovery state is quarantined without a successor loop
+WAKE_ACK_REQUIRED: after handling completes run bin/fm-wake-drain.sh --ack-through 1 --recovery-generation 2555801.1787882650.SCDhMw
+ok - watch-arm: publication after recovery handoff is surfaced
+ok - watch-arm: restart publishes recovery before clearing a reused-pid watcher lock
+WAKE_ACK_REQUIRED: after handling completes run bin/fm-wake-drain.sh --ack-through 7 --recovery-generation 2557182.1787882653.eWKejD
+ok - watch-arm: markerless legacy queues are adopted and recovered
+ok - watch-arm: a watcher close during handling keeps the printed acknowledgement valid
+ok - watch-arm: a moved recovery generation consumes handled rows and names its remedy
+ok - watch-arm: downtime marker publication does not follow symlinks
+FM_TEST_END 2026-08-28T02:04:24Z tests/fm-watch-arm.test.sh exit=0 duration_ms=60184 gate_skip=false
+FM_TEST_BEGIN 2026-08-28T02:04:24Z tests/fm-teardown.test.sh family=pr-forge expected_gate_skip=none
+ok - local-only worktree with HEAD on a fork remote is torn down (fix holds)
+ok - teardown prompts tasks-axi backlog refresh when compatible
+ok - teardown honors config/backlog-backend=manual even when tasks-axi is compatible
+ok - local-only worktree with truly unpushed work is refused (safety preserved)
+ok - local-only worktree with work merged into local main is torn down (no regression)
+ok - no-mistakes worktree with HEAD on origin is torn down (no regression)
+ok - no-mistakes worktree with genuinely unlanded work is refused (safety preserved)
+ok - local-only worktree with unpushed work is torn down under --force (escape hatch)
+ok - teardown completes when an exact busy-state sidecar is already absent
+ok - herdr teardown removes pane-owned escalation dedupe state
+ok - herdr flat teardown refuses before returning the isolated copy under lock contention and the retry completes cleanly
+ok - herdr flat teardown never erases records when pane presence is unparseable
+ok - herdr flat teardown preflight refuses before every destructive change
+ok - forced secondmate teardown preflights every Herdr child before cleanup mutation
+ok - forced secondmate teardown holds every descendant lifecycle and metadata lock
+ok - forced secondmate teardown retains Herdr child identity until exact pane disappearance
+ok - forced teardown retains a nested secondmate home and its grandchild's Herdr identity when the grandchild close is unconfirmed
+ok - herdr projection teardown retires its journal only after confirming the exact recorded pane is gone
+ok - herdr projection teardown retains every record when post-close presence is unknown
+ok - herdr projection teardown surfaces failed focus restoration without turning confirmed cleanup into a hard failure
+ok - squash-merged + deleted-branch worktree (PR merged) is torn down (the fix)
+ok - squash-merged PR accepts a local HEAD that is an ancestor of the final PR head
+ok - teardown discovers a merged PR by branch name and tears down when no pr= was ever recorded
+ok - squash-merged PR accepts replayed unpushed local patches contained in the PR head
+ok - merged PR does not allow teardown after a later local commit
+ok - fm-pr-check does not refresh PR head after HEAD moves
+ok - fm-pr-check records the remote PR head when the local worktree lags
+ok - worktree whose content already landed in the default branch is torn down (content fallback)
+ok - content fallback refreshes origin default before comparing trees
+ok - dirty worktree is refused even when its committed work has landed (dirty always wins)
+ok - gh lookup error with content not in default refuses (fail-safe)
+ok - provably-stale worktree index.lock (old, no live holder) is cleared and teardown succeeds
+ok - live-held worktree index.lock is never removed and teardown refuses
+ok - lsof errors leave worktree index.lock in place and refuse teardown
+ok - stale lock cleanup rechecks and refuses dirty worktree before return
+ok - normal repo index.lock is resolved from the worktree and cleared when stale
+ok - lock mtime read failures leave worktree index.lock in place and refuse teardown
+ok - transient index.lock cleared after first failed return is retried successfully without force-remove
+ok - persistent index.lock exhausts retries and refuses without force-removing the lock
+ok - empty retry wait overrides use the default without aborting teardown
+ok - fractional legacy retry wait remains supported without arithmetic
+ok - a task's own parked no-mistakes run is aborted, not orphaned, before the worker is removed
+ok - teardown refuses before reap or removal when a task-owned run remains parked
+ok - a different run cannot confirm the targeted abort
+ok - empty post-abort status is not accepted as confirmation
+ok - the CLI's exact run-not-found signal confirms completion
+ok - a parked run on another branch is never aborted by this task's teardown (ownership is precise)
+ok - a task-owned autonomous running step is left alone rather than aborted
+ok - a leaked descendant process rooted under the task's worktree is reaped by teardown, not left surviving
+ok - a leaked descendant process rooted under the task's per-task tasktmp is reaped by teardown too
+ok - missing lsof falls back to reaping the tmux pane process group
+ok - on Windows a missing lsof reaps from the /proc cwd scan instead of leaving an undeletable worktree
+ok - an erroring lsof scan refuses teardown and preserves the task
+ok - a reused pid with a different start time is never force-killed
+ok - an exec change preserves birth identity and the process is reaped
+ok - a process spawned during grace is reaped on a later pass
+ok - persistent leaked processes refuse teardown after bounded retries
+ok - a process exiting during identity lookup does not block teardown
+ok - the run abort and the leaked-process reap both complete before the destructive worktree return
+FM_TEST_END 2026-08-28T02:05:19Z tests/fm-teardown.test.sh exit=0 duration_ms=55356 gate_skip=false
+FM_TEST_SUMMARY total=5 failed=0 skipped_gate=0 duration_ms=135645
+FM_TEST_SUMMARY_FAMILY family=pr-forge count=1 duration_ms=55356 failed=0
+FM_TEST_SUMMARY_FAMILY family=session-bootstrap count=2 duration_ms=5941 failed=0
+FM_TEST_SUMMARY_FAMILY family=unclassified count=1 duration_ms=14039 failed=0
+FM_TEST_SUMMARY_FAMILY family=watcher-wake-lock count=1 duration_ms=60184 failed=0
+FM_TEST_SLOWEST rank=1 script=tests/fm-watch-arm.test.sh duration_ms=60184
+FM_TEST_SLOWEST rank=2 script=tests/fm-teardown.test.sh duration_ms=55356
+FM_TEST_SLOWEST rank=3 script=tests/fm-pending-reply.test.sh duration_ms=14039
+FM_TEST_SLOWEST rank=4 script=tests/fm-session-start-bound.test.sh duration_ms=5356
+FM_TEST_SLOWEST rank=5 script=tests/fm-gotmp.test.sh duration_ms=585
+fm-test-run: wrote timing artifact: /tmp/fm-intake-targeted3.json

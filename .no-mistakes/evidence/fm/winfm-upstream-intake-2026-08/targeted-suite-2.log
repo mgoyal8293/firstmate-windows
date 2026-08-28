@@ -1,0 +1,264 @@
+FM_TEST_BEGIN 2026-08-28T01:56:14Z tests/fm-watch-triage.test.sh family=watcher-wake-lock expected_gate_skip=none
+ok - signal_reason_is_actionable: benign absorbed, captain verbs and coalesced batches surfaced
+ok - stale_is_terminal: terminal status surfaces, non-terminal and no-status are benign
+ok - scan_captain_relevant_statuses lists only captain-relevant statuses
+ok - classifier primitives: keyed decisions and activity phases, captain relevance, window-to-task, and overrides
+ok - crew_is_provably_working: only working+run-step/pane is provable; idle/finished/parked/failed/unknown surface
+ok - status_is_paused: only the leading paused verb matches, paused is not captain-relevant, and the two declared-wait verbs stay separable
+ok - crew_absorb_class: working/paused/none from one read; crew_is_paused and crew_is_provably_working agree
+ok - crew_absorb_class narrows the per-crew forge bound
+ok - crew_worktree_written_since: real writes are evidence; no worktree, no anchor, quiet trees, .git churn and a mate's own home are not
+ok - an empty FM_WORKTREE_WRITE_PRUNE widens the probe to the whole depth-bounded tree instead of disabling it
+ok - an empty FM_WORKTREE_WRITE_PRUNE exported into the environment prunes nothing, widening the probe
+ok - the worktree write probe is wall-clock bounded, and hitting the bound reads as no write evidence
+ok - signal_crew_provably_working: benign only when every referenced crew is provably working
+ok - a secondmate's status signal is never absorbed as provably working; crewmates are unaffected
+ok - a no-verb signal whose crew is provably working is absorbed (no exit, no queue, suppressor advanced, beacon present)
+ok - a bare turn-end whose crew is provably working (busy pane) is absorbed
+ok - a bare turn-end whose crew is not provably working is surfaced (the swallowed-finish fix)
+ok - a no-verb working: note whose crew is idle with no running pipeline is surfaced
+ok - a secondmate's status note surfaces even while its own agent is busy
+ok - a self-announced close never wakes its own home, and the next real note still does
+ok - captain-relevant signal is surfaced (queue + exit) and marked surfaced
+ok - a stale pane sitting on a terminal status is surfaced (queue + exit)
+ok - a stale terminal-looking status is overridden and absorbed while a run is actively working, then wedge-escalated
+ok - provably-working non-terminal stale is absorbed on first sight, then wedge-escalated past the threshold
+ok - consecutive wedge escalations on the same pane accumulate and demand deep inspection at the threshold
+ok - a pane becoming active again resets the consecutive wedge-escalation counter
+ok - a busy worker below the turn-age bound remains working with no escalation
+ok - a busy worker with a stable pane hash still escalates once its completed-turn age reaches the bound
+ok - a busy worker whose pane hash changes every poll still escalates once its completed-turn age reaches the bound
+ok - touching a busy worker's completed-turn marker resets the age and prevents an old-age escalation
+ok - repeated busy turn-age escalations reuse the existing escalation counter and demand deep inspection at the threshold
+ok - the production default busy-turn-age bound is 3600s (5min under does not wedge, 66min over does)
+ok - a busy pane under a declared pause is rechecked on the long cadence, and lifting the pause restores the wedge escalation
+ok - a busy worker under a declared bounded wait takes the long recheck cadence, not the 240s wedge timer
+ok - a busy declared pause is absorbed but still re-surfaces for confirmation on the long cadence
+ok - a busy worker with no declared wait still wedge-escalates exactly as before
+ok - lifting the declared wait resumes the ordinary wedge timer, and a frozen worker escalates from there
+ok - a busy declared pause whose pane hash changes every poll also takes the long recheck cadence
+ok - the paused re-surface throttle survives a pane that renders a new hash every poll
+ok - absorbing a busy declared wait leaves the stale suppressor alone, so a hung harness still surfaces immediately
+ok - the paused re-surface throttle survives a busy/not-busy flap, so one window still yields one recheck
+ok - a lapsed declaration clears every pause artifact, even when a flap already removed its paused flag
+ok - away mode keeps the ordinary wedge path for a busy declared pause, so its wake stream is unchanged
+ok - a not-provably-working non-terminal stale is surfaced immediately (never left to wait out the timer)
+ok - a declared pause is absorbed on first sight, then re-surfaced as a recheck past the threshold, never wedge-escalated
+ok - exited declared-pause and captain-held panes use bounded pause cadence while a live decision gate still surfaces once
+ok - a declared paused secondmate re-surfaces on the bounded normal-mode cadence
+ok - a captain-held secondmate re-surfaces on the bounded normal-mode cadence
+ok - a non-paused secondmate retains normal stale suppression
+ok - a resumed secondmate clears pause and stale tracking before stale exemption
+ok - unchanged stale hashes reclassify when a crew enters or leaves pause
+ok - a declared pause is periodically rechecked against authoritative active-run state
+ok - a paused status overridden by authoritative working preserves its wedge timer and escalates
+ok - matching non-terminal stale suppressors repair missing or corrupt stale-since timers
+ok - a quiet pane writing its own worktree is deferred, while one writing nothing still wedge-escalates on the unchanged schedule
+ok - a write deferral re-surfaces once on the bounded pause cadence, so a churning worktree cannot stay invisible
+ok - a secondmate's own home supervision churn is not crew write evidence, so a pane recording that home keeps the unchanged escalation schedule
+ok - an idle-window timer repair drops a finished write-deferral chain, so the next deferral gets a fresh re-surface window
+ok - both first-sight paths through a captain-relevant status drop a finished write-deferral chain with the idle window
+ok - triage log capping handles wc byte counts with leading spaces
+ok - a captured process-event result wakes a healthy watcher proactively, with no manual drain
+ok - an unacknowledged process-event result re-drains until handling is acknowledged
+ok - complete process-event queue keys map to distinct seen markers
+WAKE_ACK_REQUIRED: after handling completes run bin/fm-wake-drain.sh --ack-through 1 --recovery-generation 2454673.1787882316.5ifJXp
+ok - queue revalidation, proactive output, and marker commit serialize with drain
+/home/johns/.no-mistakes/worktrees/72b1fa50e799/01M12TP5V047C43FAJ0J7MF42D/bin/fm-push-transition-lib.sh: line 96: echo: write error: Broken pipe
+tests/wake-helpers.sh: line 308: 2455936 Killed                  PATH="$dir/fakebin:$PATH" FM_HOME="$dir" FM_PROCEVENT_CLAIM_ROOT="$dir/claims" FM_CREW_STATE_BIN="$dir/fakebin/fm-crew-state.sh" FM_POLL=0.2 FM_SIGNAL_GRACE=1 FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=999999 "$WATCH" > "$out"
+tests/wake-helpers.sh: line 308: 2456614 Killed                  PATH="$dir/fakebin:$PATH" FM_HOME="$dir" FM_PROCEVENT_CLAIM_ROOT="$dir/claims" FM_CREW_STATE_BIN="$dir/fakebin/fm-crew-state.sh" FM_POLL=0.2 FM_SIGNAL_GRACE=1 FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=999999 "$WATCH" > "$out"
+ok - surfacing failures replay until post-handling acknowledgement
+ok - marker failure exits through the shared wake owner, releases its lock, and replays later
+ok - a heartbeat with no captain-relevant change is absorbed and backs off the cadence
+ok - heartbeat backstop fail-safe surfaces a captain-relevant status the per-wake path missed
+ok - the liveness beacon stays fresh while the watcher absorbs benign wakes (fm-guard never false-alarms)
+ok - with .afk present the watcher reverts to one-shot so the daemon owns triage (no double-triage)
+ok - AFK changed paused panes hand off plain stale identities for daemon-owned pause triage
+FM_TEST_END 2026-08-28T01:58:54Z tests/fm-watch-triage.test.sh exit=0 duration_ms=159395 gate_skip=false
+FM_TEST_BEGIN 2026-08-28T01:58:54Z tests/fm-crew-state.test.sh family=pure-contract-unit expected_gate_skip=none
+ok - active run-step is authoritative
+ok - stale needs-decision over active run is superseded
+ok - stale blocked over active run is superseded
+ok - genuine parked run is not flagged superseded
+ok - scalar gate parked run is not flagged superseded
+ok - gate block parked run is not flagged superseded
+ok - ci-ready status log beats monitoring run
+ok - ci-monitoring run with checks already green surfaces done
+ok - top-level ci status uses ci log green marker
+ok - terminal no-checks ci-monitor marker surfaces done
+ok - base-advance rearm after green stays working
+ok - pending no-checks ci-monitor marker stays working
+ok - ci-monitoring run with checks not yet green stays working
+ok - a fresh issue after an earlier green reading is not masked
+ok - stale checks-green status log does not mask CI relapse
+ok - ci fixing is not overridden by an earlier green marker
+ok - top-level fixing is not overridden by a stale ci running row
+ok - top-level fixing is not overridden by a stale done log
+ok - terminal passed run is authoritative
+ok - terminal failed run is authoritative
+ok - cross-branch run is attributed via the real runs list
+ok - cross-branch attribution picks the branch's most recent row
+ok - coarse run does not probe another branch's ci log
+ok - another branch's run is ignored, falls back
+ok - no run + a busy semantic record reads working, attributed to its source
+ok - a converted adapter never reads working from rendered footer text
+ok - grok still reads working through its isolated rendered-tail fallback
+ok - herdr's native busy verdict reads working with no record present
+ok - a mid-tool-call crew stays working because its record outranks herdr's generation state
+ok - an idle record with idle agent_status stays not-busy (no regression for a human-blocked agent)
+ok - no run + idle pane uses the status-log verb
+ok - no run + idle pane parses keyed status syntax
+ok - no run + idle pane on a paused: status reports state: paused with its reason
+ok - no run + idle pane honors the configured paused verb
+ok - a trailing resolved: event does not corrupt state render (idle stays idle)
+ok - dead window ignores stale status log
+ok - closed pane still reports a terminal run-step
+ok - closed pane still reports an active run-step
+/home/johns/.no-mistakes/worktrees/72b1fa50e799/01M12TP5V047C43FAJ0J7MF42D/bin/fm-crew-run-verdict-lib.sh: line 204: awk: command not found
+ok - no timeout command uses perl bound
+ok - scout skips the run lookup
+ok - torn-down worktree is handled gracefully
+ok - fm-crew-state remote: alive endpoint falls through to the routed status log
+ok - fm-crew-state remote: an idle alive endpoint reads alive, never gone or dead
+ok - fm-crew-state remote: an unreachable host reads unknown-remote, never gone or dead
+ok - fm-crew-state remote: the remote host's own dead verdict is reported truthfully
+ok - missing meta is handled gracefully
+ok - crew_is_provably_working absorbs a validating crew found only via the runs-list fallback
+ok - crew_is_provably_working still surfaces a genuinely stopped crew (safety property preserved)
+ok - usage error exits 2
+ok - historical same-branch rewritten head is not attributed as current
+ok - active run with valid descendant fix head remains current
+ok - local work advanced past run head invalidates attribution
+ok - missing run head falls back instead of matching by branch
+ok - a superseded failed row does not mask this branch's newest live row
+ok - a live run at an unfetched head is not replaced by an older failed run
+ok - an executing step attributes the run despite unbindable head geometry
+ok - a terminal run at an unfetched head is not attributed
+ok - a terminal run at a proven pipeline head is attributed
+ok - a branch_sync binding for another run does not prove ownership
+ok - a branch_sync binding for another head does not prove ownership
+ok - a branch_sync binding for another checkout does not prove ownership
+ok - a run that passed with ci skipped does not read as done by itself
+ok - a checks-passed outcome is done without a completed ci row
+ok - a gitlab merge request is named, not reported as a forge failure
+ok - an unrecognized PR url is named, not reported as a forge failure
+ok - the no-forge knob honors a truthy word
+ok - the coarse row's PR url is found by shape, not by column
+ok - a table after active_steps is not read as an active step
+ok - a branch_sync pipeline status does not park a running run
+ok - a terminal pass without CI evidence supersedes a stale gate log
+ok - padded step columns do not change the verdict
+ok - the ci word comes from the steps table whatever its position
+ok - a forge-confirmed merge settles a ci-skipped run
+ok - a forge-confirmed close is failed, not done
+ok - a forge-confirmed close defeats a checks-passed run
+ok - checks-passed keeps ready-for-review unless the PR was closed
+ok - a forge-confirmed close defeats a green ci log
+ok - a forge-confirmed close defeats a ci-ready status log
+ok - an unconfirmed forge answer never reads done on a terminated run
+ok - an unconfirmed forge answer keeps a live crew working
+ok - a no-run status-log done asks the forge
+ok - a PR url only in the status log is still queried
+ok - a task with no PR anywhere still reads done
+ok - a structural forge non-answer still reads done
+ok - an absent forge client is structural, not a transient failure
+ok - both paths agree on a forge-confirmed merge
+ok - both paths agree on an open PR with no ci evidence
+ok - a terminal pass with no steps table and no landing is not done
+ok - a terminal pass whose ci step never completed, with no landing, is not done
+ok - a coarse completed row without a merge is not done
+ok - a coarse completed row is done once the forge confirms the merge
+ok - a coarse completed row with an unanswered forge is not done
+ok - a branch_sync head does not satisfy a missing run head
+ok - a merged claim is emitted once the forge confirms it
+ok - an open PR is never reported as merged
+ok - an unanswered forge never claims a landing
+ok - a sibling run's PR url never settles this crew
+ok - a ship task with no PR anywhere is not done
+ok - a terminated checks-passed run does not borrow a live crew's answer
+ok - one invocation makes at most one forge read
+ok - an open PR names its merge state on the checks-green path
+ok - a pre-validation ship reads differently from a run that landed nothing
+ok - a record with no status word does not assert liveness
+ok - a local-only ship reads done without a PR, and an unrecorded mode still does not
+all fm-crew-state tests passed
+FM_TEST_END 2026-08-28T01:59:11Z tests/fm-crew-state.test.sh exit=0 duration_ms=17665 gate_skip=false
+FM_TEST_BEGIN 2026-08-28T01:59:11Z tests/fm-classify-decision-key.test.sh family=pure-contract-unit expected_gate_skip=none
+ok - a stated [key=X] opens X whether it precedes or follows the verb colon
+ok - a keyless needs-decision still opens and closes the default key
+ok - a resolution closes its decision regardless of either line's key position
+ok - blocked [key=X] opens X in both key positions
+ok - two colon-form keyed decisions never collapse into one shared bucket
+ok - a [key=x] mentioned mid-note is prose, never an opened or closed key
+ok - a malformed stated key is rejected in both positions, never folded as default
+ok - status_line_verb strips every bracket tag before the colon, in any order, and recovers the bare verb
+ok - a [corr=...] tag ahead of [key=...] no longer swallows the verb: opens and closes under the stated key
+ok - a [corr=...] tag with no stated key opens under 'default', exactly like a bare needs-decision line
+ok - a [key=x] tag alone (no corr tag) still opens x - no regression from the tag-stripping fix
+ok - blocked/resolved parse their bare verb with any bracket-tag order preceding the colon
+ok - the incremental fold matches the full fold across appends in both key positions
+ok - status_key_closing_verb separates resolution, durable transfer, and still-open
+ok - status_key_closing_verb reports the last real transition, in either key position
+FM_TEST_END 2026-08-28T01:59:12Z tests/fm-classify-decision-key.test.sh exit=0 duration_ms=684 gate_skip=false
+FM_TEST_BEGIN 2026-08-28T01:59:12Z tests/fm-inactive-reconcile.test.sh family=watcher-wake-lock expected_gate_skip=none
+actionable: inactive terminal outcome awaiting captain presentation: child=child state=done pr=https://example.test/owner/repo/pull/1
+ok - main direct terminal presentation has a durable receipt
+actionable: inactive terminal outcome awaiting captain presentation: child=child state=done pr=https://example.test/owner/repo/pull/2
+actionable: inactive terminal outcome awaiting captain presentation: child=child state=done pr=https://gitlab.test/owner/repo/-/merge_requests/7
+ok - the presented PR is the newest url the status log names
+ok - secondmate reports its own inactive terminal child
+actionable: inactive terminal outcome needs parent report: child=child state=failed
+ok - relative local parent homes fail closed
+ok - invalid secondmate markers block routing and surface the obligation
+ok - remote parent-replies mirror input is durable and idempotent
+ok - reused task ids retain per-incarnation terminal receipts
+ok - legacy metadata rewrites preserve terminal receipt identity
+ok - relaunch cannot replace metadata during terminal snapshot
+actionable: inactive terminal outcome awaiting captain presentation: child=child state=done pr=https://example.test/owner/repo/pull/1
+ok - terminal reconciliation ignores heartbeat backoff state
+actionable: inactive terminal outcome awaiting captain presentation: child=child state=done pr=https://example.test/owner/repo/pull/1
+ok - scan marker replaces a symlink without overwriting its target
+ok - nonterminal and captain-held workers remain outside inactive terminal reporting
+ok - watcher hook wakes for terminal loss and preserves idle secondmate exemption
+actionable: inactive terminal outcome awaiting captain presentation: child=b state=done pr=https://example.test/owner/repo/pull/1
+ok - stalled state reads are bounded without starving later children
+ok - aggregate scan budget includes durable wake operations
+actionable: inactive terminal outcome needs parent report: child=child state=failed
+ok - notice recovery remains idempotent across queue acknowledgement
+actionable: inactive terminal outcome awaiting captain presentation: child=child state=done pr=https://example.test/owner/repo/pull/1
+ok - reconciliation makes zero forge or PR API calls
+actionable: inactive terminal outcome awaiting captain presentation: child=child state=done pr=https://example.test/owner/repo/pull/1
+actionable: inactive terminal outcome awaiting captain presentation: child=child state=done pr=https://example.test/owner/repo/pull/1
+actionable: inactive terminal outcome awaiting captain presentation: child=child state=done pr=https://example.test/owner/repo/pull/1
+ok - the per-child forge bound comes from the remaining scan budget
+all inactive reconciliation tests passed
+FM_TEST_END 2026-08-28T02:00:01Z tests/fm-inactive-reconcile.test.sh exit=0 duration_ms=49170 gate_skip=false
+FM_TEST_BEGIN 2026-08-28T02:00:01Z tests/fm-windows-portability.test.sh family=pure-contract-unit expected_gate_skip=none
+ok - fm-proc-lib.sh: the source guard skips repeat sources without blinding FM_PLATFORM_UNAME_OVERRIDE
+ok - fm_proc_field: reads comm/args/ppid/pgid/sid from the MSYS /proc layout
+ok - fm_proc_field: falls back to ps -o where the /proc scalar files are absent
+ok - fm_proc_field: refuses an empty or non-numeric pid
+ok - fm_proc_field: refuses a field it has no /proc equivalent for
+ok - fm_proc_field: a scalar file that vanished mid-walk returns 1 in silence
+ok - fm_platform_symlink_probe: proves symlink creation and leaves no residue
+ok - symlink preflight: reports the lock-layer and skills-checkout failures, and stays silent otherwise
+ok - fm_platform_enable_native_symlinks: sets nativestrict on Windows, inert elsewhere, never overrides an explicit choice
+ok - fm_proc_pids_with_cwd_under: finds live processes rooted under a directory and forgets dead ones
+ok - fm_proc_pids_with_cwd_under: an unusable /proc returns failure, not an empty result
+ok - fm_proc_pids_with_cwd_under: a mount-aliased /proc cwd spelling still matches the caller's directory
+ok - fm_proc_pids_holding_path: a mount-aliased /proc fd target still matches the caller's path
+ok - fm_lock_same_path: widens a mount-aliased and an 8.3 short-name spelling through cygpath and stays strict everywhere else
+ok - fm_lock_points_to_owner: the strict readlink compare remains the primary, unresolved verdict
+ok - fm_pid_identity: bin/fm-proc-lib.sh answers from /proc where ps rejects -o, and detects pid reuse
+ok - root .gitattributes: a core.autocrlf=true clone still lands LF, and the one binary blob survives
+ok - fm_path_gotmpdir_export_line: translates and quotes on Windows, and falls back to the POSIX literal rather than an empty export when the caller has no quoter
+FM_TEST_END 2026-08-28T02:00:03Z tests/fm-windows-portability.test.sh exit=0 duration_ms=1505 gate_skip=false
+FM_TEST_SUMMARY total=5 failed=0 skipped_gate=0 duration_ms=228564
+FM_TEST_SUMMARY_FAMILY family=pure-contract-unit count=3 duration_ms=19854 failed=0
+FM_TEST_SUMMARY_FAMILY family=watcher-wake-lock count=2 duration_ms=208565 failed=0
+FM_TEST_SLOWEST rank=1 script=tests/fm-watch-triage.test.sh duration_ms=159395
+FM_TEST_SLOWEST rank=2 script=tests/fm-inactive-reconcile.test.sh duration_ms=49170
+FM_TEST_SLOWEST rank=3 script=tests/fm-crew-state.test.sh duration_ms=17665
+FM_TEST_SLOWEST rank=4 script=tests/fm-windows-portability.test.sh duration_ms=1505
+FM_TEST_SLOWEST rank=5 script=tests/fm-classify-decision-key.test.sh duration_ms=684
+fm-test-run: wrote timing artifact: /tmp/fm-intake-targeted2.json
