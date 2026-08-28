@@ -6,7 +6,7 @@ This record is the concurrent isolation proof for the portable parallel candidat
 
 ## Verification
 
-- Date: 2026-08-20
+- Date: 2026-08-21
 - Command: `bin/fm-test-isolation-proof.sh --jobs 4 --json /tmp/fm-isolation-proof.json`
 - Result: `FM_ISOLATION_SUMMARY total=24 failed=0 concurrency=4 duration_ms=113278`
 

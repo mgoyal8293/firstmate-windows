@@ -5,7 +5,7 @@
 
 ## Verification inputs
 
-The current candidate timings came from the 2026-08-20 concurrent proof recorded in [fm-test-isolation-proof.md](fm-test-isolation-proof.md).
+The current candidate timings came from the 2026-08-21 concurrent proof recorded in [fm-test-isolation-proof.md](fm-test-isolation-proof.md).
 The proof ran 24 candidates with four workers and no failures.
 
 | duration_ms | script |
