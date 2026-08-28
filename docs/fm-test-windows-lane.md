@@ -6,8 +6,8 @@ This file records the measurements those two are built on.
 
 Every number here was measured under Git for Windows MINGW64 bash (`MINGW64_NT-10.0-26200`, bash 5.2.37, git 2.50.1.windows.1, ShellCheck 0.11.0), from a frozen checkout, with `MSYS=winsymlinks:nativestrict`.
 
-The repository has grown since: `portable-serial` is now 117 scripts and the canonical lint set 308 shell files.
-Every figure below is deliberately left as measured rather than restated to the live count; a one-script difference changes neither the lane arithmetic nor any conclusion drawn from it.
+The repository has grown since, and the 2026-08 upstream intake grew it by more than a script or two: `portable-serial` is larger than the count these figures were measured at - [fm-test-portable-shards.md](fm-test-portable-shards.md) owns the live lane size - and the canonical lint set is now 331 shell files, counted with `CI=true bin/fm-lint.sh --list-files` at this head.
+Every figure below is deliberately left as measured rather than restated to the live count; the lane has only gained scripts, so the growth widens the arithmetic below rather than undercutting any conclusion drawn from it.
 
 ## Why this lane is not the Linux lane with more shards
 
