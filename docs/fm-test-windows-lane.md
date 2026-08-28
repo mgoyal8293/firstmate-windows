@@ -222,7 +222,7 @@ Confirmed on the box above. The fork count stays a Linux measurement; adding the
 **Admitting `fm-session-start-bound` also required fixing two real Windows-only failures in it**, both in the end-to-end case that asserts each stage prints its header before its own output:
 
 - On MSYS the session lock is owned by a per-session token rather than by process ancestry (see [`windows.md`](windows.md#how-the-session-lock-is-owned) "How the session lock is owned"), and this suite's fixture strips every harness marker on purpose - so the `LOCK` stage legitimately prints its read-only banner instead of an `acquired`/`held` line. The body pattern covered only the POSIX shapes. That is product behaviour, not a fixture defect, so the pattern now covers the read-only shape too.
-- `skipped (read-only session)` is printed by **two** stages, `WAKE QUEUE` and `NETWORK CHECKS` (`bin/fm-session-start.sh:755` and `:916`), and the helper's contract is that a body pattern matches a line only its *own* stage emits. Searching globally, the network-checks pattern matched the wake-queue's line and reported the header as arriving 70 lines late. Both patterns are now qualified past the shared prefix. Only these two stages share it, so the collision class is closed rather than patched at the one call site that happened to fail.
+- `skipped (read-only session)` is printed by **two** stages, `WAKE QUEUE` and `NETWORK CHECKS` (`bin/fm-session-start.sh:755` and `:917`), and the helper's contract is that a body pattern matches a line only its *own* stage emits. Searching globally, the network-checks pattern matched the wake-queue's line and reported the header as arriving 70 lines late. Both patterns are now qualified past the shared prefix. Only these two stages share it, so the collision class is closed rather than patched at the one call site that happened to fail.
 
 Neither failure is reachable on Linux, because there the fixture acquires the lock and no stage prints a read-only line at all - which is the second half of why these two suites are worth the lane's budget.
 
@@ -581,10 +581,15 @@ That is correct on every platform rather than a Windows arm, and `tests/fm-lint.
 `PATH=$dir readlink` exits 127 there, because an MSYS binary finds `msys-2.0.dll` through PATH, and a directory carrying only the link is Windows' last-resort DLL search location with none of those DLLs in it.
 The fix is the same everywhere: an exec wrapper, which keeps the real binary running from its own directory where its DLLs sit, so no fixture ever has to know which DLLs a tool needs.
 
+A second mechanism reaches the same failure from the same mirroring, and the 2026-08 intake hit it: the runner's own PATH step prints `jq /c/ProgramData/Chocolatey/bin/jq`, and a Chocolatey shim resolves a sibling file beside itself, so a shim mirrored out of its own directory is executable but non-functional.
+A fixture that re-exposes a host tool that way owns the name and then cannot do the tool's job, which reads as a product failure rather than a fixture one.
+So the rule the two share is that mirroring a host binary by symlink is unsafe on Windows whatever the reason, and the wrapper is the one fix for both: it needs no platform arm, because the shebang behaves identically on Linux and Git Bash, and the fixture still owns the name.
+
 The wrapper is spelled out per file, enumerated here so a site added later has to join a visible list rather than rot against a bare total:
 
 - `tests/fm-crew-state.test.sh` - 1 site, `make_no_timeout_toolbin`, the worked example for the excluded scripts that still carry the symlink form.
 - `tests/fm-windows-portability.test.sh` - 1 site, `stage_tool_for_restricted_path`.
 - `tests/fm-test-run.test.sh` - 1 site, the coreutils staging inside `lfharness_bin`, added by this change's own review rounds.
+- `tests/fm-pr-merge.test.sh` - 1 site, the `jq` re-exposure inside `add_glab_mock`, which arrived with upstream's GitLab merge support and failed only on this lane. It is the shim case above rather than a DLL case, and the file's own comment owns that reasoning.
 
-Hoisting the three copies into one shared helper is deliberately deferred, not forgotten: `tests/fm-lint.test.sh` and `tests/fm-subagent-pretool-check.test.sh` still carry the unfixed symlink form, so the consolidation waits until every call site exists and can move at once instead of half-migrating.
+Hoisting the four copies into one shared helper is deliberately deferred, not forgotten: `tests/fm-lint.test.sh` and `tests/fm-subagent-pretool-check.test.sh` still carry the unfixed symlink form, so the consolidation waits until every call site exists and can move at once instead of half-migrating.

@@ -77,6 +77,21 @@ ok - teardown reports an unreconciled legacy Relay link
 ok - secondmate promotion matches teardown parent resolution
 ```
 
+That listing is the 2026-08-21 run, and one case is newer than it.
+`ok - seeded follow-up windows are derived from now, so no fixture rots into an unreachable thread` was added when this suite's seeded thread windows were changed from fixed calendar dates to offsets from wall-clock now, so a window is open by construction rather than until some date passes.
+It is recorded here rather than pasted into the block above, which would claim it came out of a run that predates it:
+
+```sh
+bash tests/fm-public-followup.test.sh
+```
+
+```
+ok - seeded follow-up windows are derived from now, so no fixture rots into an unreachable thread
+```
+
+That whole-suite run exited 0 with 53 `ok -` lines and no `not ok` line, counted from its own output.
+Recorded 2026-08-28 on Linux 6.18.33.2-microsoft-standard-WSL2 (x86_64) with GNU bash 5.2.21, tasks-axi 0.2.5, and jq 1.7 - a different host from the run above, so these are two runs and not one.
+
 The restart case is the end-to-end proof of guarantee 1.
 It reproduces the stranded state first (work bound, no reconciled terminal result, delivery refused with "still waiting on its bound work" and zero posts), then has a secondmate-shaped child report a typed `pr-merged` result, deletes the drained inbox payload, reconciles from disk, and asserts exactly one `connector/followup` call carrying the original `request_id`, a validated `posted` receipt, and a Done obligation.
 
