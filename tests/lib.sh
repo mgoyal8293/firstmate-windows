@@ -81,6 +81,16 @@ pass() {
   printf 'ok - %s\n' "$1"
 }
 
+# fail_now <msg>: fail from a helper that runs inside a command substitution,
+# where fail's exit would only end the capturing subshell and leave the test
+# file running on an empty result. Signals the test file itself so its TERM
+# trap cleans up and the run ends non-zero, with the message already printed.
+fail_now() {
+  printf 'not ok - %s\n' "$1" >&2
+  kill -TERM "$$" 2>/dev/null
+  exit 1
+}
+
 # --- self-cleaning temp root ------------------------------------------------
 #
 # fm_test_tmproot <prefix> echoes a fresh temp dir and registers it for removal

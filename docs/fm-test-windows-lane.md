@@ -244,7 +244,7 @@ That is the same principle behind the Linux serial lane's "Require tmux for e2e 
 The Windows lane reaches it from the other direction: no tool, no member.
 
 Total lane cost: **62.9 min** of serial Git Bash work (3,772,746 ms of hints across 42 members).
-The longest single script is `tests/fm-decision-hold-lifecycle.test.sh` at 860s, which is the floor no shard count can lower - so 4 shards is the useful maximum here, not 8 or 16.
+The longest single script is `tests/fm-captain-hold-lifecycle.test.sh` at 860s, which is the floor no shard count can lower - so 4 shards is the useful maximum here, not 8 or 16.
 Beyond 4 the floor binds and extra runners buy nothing.
 
 | shard | scripts | predicted |
@@ -292,13 +292,13 @@ The two columns come from different machines, so read the ratios as the size of 
 
 | script | Linux | Git Bash | ratio |
 |---|---:|---:|---:|
-| `fm-decision-hold-lifecycle` | 82.6s | 860s | 10.4x |
+| `fm-captain-hold-lifecycle` | 82.6s | 860s | 10.4x |
 | `fm-crew-state` | 9.7s | 171s | 17.6x |
 | `fm-brief` | 1.2s | 21s | 17.1x |
 | `fm-composer-lib` | 5.0s | 119s | 23.8x |
 
 Note what this does **not** show: the ratio does not simply grow with a script's process work.
-The longest member here, `fm-decision-hold-lifecycle` at 860s, has the *lowest* ratio of the four, and the shortest, `fm-brief`, sits mid-range.
+The longest member here, `fm-captain-hold-lifecycle` at 860s, has the *lowest* ratio of the four, and the shortest, `fm-brief`, sits mid-range.
 An earlier revision of this table asserted the opposite on the strength of a 0.064s Linux figure for `fm-composer-lib`; that figure cannot be right, because the script runs 30 passing assertions and measures 5.0s, so the 1860x ratio it implied has been withdrawn.
 
 This is why the lane's balance uses measured Windows durations rather than Linux hints scaled by a constant: the spread is real and it is not predictable from Linux duration, so a constant multiplier mis-sizes members in both directions.
@@ -391,7 +391,7 @@ id -u == stat -c %u   -> the owner check passes; only the mode fails
 The fix is a capability probe in that one function, plus a note that the mode assertion is not a security property on a `noacl` mount.
 That file is outside the files this work owns, so it is flagged rather than changed.
 
-### `fm-decision-hold-lifecycle.test.sh` - confirmed fork cost
+### `fm-captain-hold-lifecycle.test.sh` - confirmed fork cost
 
 Not a failure.
 Given a bound longer than the scout's 400s it passes: **rc=0, 16 ok, 0 failed, in 860s** against 82.6s on Linux - a 10.4x multiplier.
@@ -461,7 +461,7 @@ tests/fm-wake-drain-unread-status.test.sh            ok=6   failed=0
 ```
 
 Each of these was still passing assertions when the bound cut it, so none is known-broken.
-`fm-decision-hold-lifecycle` started in this group and turned out to be pure fork cost once given 860s, so the others deserve the same treatment before anyone calls them failures.
+`fm-captain-hold-lifecycle` started in this group and turned out to be pure fork cost once given 860s, so the others deserve the same treatment before anyone calls them failures.
 
 ## Two things that stopped the runner itself on Windows
 

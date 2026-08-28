@@ -114,7 +114,7 @@ jobs:
     runs-on: windows-latest
     # Measured: the whole lane is 62.9 min of serial Git Bash work over 42
     # scripts, and the longest single script
-    # (tests/fm-decision-hold-lifecycle.test.sh, 860s) is the floor no shard
+    # (tests/fm-captain-hold-lifecycle.test.sh, 860s) is the floor no shard
     # count can lower - which is why 4 shards is the useful maximum here rather
     # than 8 or 16. Balanced shards land near 15.7 min. This cap is a hang
     # tripwire with roughly 2.5x margin, not the expected end of the lane, and
