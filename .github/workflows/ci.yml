@@ -130,14 +130,20 @@ jobs:
     name: Behavior portable serial ${{ matrix.shard }}
     runs-on: ubuntu-latest
     # Measured whole remainder is ~42 min of serial work. On run 32259417831 the
-    # measured worst shard was 11.67 min, so the margin against this cap is
-    # about 1.3x - measured, not the packer's ~10.6 min estimate. Cap is a hang
-    # tripwire, not the expected healthy end of the lane, and a shard that
-    # overruns is cancelled with no verdict at all, so refresh the weights or
-    # split the lane further before that margin is spent, remembering that job
-    # setup and checkout land on top of script time
+    # measured worst shard was 11.67 min, which is what supported the earlier
+    # 15-minute cap; the 2026-08 upstream intake then grew the lane without
+    # re-measuring it, so that margin is no longer evidence. This bound is
+    # upstream's sizing for upstream's content, adopted pending a fresh
+    # measurement from the first green run after the intake lands
+    # (winfm-reverify-serial-shard-cap) - it is not a measured figure for this
+    # lane. The asymmetry decides it: a shard that overruns is cancelled with no
+    # verdict at all, which a required check can never turn green and which
+    # reads as a hang, while a cap set too high only costs CI minutes. Still a
+    # hang tripwire, not the expected healthy end of the lane, so refresh the
+    # weights or split the lane further rather than spending the margin,
+    # remembering that job setup and checkout land on top of script time
     # (docs/fm-test-portable-shards.md).
-    timeout-minutes: 15
+    timeout-minutes: 20
     strategy:
       # Every shard reports so one failure never hides another shard's result.
       fail-fast: false
