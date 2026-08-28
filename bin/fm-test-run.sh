@@ -724,6 +724,11 @@ EOF
 # Measured Git Bash durations, in ms, for the scripts above. Hints only affect
 # balance: the coverage guard keeps the partition complete and disjoint whatever
 # they say, so a stale hint costs a slower shard rather than lost coverage.
+# tests/fm-captain-hold-lifecycle.test.sh 860000 is inherited, not measured on
+# this file: it was measured on tests/fm-decision-hold-lifecycle.test.sh, which
+# upstream replaced under the new name in the 2026-08 intake, and it is
+# provisional pending winfm-remeasure-captain-hold-windows
+# (docs/fm-test-windows-lane.md).
 # shellcheck disable=SC2329 # Invoked by name through lane_weight_for.
 windows_weight_hints() {
   cat <<'EOF'

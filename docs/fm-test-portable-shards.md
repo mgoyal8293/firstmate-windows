@@ -118,7 +118,7 @@ Script time alone does not reach the cap, which is why the weights are only most
 The job wall clock adds runner setup and checkout on top of it.
 On run 32142691561, `Behavior portable serial 4` ran 13:29:51Z to 13:44:41Z - 14m50s of wall clock against 14m41s of script time, about 9s of overhead.
 The job that was actually cancelled is run [32222210223](https://github.com/mgoyal8293/firstmate-windows/actions/runs/32222210223) on `fm/winfm-tmux-leakage`, where the same shard ran 06:09:14Z to 06:24:29Z - 15m15s of wall clock, conclusion `cancelled`, no verdict at all.
-Script time was already within roughly 20 seconds of the cap and ordinary job overhead tipped it over, so judge the remaining margin against script-time weights with that overhead included.
+Script time was already within roughly 20 seconds of the 15-minute cap in force when that run was cancelled, and ordinary job overhead tipped it over, so judge the remaining margin against script-time weights with that overhead included.
 
 The single longest script in the lane, `tests/fm-pr-check-security.test.sh` at 236511 ms, is the floor for any shard count.
 It was already hinted before the 2026-08-19 refresh, so it was never part of the unhinted set above.

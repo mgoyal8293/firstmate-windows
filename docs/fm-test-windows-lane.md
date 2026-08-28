@@ -247,6 +247,21 @@ Total lane cost: **62.9 min** of serial Git Bash work (3,772,746 ms of hints acr
 The longest single script is `tests/fm-captain-hold-lifecycle.test.sh` at 860s, which is the floor no shard count can lower - so 4 shards is the useful maximum here, not 8 or 16.
 Beyond 4 the floor binds and extra runners buy nothing.
 
+That 860s is inherited rather than freshly measured, and it is provisional until the lane runs again.
+It was measured on `tests/fm-decision-hold-lifecycle.test.sh`, the script upstream replaced with `tests/fm-captain-hold-lifecycle.test.sh` in the 2026-08 intake, and the hint in `bin/fm-test-run.sh` was carried across the rename rather than re-measured.
+It is kept because it is a real measurement of a real predecessor and remains the best available packing basis: dropping it would move `unmeasured_windows` off zero and degrade shard balance without making anything more true.
+`winfm-remeasure-captain-hold-windows` is the filed follow-up that will replace it with a Git Bash measurement of the current file.
+
+The replacement is not a pure rename, and its size reads differently depending on how it is measured, so all three readings are recorded here with their methods rather than one being chosen:
+
+- Blob to blob, diffing the two files' contents directly: 765 insertions, 714 deletions - about 65% of the new file's 1184 lines.
+- Path to path across the intake, `git diff 3903bec..HEAD` over the two paths: 1184 insertions and 1133 deletions, which are exactly the new and old files' line counts, because git does not pair the paths as a rename at its default 50% similarity threshold. At `-M10%` it does pair them, reporting `similarity index 32%` and the same 765 / 714.
+- Test functions: 16 to 17 counting `test_*()` definitions, or 32 to 34 counting definitions plus their invocations. Same file, two denominators.
+
+The run recorded further down reports 16 ok, which is the predecessor's definition count rather than the current file's 17 - the clearest single sign that the figure predates the file it is now filed under.
+The defect worth carrying forward is not the carried hint but how it stayed invisible: `--check-coverage` reports `unmeasured_windows=0` by checking that every listed name has a row in `windows_weight_hints`, so a name-keyed record survives a content change that invalidates it and a measured claim outlives its measurement with the guard still green.
+For the same reason, read the totals above as pre-intake for part of the lane: 13 of the 42 members changed content in `3903bec..HEAD`, counted per member with `git diff --quiet`, so the 62.9 min total and this 860s floor describe the content those members carried before the intake.
+
 | shard | scripts | predicted |
 |---|---:|---:|
 | `windows-1of4` | 7 | 943.8s (15.7 min) |
@@ -296,6 +311,8 @@ The two columns come from different machines, so read the ratios as the size of 
 | `fm-crew-state` | 9.7s | 171s | 17.6x |
 | `fm-brief` | 1.2s | 21s | 17.1x |
 | `fm-composer-lib` | 5.0s | 119s | 23.8x |
+
+The `fm-captain-hold-lifecycle` row carries the inherited figures described above: both of its columns were measured on the pre-rename `fm-decision-hold-lifecycle.test.sh`, and both are provisional pending `winfm-remeasure-captain-hold-windows`.
 
 Note what this does **not** show: the ratio does not simply grow with a script's process work.
 The longest member here, `fm-captain-hold-lifecycle` at 860s, has the *lowest* ratio of the four, and the shortest, `fm-brief`, sits mid-range.
@@ -396,6 +413,7 @@ That file is outside the files this work owns, so it is flagged rather than chan
 Not a failure.
 Given a bound longer than the scout's 400s it passes: **rc=0, 16 ok, 0 failed, in 860s** against 82.6s on Linux - a 10.4x multiplier.
 It is in the lane, and it is the script that sets the shard floor.
+That run measured the script under its pre-rename name, `tests/fm-decision-hold-lifecycle.test.sh`, whose 16 test definitions are the 16 ok above, so both figures are inherited by the current file rather than measured on it and are provisional pending `winfm-remeasure-captain-hold-windows`.
 
 ### Failing on Windows (worklist, not addressed here)
 
@@ -462,6 +480,7 @@ tests/fm-wake-drain-unread-status.test.sh            ok=6   failed=0
 
 Each of these was still passing assertions when the bound cut it, so none is known-broken.
 `fm-captain-hold-lifecycle` started in this group and turned out to be pure fork cost once given 860s, so the others deserve the same treatment before anyone calls them failures.
+That 860s is the inherited pre-rename measurement noted above, provisional pending `winfm-remeasure-captain-hold-windows`.
 
 ## Two things that stopped the runner itself on Windows
 
